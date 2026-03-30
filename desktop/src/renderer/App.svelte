@@ -376,12 +376,31 @@
     return paths;
   }
 
+  function extractPromptSearchTokens(prompt: string): string[] {
+    const source = String(prompt || '').trim();
+    const tokens = new Set<string>();
+    for (const raw of source.match(/[A-Za-z_][A-Za-z0-9_]{2,}/g) ?? []) {
+      const rawToken = String(raw || '').trim();
+      const token = rawToken.toLowerCase();
+      if (!token) continue;
+      tokens.add(token);
+      for (const part of rawToken.split(/_|(?=[A-Z])/)) {
+        const normalized = String(part || '').trim().toLowerCase();
+        if (normalized.length >= 3) tokens.add(normalized);
+      }
+    }
+    for (const raw of source.match(/[\uAC00-\uD7A3]{2,}/g) ?? []) {
+      const token = String(raw || '').trim();
+      if (token.length >= 2) tokens.add(token);
+    }
+    return Array.from(tokens);
+  }
+
   function scoreWorkspaceCandidate(pathValue: string, prompt: string): number {
     const normalized = String(pathValue || '').replace(/\\/g, '/');
     const lowered = normalized.toLowerCase();
     const fileName = normalized.split('/').pop() || normalized;
-    const tokens = String(prompt || '')
-      .match(/[A-Za-z_][A-Za-z0-9_]{2,}/g)?.map((item) => item.toLowerCase()) ?? [];
+    const tokens = extractPromptSearchTokens(prompt);
     let score = 0;
     for (const token of tokens) {
       if (lowered.includes(token)) score += Math.max(8, Math.min(token.length, 18));
@@ -493,6 +512,22 @@
   function buildLocalOverlayPayload(prompt: string) {
     if (!settings.workspacePath) {
       return {};
+    }
+    const hasLocalOverlay = hasUsableLocalOverlayEvidence();
+    if (!hasLocalOverlay) {
+      return {
+        client_metadata: appInfo
+          ? {
+              app_name: appInfo.name,
+              app_version: appInfo.version,
+              build_revision: appInfo.buildRevision,
+              build_time: appInfo.buildTime,
+              build_id: appInfo.buildId,
+              is_packaged: appInfo.isPackaged,
+              platform: appInfo.platform
+            }
+          : {}
+      };
     }
     const includeWorkspaceChanges = /recent|latest|changed|modified|edit|edited|patch|diff|status|regression|변경|수정|패치|차이|diff|status|최근/i.test(
       String(prompt || '').trim()
@@ -1395,22 +1430,23 @@
       }
 
       if (settings.workspacePath && useAutoLocalLoop && !hasUsableLocalOverlayEvidence()) {
-        const failureMessage =
+        const warningMessage =
           localToolError ||
-          'Local workspace evidence collection did not produce usable code context, so the request was not sent to the server.';
+          localToolSummary ||
+          'Local workspace evidence collection did not produce usable code context. Continuing with server search only.';
         updateConversationMessage(assistantMessageId, (message) => ({
           ...message,
-          content: failureMessage,
-          status: 'Local workspace evidence missing',
-          state: 'error',
+          status: 'Local workspace anchor unavailable. Continuing with server search...',
+          state: 'streaming',
           localTrace: localToolTrace,
-          localSummary: localToolSummary || failureMessage,
-          localError: failureMessage
+          localSummary: localToolSummary || warningMessage,
+          localError: warningMessage
         }));
-        appendStatusEvent(assistantMessageId, { message: failureMessage, phase: 'local_overlay' });
+        appendStatusEvent(assistantMessageId, {
+          message: 'Local workspace anchor unavailable. Continuing with server search...',
+          phase: 'local_overlay'
+        });
         await persistCurrentSession({ titleHint: prompt });
-        busy = false;
-        return;
       }
 
       const requestOptions = buildLocalOverlayPayload(prompt);

@@ -11,6 +11,7 @@ from ..answer_quality import build_provenance_report, detect_unsupported_claims
 from ..evidence import build_evidence_gate
 from ..grounding import enforce_source_whitelist
 from ..layered_merge import build_local_overlay_evidence, extract_local_workspace_overlay
+from ..question_contract import evaluate_question_contract, normalize_question_contract
 from ..text import sanitize_user_message
 from ..retrieval.routing import build_sources, tool_evidence_to_results
 from .phase_log import PhaseLogger
@@ -20,11 +21,9 @@ from ..workspace_graph import (
     collect_grounded_overlay_paths,
     collect_grounded_overlay_windows,
     extract_workspace_graph,
-    render_workspace_graph_answer,
-    workspace_graph_has_content,
     workspace_graph_is_ready_for_answer,
 )
-from .code_explain_overlay import run_local_overlay_code_explain
+from .code_explain_overlay import collect_local_overlay_code_explain_bootstrap
 from ....core.llm_utils import (
     build_chat_template_extra_body,
     safe_chat_completion_create,
@@ -152,7 +151,13 @@ def _build_tool_mode_hint(
     lane = str(profile.get("agent_lane") or "general_assistant_lane")
     strategy = str(profile.get("tool_strategy") or "")
     answer_style = str(profile.get("answer_style") or "default")
-    response_kind = str(response_type or "").strip().lower()
+    question_contract = dict(profile.get("question_contract") or {})
+    contract_kind = str(question_contract.get("kind") or "").strip().lower()
+    coverage_axes = [
+        str(axis.get("label") or axis.get("id") or "").strip()
+        for axis in list(question_contract.get("coverage_axes") or [])
+        if isinstance(axis, dict)
+    ]
     answer_style_hint = ""
     if answer_style == "tutorial":
         answer_style_hint = (
@@ -164,34 +169,36 @@ def _build_tool_mode_hint(
         answer_style_hint = "Write the final answer as a concise reference summary grounded in the retrieved evidence.\n"
     elif answer_style == "troubleshooting":
         answer_style_hint = "Write the final answer as a troubleshooting guide with symptoms, likely causes, checks, and fixes.\n"
+    contract_hint = ""
+    if coverage_axes:
+        contract_hint = (
+            "Question contract coverage axes: "
+            + ", ".join(coverage_axes[:4])
+            + ". Continue retrieval until those axes are grounded or the current frontier is exhausted.\n"
+        )
     if preferred_mode == "docs":
         return (
             f"Runtime routing profile: lane={lane}, strategy={strategy}.\n"
             "For this question type, prioritize document evidence first.\n"
             f"Use tools in this order when possible: {tool_priority}.\n"
+            f"{contract_hint}"
             f"{answer_style_hint}"
             "Use code tools only when document evidence is insufficient."
         )
     if workspace_overlay_present:
-        overlay_exhaustive_hint = (
-            "For local code explanation requests, keep retrieving until the current frontier is grounded or the available probes are exhausted. "
-            "Do not stop because of a fixed round budget. If exhaustive retrieval still cannot confirm a relation, state explicitly that the supporting code was not found.\n"
-            if response_kind == "code_explain"
-            else ""
-        )
         return (
             f"Runtime routing profile: lane={lane}, strategy={strategy}.\n"
-            "The local workspace overlay is the primary code graph for this request.\n"
+            "The local workspace overlay is a bootstrap for the current frontier, not a stopping condition by itself.\n"
             f"Use tools in this order when possible: {tool_priority}.\n"
-            "Prefer local workspace evidence first.\n"
-            "Use server code tools to confirm engine/framework baselines or when the local evidence is incomplete.\n"
-            f"{overlay_exhaustive_hint}"
+            "Prefer grounded local reads first.\n"
+            "Use server code tools to resolve unresolved engine or framework symbols exposed by the local frontier.\n"
+            f"{contract_hint}"
             "Treat server search hits as supporting evidence until you confirm them with grounded reads.\n"
-            "Treat search-only candidates and frontier_files as leads, not confirmed evidence.\n"
+            "Treat search-only candidates and frontier leads as unconfirmed until they are read.\n"
             "Only grounded read spans and grounded graph nodes may appear as confirmed files or code references in the final answer.\n"
             "Default to prose. Only include a code block when it comes directly from a grounded read span.\n"
             f"{answer_style_hint}"
-            "Write the answer from local workspace evidence first, and use engine references only as supporting context."
+            "Do not stop retrieval while contract axes or open frontier gaps remain."
         )
 
     repo_hint = (
@@ -219,6 +226,7 @@ def _build_tool_mode_hint(
         )
         +
         "Prefer find_symbol before broad grep when the question mentions a concrete type, member, function, or API name.\n"
+        f"{contract_hint}"
         f"{code_usage_hint}"
         "Default to prose. Only include a code block when it comes directly from a grounded read span.\n"
         f"{answer_style_hint}"
@@ -298,6 +306,52 @@ def _build_local_overlay_context(
             "Do not claim method-level flow for that file unless you clearly mark it as unverified."
         )
     return "\n\n".join(parts).strip()
+
+
+def _build_overlay_bootstrap_context(bootstrap: Dict[str, Any] | None) -> str:
+    payload = dict(bootstrap or {})
+    if not payload:
+        return ""
+    parts = ["[Local Frontier Bootstrap]"]
+    primary_reads = list(payload.get("primary_reads") or [])
+    if primary_reads:
+        parts.append("[Primary Reads]")
+        for item in primary_reads[:4]:
+            parts.append(
+                "- "
+                + " @ ".join(
+                    value
+                    for value in [
+                        str(item.get("path") or "").strip(),
+                        str(item.get("line_range") or "").strip(),
+                    ]
+                    if value
+                )
+            )
+    open_symbols = [str(item).strip() for item in list(payload.get("open_frontier_symbols") or []) if str(item).strip()]
+    if open_symbols:
+        parts.append("[Open Frontier Symbols]")
+        parts.extend(f"- {symbol}" for symbol in open_symbols[:6])
+    unresolved_edges = list(payload.get("unresolved_caller_callee_edges") or [])
+    if unresolved_edges:
+        parts.append("[Unresolved Caller/Callee Edges]")
+        for item in unresolved_edges[:4]:
+            caller = str(item.get("caller_symbol") or "").strip()
+            callee = str(item.get("callee_symbol") or "").strip()
+            path = str(item.get("path") or "").strip()
+            parts.append("- " + " -> ".join(value for value in [caller, callee, path] if value))
+    next_candidates = list(payload.get("next_search_candidates") or [])
+    if next_candidates:
+        parts.append("[Next Search Candidates]")
+        for item in next_candidates[:6]:
+            tool_name = str(item.get("tool") or "").strip()
+            query = str(item.get("query") or item.get("symbol") or "").strip()
+            reason = str(item.get("reason") or "").strip()
+            line = f"- {tool_name}: {query}" if tool_name else f"- {query}"
+            if reason:
+                line += f" ({reason})"
+            parts.append(line)
+    return "\n".join(part for part in parts if part).strip()
 
 
 def _compact_preview_text(text: str, max_chars: int = 180) -> str:
@@ -395,6 +449,7 @@ async def run_react_chat_generation(
     intent_confidence: float = 0.0,
     retrieval_bias: str = "",
     answer_style: str = "",
+    question_contract: Dict[str, Any] | None = None,
     history_messages: List[Dict[str, Any]],
     model_name: str,
     max_tokens: int,
@@ -411,7 +466,7 @@ async def run_react_chat_generation(
     accumulator = _EvidenceAccumulator()
     local_overlay = extract_local_workspace_overlay(req)
     local_overlay_items = build_local_overlay_evidence(local_overlay)
-    workspace_overlay_authoritative = bool(local_overlay.get("present"))
+    workspace_overlay_present = bool(local_overlay.get("present"))
     workspace_graph = extract_workspace_graph(local_overlay)
     grounded_overlay_paths = collect_grounded_overlay_paths(local_overlay)
     grounded_overlay_windows = collect_grounded_overlay_windows(local_overlay)
@@ -426,7 +481,6 @@ async def run_react_chat_generation(
     active_collection = getattr(req, "collection", None) or config.RAG_DEFAULT_COLLECTION
     max_chars = min(int(config.CHAT_TOOL_MAX_CHARS), 12000)
     max_line_span = min(int(config.CHAT_TOOL_MAX_LINE_SPAN), 500)
-    answer_timeout_sec = _timeout_value(rag_config.react_answer_timeout_sec())
 
     # Redis client from app state
     redis = getattr(chat_deps, "redis", None)
@@ -454,8 +508,18 @@ async def run_react_chat_generation(
         intent_confidence=intent_confidence,
         retrieval_bias=retrieval_bias,
         answer_style=answer_style,
-        workspace_overlay_present=workspace_overlay_authoritative,
+        workspace_overlay_present=workspace_overlay_present,
+        question_contract=dict(question_contract or {}),
     )
+    normalized_question_contract = normalize_question_contract(
+        dict(routing_profile.get("question_contract") or question_contract or {}),
+        response_type=response_type,
+        message=clean_message,
+        task_type=str(getattr(req, "task_type", "") or ""),
+        tool_scope=list(getattr(req, "tool_scope", []) or []),
+        workspace_overlay_present=workspace_overlay_present,
+    )
+    routing_profile["question_contract"] = normalized_question_contract
     preferred_mode = str(routing_profile.get("preferred_tool_mode") or "code")
     docs_enabled = bool(routing_profile.get("docs_enabled"))
     phase_log.classify(intent=response_type, method="hybrid")
@@ -465,91 +529,36 @@ async def run_react_chat_generation(
         message="吏덈Ц ?섎룄? ?듬? ?좏삎??遺꾩꽍?섎뒗 以?..",
         response_type=response_type,
     )
-    if workspace_overlay_authoritative and str(response_type or "").strip().lower() == "code_explain":
-        graph_answer = render_workspace_graph_answer(
-            clean_message,
-            workspace_graph,
-            grounded_paths=grounded_overlay_paths,
+    overlay_bootstrap: Dict[str, Any] = {}
+    bootstrap_tool_calls: List[Dict[str, Any]] = []
+    if workspace_overlay_present and str(normalized_question_contract.get("kind") or "") == "code_flow_explanation":
+        overlay_bootstrap = await collect_local_overlay_code_explain_bootstrap(
+            chat_deps=chat_deps,
+            clean_message=clean_message,
+            local_overlay=local_overlay,
+            session_id=session_id,
+            max_chars=max_chars,
+            max_line_span=max_line_span,
+            progress_callback=progress_callback,
+            tool_callback=tool_callback,
+            question_contract=normalized_question_contract,
+        ) or {}
+        bootstrap_tool_calls = list(overlay_bootstrap.get("tool_calls") or [])
+        for bucket in ("primary_reads", "support_reads", "engine_windows"):
+            for row in list(overlay_bootstrap.get(bucket) or []):
+                accumulator.add_code_window(
+                    {
+                        "path": str(row.get("path") or "workspace"),
+                        "line_range": str(row.get("line_range") or "1-1"),
+                        "content": str(row.get("content") or ""),
+                    }
+                )
+        local_overlay_context = "\n\n".join(
+            part for part in [
+                local_overlay_context,
+                _build_overlay_bootstrap_context(overlay_bootstrap),
+            ] if part
         )
-        if (
-            workspace_graph_has_content(workspace_graph)
-            and workspace_graph_is_ready_for_answer(workspace_graph, grounded_overlay_paths).get("passed")
-            and graph_answer
-        ):
-            results = accumulator.to_results()
-            sources = build_sources(results)
-            await _maybe_await_callback(sources_callback, sources)
-            phase_log.verify(policy="workspace_graph")
-            await _emit_progress(progress_callback, phase="verify", message="?뚰겕?ㅽ럹?댁뒪 洹몃옒?꾨? 諛뷀깢?쇰줈 ?듬????뺣━?섎뒗 以?..")
-            elapsed_ms = (time.perf_counter() - started) * 1000.0
-            phase_log.finalize(answer_len=len(graph_answer), total_ms=elapsed_ms)
-            return {
-                "answer": graph_answer,
-                "results": results,
-                "sources": sources,
-                "query_time_ms": elapsed_ms,
-                "react": {
-                    "mode": "workspace_graph",
-                    "preferred_tool_mode": preferred_mode,
-                    "profile": routing_profile,
-                    "rounds": 0,
-                    "tool_calls": [],
-                    "thoughts": [],
-                },
-                "routing_profile": routing_profile,
-                "session_id": session_id,
-                "answer_truncated": False,
-            }
-
-        overlay_code_explain = await _run_with_stage_timeout(
-            run_local_overlay_code_explain(
-                chat_deps=chat_deps,
-                accumulator=accumulator,
-                clean_message=clean_message,
-                local_overlay=local_overlay,
-                model_name=model_name,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                system_prompt_seed=system_prompt_seed,
-                session_id=session_id,
-                routing_profile=routing_profile,
-                max_chars=max_chars,
-                max_line_span=max_line_span,
-                progress_callback=progress_callback,
-                token_callback=token_callback,
-                tool_callback=tool_callback,
-            ),
-            stage="answer",
-            timeout_sec=answer_timeout_sec,
-        )
-        if overlay_code_explain:
-            results = list(overlay_code_explain.get("results") or [])
-            sources = list(overlay_code_explain.get("sources") or [])
-            await _maybe_await_callback(sources_callback, sources)
-            phase_log.verify(policy="local_overlay_code_explain")
-            await _emit_progress(progress_callback, phase="verify", message="濡쒖뺄 洹쇨굅瑜?湲곗??쇰줈 ?듬????뺣━?섎뒗 以?.")
-            elapsed_ms = (time.perf_counter() - started) * 1000.0
-            phase_log.finalize(
-                answer_len=len(str(overlay_code_explain.get("answer") or "")),
-                total_ms=elapsed_ms,
-            )
-            return {
-                "answer": str(overlay_code_explain.get("answer") or ""),
-                "results": results,
-                "sources": sources,
-                "query_time_ms": elapsed_ms,
-                "react": {
-                    "mode": str(overlay_code_explain.get("mode") or "local_overlay_code_explain"),
-                    "preferred_tool_mode": preferred_mode,
-                    "profile": routing_profile,
-                    "rounds": 0,
-                    "tool_calls": list(overlay_code_explain.get("tool_calls") or []),
-                    "thoughts": [],
-                },
-                "routing_profile": routing_profile,
-                "session_id": session_id,
-                "answer_truncated": bool(overlay_code_explain.get("answer_truncated")),
-            }
 
     # ------------------------------------------------------------------
     # Tool implementations (closures with redis injected)
@@ -838,14 +847,22 @@ async def run_react_chat_generation(
     # System prompt & LLM call setup
     # ------------------------------------------------------------------
 
-    react_max_rounds = rag_config.react_max_rounds()
-    exhaustive_local_code_explain = (
-        workspace_overlay_authoritative
-        and str(response_type or "").strip().lower() == "code_explain"
+    contract_budget = dict(normalized_question_contract.get("budget") or {})
+    react_loop_max_rounds = max(
+        int(rag_config.react_max_rounds() or 0),
+        int(contract_budget.get("max_rounds") or 0),
+        8,
     )
-    react_loop_max_rounds = 0 if exhaustive_local_code_explain else react_max_rounds
-    react_loop_max_tool_calls = 0 if exhaustive_local_code_explain else rag_config.react_max_tool_calls()
-    react_loop_timeout_sec = 0 if exhaustive_local_code_explain else rag_config.react_timeout_sec()
+    react_loop_max_tool_calls = max(
+        int(rag_config.react_max_tool_calls() or 0),
+        int(contract_budget.get("max_tool_calls") or 0),
+        12,
+    )
+    react_loop_timeout_sec = max(
+        int(rag_config.react_timeout_sec() or 0),
+        int(contract_budget.get("max_duration_sec") or 0),
+        120,
+    )
     use_native = (
         chat_deps.vllm_client is not None
         and rag_config.react_native_tool_calling()
@@ -1100,21 +1117,28 @@ async def run_react_chat_generation(
         evidence_gate = build_evidence_gate(current_results, current_sources)
         current_grounded_paths = _current_grounded_paths()
         graph_gate = workspace_graph_is_ready_for_answer(workspace_graph, current_grounded_paths)
+        contract_state = evaluate_question_contract(
+            normalized_question_contract,
+            graph_gate=graph_gate,
+            direct_read_count=len(list(accumulator.code_windows or [])) + len(list(accumulator.doc_chunks or [])),
+            bootstrap=overlay_bootstrap,
+        )
         code_window_count = len(list(accumulator.code_windows or []))
         doc_chunk_count = len(list(accumulator.doc_chunks or []))
         direct_read_count = code_window_count + doc_chunk_count
         search_only_count = len(list(accumulator.code_matches or [])) + len(list(accumulator.doc_search_rows or []))
-        response_kind = str(response_type or "").strip().lower()
+        contract_kind = str(normalized_question_contract.get("kind") or "").strip().lower()
 
         issues: List[str] = []
-        if direct_read_count == 0 and response_kind in {"code_explain", "usage_guide", "troubleshooting"}:
+        if direct_read_count == 0 and bool(normalized_question_contract.get("require_direct_reads")):
             issues.append("missing_direct_reads")
         if search_only_count > 0 and direct_read_count == 0:
             issues.append("search_without_read")
-        if workspace_overlay_authoritative and response_kind == "code_explain":
+        if workspace_overlay_present and contract_kind == "code_flow_explanation":
             issues.extend(list(graph_gate.get("issues") or []))
         elif not bool(evidence_gate.get("passed")) and search_only_count > 0:
             issues.append("thin_evidence")
+        issues.extend(list(contract_state.get("issues") or []))
 
         frontier = None
         frontiers = list(graph_gate.get("frontiers") or [])
@@ -1122,12 +1146,15 @@ async def run_react_chat_generation(
             frontier = dict(frontiers[0] or {})
         elif isinstance(dict(workspace_graph.get("graph_state") or {}).get("frontier"), dict):
             frontier = dict(dict(workspace_graph.get("graph_state") or {}).get("frontier") or {})
+        elif list(overlay_bootstrap.get("unresolved_caller_callee_edges") or []):
+            frontier = dict(list(overlay_bootstrap.get("unresolved_caller_callee_edges") or [])[0] or {})
 
         return {
             "ok": len(issues) == 0,
             "issues": issues,
             "frontier": frontier or {},
             "graph_gate": graph_gate,
+            "contract_state": contract_state,
             "evidence_gate": evidence_gate,
             "direct_read_count": direct_read_count,
             "search_only_count": search_only_count,
@@ -1136,8 +1163,13 @@ async def run_react_chat_generation(
             "grounded_paths": current_grounded_paths,
         }
 
-    def _render_retrieval_feedback(issues: List[str], frontier: Dict[str, Any] | None = None) -> str:
+    def _render_retrieval_feedback(
+        issues: List[str],
+        frontier: Dict[str, Any] | None = None,
+        contract_state: Dict[str, Any] | None = None,
+    ) -> str:
         frontier = dict(frontier or {})
+        contract_status = dict(contract_state or {})
         feedback_lines = [
             "More evidence is still needed before answering.",
         ]
@@ -1171,6 +1203,22 @@ async def run_react_chat_generation(
             feedback_lines.append("The planner still marks some evidence dimensions as missing. Continue retrieval until those missing dimensions are covered or exhausted.")
         if "thin_evidence" in issues:
             feedback_lines.append("The overall evidence set is still thin. Read the strongest matched span before answering.")
+        if "missing_contract_axes" in issues:
+            missing_axes = [str(item).strip().replace("_", " ") for item in list(contract_status.get("missing_axes") or []) if str(item).strip()]
+            if missing_axes:
+                feedback_lines.append(
+                    "The question contract is still missing coverage for "
+                    + ", ".join(missing_axes[:3])
+                    + "."
+                )
+        if "open_contract_frontier" in issues:
+            open_symbols = [str(item).strip() for item in list(contract_status.get("open_frontier_symbols") or []) if str(item).strip()]
+            if open_symbols:
+                feedback_lines.append(
+                    "Open frontier symbols remain unresolved: "
+                    + ", ".join(open_symbols[:4])
+                    + "."
+                )
         return "\n".join(feedback_lines)
 
     async def _build_round_instruction(round_idx: int) -> Dict[str, Any]:
@@ -1197,7 +1245,23 @@ async def run_react_chat_generation(
                     + " / ".join([item for item in [frontier_path, frontier_symbol] if item][:2])
                     + "."
                 )
-        guidance.append(_render_retrieval_feedback(list(state.get("issues") or []), frontier))
+        guidance.append(
+            _render_retrieval_feedback(
+                list(state.get("issues") or []),
+                frontier,
+                dict(state.get("contract_state") or {}),
+            )
+        )
+        next_candidates = list(dict(state.get("contract_state") or {}).get("next_search_candidates") or [])
+        if next_candidates:
+            guidance.append(
+                "Next search candidates: "
+                + ", ".join(
+                    str(item.get("query") or item.get("symbol") or "").strip()
+                    for item in next_candidates[:4]
+                    if str(item.get("query") or item.get("symbol") or "").strip()
+                )
+            )
         guidance.append("Use tools to close the remaining evidence gaps before drafting the final answer.")
         return {"message": "\n".join(guidance)}
 
@@ -1211,6 +1275,7 @@ async def run_react_chat_generation(
             "feedback": _render_retrieval_feedback(
                 list(state.get("issues") or []),
                 dict(state.get("frontier") or {}),
+                dict(state.get("contract_state") or {}),
             ),
             "answer": answer_text,
         }
@@ -1370,7 +1435,7 @@ async def run_react_chat_generation(
             "preferred_tool_mode": preferred_mode,
             "profile": routing_profile,
             "rounds": int(react_result.get("rounds") or 0),
-            "tool_calls": react_result.get("tool_calls", []),
+            "tool_calls": [*bootstrap_tool_calls, *list(react_result.get("tool_calls", []) or [])],
             "thoughts": react_result.get("thoughts", []),
         },
         "routing_profile": routing_profile,

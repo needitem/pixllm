@@ -141,6 +141,7 @@ async def verify_chat_intent_request(payload: IntentVerifyRequest, chat_deps: An
             retrieval_bias=str(intent_resolution.get("retrieval_bias") or ""),
             answer_style=str(intent_resolution.get("answer_style") or ""),
             workspace_overlay_present=_has_local_workspace_overlay(payload),
+            question_contract=dict(intent_resolution.get("question_contract") or {}),
         )
         execution_plan = build_execution_plan(
             payload,
@@ -157,6 +158,7 @@ async def verify_chat_intent_request(payload: IntentVerifyRequest, chat_deps: An
             "planned_response_type": intent_resolution.get("response_type"),
             "retrieval_bias": intent_resolution.get("retrieval_bias"),
             "answer_style": intent_resolution.get("answer_style"),
+            "question_contract": intent_resolution.get("question_contract"),
             "response_type": resolved.response_type,
             "resolved_intent_id": resolved.intent_id,
             "agent_id": resolved.agent_id,
@@ -301,6 +303,7 @@ async def prepare_chat_execution(request: ChatRequest, chat_deps: Any) -> Prepar
                 "intent_confidence": intent_resolution.get("confidence"),
                 "retrieval_bias": intent_resolution.get("retrieval_bias"),
                 "answer_style": intent_resolution.get("answer_style"),
+                "question_contract": intent_resolution.get("question_contract"),
                 "planned_response_type": intent_resolution.get("response_type"),
                 "workspace_binding": execution_plan.get("workspace_binding"),
                 "requested": execution_plan.get("requested"),
@@ -319,6 +322,7 @@ async def prepare_chat_execution(request: ChatRequest, chat_deps: Any) -> Prepar
             planned_response_type=intent_resolution.get("response_type"),
             retrieval_bias=intent_resolution.get("retrieval_bias"),
             answer_style=intent_resolution.get("answer_style"),
+            question_contract=intent_resolution.get("question_contract"),
             task_family=execution_plan.get("task_family"),
             risk_class=execution_plan.get("risk_class"),
             needs_approval=execution_plan.get("needs_approval"),

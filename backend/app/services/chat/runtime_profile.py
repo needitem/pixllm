@@ -1,25 +1,14 @@
 from typing import Any, Dict, List
 
-from .retrieval.mode_policy import default_mode_for_response_type
+from .question_contract import normalize_question_contract
 
 
-def _intent_family_for_response_type(response_type: str) -> str:
-    rt = str(response_type or "").strip().lower()
-    if rt in {"doc_lookup"}:
+def _intent_family(response_type: str, question_contract: Dict[str, Any]) -> str:
+    contract_kind = str(dict(question_contract or {}).get("kind") or "").strip().lower()
+    contract_mode = str(dict(question_contract or {}).get("retrieval_mode") or "").strip().lower()
+    if contract_kind == "doc_reference" or contract_mode == "docs":
         return "document"
-    if rt in {
-        "usage_guide",
-        "api_lookup",
-        "code_explain",
-        "bug_fix",
-        "refactor",
-        "code_review",
-        "code_generate",
-        "troubleshooting",
-        "design_review",
-        "migration",
-        "compare",
-    }:
+    if contract_kind in {"code_change", "code_flow_explanation", "code_read"} or contract_mode in {"code", "hybrid"}:
         return "code"
     return "general"
 
@@ -45,79 +34,76 @@ def _normalize_retrieval_bias(value: str) -> str:
     return token if token in {"code", "docs", "hybrid"} else ""
 
 
-def _normalize_answer_style(value: str, response_type: str) -> str:
+def _normalize_answer_style(value: str, question_contract: Dict[str, Any], response_type: str) -> str:
     token = str(value or "").strip().lower()
     if token in {"default", "tutorial", "reference", "explanation", "troubleshooting", "comparison"}:
         return token
+    contract_hint = str(dict(question_contract or {}).get("answer_style_hint") or "").strip().lower()
+    if contract_hint in {"tutorial", "reference", "explanation", "troubleshooting", "comparison"}:
+        return contract_hint
     rt = str(response_type or "").strip().lower()
-    if rt == "usage_guide":
-        return "explanation"
     if rt == "doc_lookup":
         return "reference"
-    if rt in {"code_explain", "api_lookup"}:
-        return "explanation"
-    if rt in {"bug_fix", "troubleshooting"}:
-        return "troubleshooting"
     if rt == "compare":
         return "comparison"
+    if rt in {"bug_fix", "troubleshooting"}:
+        return "troubleshooting"
+    if rt in {"code_explain", "usage_guide", "api_lookup"}:
+        return "explanation"
     return "default"
 
 
-def _docs_enabled_for_response_type(response_type: str, preferred_tool_mode: str) -> bool:
-    rt = str(response_type or "").strip().lower()
+def _docs_enabled(preferred_tool_mode: str, question_contract: Dict[str, Any]) -> bool:
     mode = str(preferred_tool_mode or "").strip().lower()
-    return mode == "docs" or rt == "doc_lookup"
+    if mode in {"docs", "hybrid"}:
+        return True
+    contract_kind = str(dict(question_contract or {}).get("kind") or "").strip().lower()
+    contract_mode = str(dict(question_contract or {}).get("retrieval_mode") or "").strip().lower()
+    return contract_kind == "doc_reference" or contract_mode == "docs"
 
 
-def _tool_priority_for_mode(preferred_tool_mode: str, response_type: str, *, docs_enabled: bool) -> List[str]:
-    if preferred_tool_mode == "docs":
-        return ["doc_search", "doc_read", "find_symbol", "grep", "read", "glob"]
+def _tool_priority_for_contract(
+    preferred_tool_mode: str,
+    *,
+    question_contract: Dict[str, Any],
+    docs_enabled: bool,
+) -> List[str]:
+    base = ["find_symbol", "grep", "read", "glob"]
+    contract_kind = str(dict(question_contract or {}).get("kind") or "").strip().lower()
+    if contract_kind == "doc_reference" and preferred_tool_mode == "docs":
+        return ["doc_search", "doc_read", *base]
     if docs_enabled:
-        return ["find_symbol", "grep", "read", "glob", "doc_search", "doc_read"]
-    return ["find_symbol", "grep", "read", "glob"]
-
-
-def _workspace_overlay_tool_priority(response_type: str, *, docs_enabled: bool) -> List[str]:
-    base = ["find_symbol", "read"]
-    if docs_enabled:
-        base.extend(["doc_search", "doc_read"])
+        return [*base, "doc_search", "doc_read"]
     return base
 
 
-def _primary_agent(response_type: str) -> str:
+def _primary_agent(question_contract: Dict[str, Any], response_type: str) -> str:
+    contract_kind = str(dict(question_contract or {}).get("kind") or "").strip().lower()
     rt = str(response_type or "").strip().lower()
+    if contract_kind == "doc_reference":
+        return "general"
+    if contract_kind == "code_change":
+        return "build"
     if rt in {"design_review", "compare", "migration"}:
         return "plan"
-    if rt in {"general", "doc_lookup"}:
-        return "general"
-    return "build"
+    return "build" if contract_kind in {"code_flow_explanation", "code_read"} else "general"
 
 
-def _subagent(response_type: str) -> str:
+def _subagent(question_contract: Dict[str, Any], response_type: str) -> str:
+    contract_kind = str(dict(question_contract or {}).get("kind") or "").strip().lower()
     rt = str(response_type or "").strip().lower()
-    if rt in {"design_review", "compare"}:
+    if contract_kind == "doc_reference" or rt in {"design_review", "compare"}:
         return "general"
     return "explore"
 
 
-def _skillset(response_type: str) -> List[str]:
+def _skillset(response_type: str, question_contract: Dict[str, Any]) -> List[str]:
     base = ["korean", "grounded", "no-meta"]
+    contract_kind = str(dict(question_contract or {}).get("kind") or "").strip().lower()
     rt = str(response_type or "").strip().lower()
-    if rt in {"bug_fix", "troubleshooting", "code_review", "migration"}:
+    if contract_kind in {"code_change", "code_flow_explanation"} or rt in {"bug_fix", "troubleshooting", "code_review", "migration"}:
         return [*base, "actionable"]
     return base
-
-
-def _toolset(preferred_tool_mode: str, *, docs_enabled: bool) -> List[str]:
-    if preferred_tool_mode == "docs":
-        return ["doc_search", "doc_read", "find_symbol", "grep", "read", "glob"]
-    if docs_enabled:
-        return ["find_symbol", "grep", "read", "glob", "doc_search", "doc_read"]
-    return ["find_symbol", "grep", "read", "glob"]
-
-
-def _workspace_overlay_toolset(*, docs_enabled: bool) -> List[str]:
-    return ["find_symbol", "read", "doc_search", "doc_read"] if docs_enabled else ["find_symbol", "read"]
 
 
 def resolve_runtime_routing_profile(
@@ -128,18 +114,33 @@ def resolve_runtime_routing_profile(
     retrieval_bias: str = "",
     answer_style: str = "",
     workspace_overlay_present: bool = False,
+    question_contract: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
-    default_tool_mode = default_mode_for_response_type(response_type)
-    preferred_tool_mode = _normalize_retrieval_bias(retrieval_bias) or default_tool_mode
-    docs_enabled = _docs_enabled_for_response_type(response_type, preferred_tool_mode)
-    intent_family = _intent_family_for_response_type(response_type)
-    overlay_present = bool(workspace_overlay_present)
-    tool_priority = (
-        _workspace_overlay_tool_priority(response_type, docs_enabled=docs_enabled)
-        if overlay_present
-        else _tool_priority_for_mode(preferred_tool_mode, response_type, docs_enabled=docs_enabled)
+    normalized_contract = normalize_question_contract(
+        question_contract,
+        response_type=response_type,
+        workspace_overlay_present=workspace_overlay_present,
     )
-    normalized_answer_style = _normalize_answer_style(answer_style, response_type)
+    default_tool_mode = _normalize_retrieval_bias(str(normalized_contract.get("retrieval_mode") or "")) or "code"
+    preferred_tool_mode = _normalize_retrieval_bias(retrieval_bias) or default_tool_mode
+    docs_enabled = _docs_enabled(preferred_tool_mode, normalized_contract)
+    intent_family = _intent_family(response_type, normalized_contract)
+    tool_priority = _tool_priority_for_contract(
+        preferred_tool_mode,
+        question_contract=normalized_contract,
+        docs_enabled=docs_enabled,
+    )
+    normalized_answer_style = _normalize_answer_style(answer_style, normalized_contract, response_type)
+
+    if str(normalized_contract.get("kind") or "").strip().lower() == "doc_reference" and preferred_tool_mode == "docs":
+        tool_strategy = "doc_reference_with_code_fallback"
+    elif workspace_overlay_present:
+        tool_strategy = "frontier_search_loop_with_overlay_bootstrap"
+    elif preferred_tool_mode == "hybrid":
+        tool_strategy = "frontier_search_loop_hybrid"
+    else:
+        tool_strategy = "frontier_search_loop"
+
     return {
         "intent_family": intent_family,
         "agent_lane": (
@@ -148,31 +149,24 @@ def resolve_runtime_routing_profile(
             else ("code_tool_lane" if intent_family == "code" else "general_assistant_lane")
         ),
         "preferred_tool_mode": preferred_tool_mode,
-        "tool_strategy": (
-            "docs_first_then_code"
-            if preferred_tool_mode == "docs"
-            else (
-                "local_workspace_primary_with_engine_reference"
-                if overlay_present
-                else ("server_code_first_with_local_overlay" if not docs_enabled else "server_code_first_then_docs")
-            )
-        ),
+        "tool_strategy": tool_strategy,
         "tool_priority": tool_priority,
         "retrieval_bias": preferred_tool_mode,
         "docs_enabled": docs_enabled,
         "workspace_overlay_policy": (
-            "local_workspace_is_authoritative_server_engine_is_reference_only"
-            if overlay_present
-            else "server_code_is_authoritative_local_overlay_is_supplemental"
+            "overlay_bootstrap_not_authoritative_ground_with_reads"
+            if workspace_overlay_present
+            else "server_code_authoritative_with_optional_local_bootstrap"
         ),
-        "workspace_overlay_present": overlay_present,
+        "workspace_overlay_present": bool(workspace_overlay_present),
         "answer_style": normalized_answer_style,
         "classification_stability": _classification_stability(intent_source, intent_confidence),
+        "question_contract": normalized_contract,
         "agent_profile": {
-            "primary_agent": _primary_agent(response_type),
-            "subagent": _subagent(response_type),
-            "toolset": _workspace_overlay_toolset(docs_enabled=docs_enabled) if overlay_present else _toolset(preferred_tool_mode, docs_enabled=docs_enabled),
-            "skillset": _skillset(response_type),
+            "primary_agent": _primary_agent(normalized_contract, response_type),
+            "subagent": _subagent(normalized_contract, response_type),
+            "toolset": list(tool_priority),
+            "skillset": _skillset(response_type, normalized_contract),
         },
     }
 

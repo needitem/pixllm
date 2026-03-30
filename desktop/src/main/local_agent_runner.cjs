@@ -52,6 +52,22 @@ const MEMBER_CALL_RE = /\b([A-Za-z_][A-Za-z0-9_]*)\s*(?:\.|::|->)\s*([A-Za-z_][A
 const DIRECT_CALL_RE = /\b([A-Za-z_][A-Za-z0-9_]*)\s*\(/g;
 const CONTROL_SIGNAL_RE = /\b(if|for|foreach|while|switch|catch|try|return|await)\b/g;
 const ASSIGNMENT_SIGNAL_RE = /(?:[A-Za-z_][A-Za-z0-9_]*|\)|\])\s*(?:[+\-*/%]?=|\+\+|--)/g;
+const KOREAN_QUERY_NOISE_TOKENS = new Set([
+  '\uC124\uBA85',
+  '\uC124\uBA85\uD574\uC918',
+  '\uC815\uB9AC',
+  '\uC815\uB9AC\uD574\uC918',
+  '\uC54C\uB824\uC918',
+  '\uBCF4\uC5EC\uC918',
+  '\uADF8\uB0E5',
+  '\uC5B4\uB5BB\uAC8C',
+  '\uBB50\uC57C',
+  '\uB54C\uBB38',
+  '\uAE30\uC900',
+  '\uC911\uC2EC',
+  '\uAD00\uB828',
+  '\uB300\uD574',
+]);
 
 function pathBasename(value) {
   const normalized = normalizePath(value);
@@ -90,10 +106,82 @@ function splitSymbolParts(value) {
     .filter(Boolean);
 }
 
+function extractNativeQuestionTerms(question) {
+  const weights = new Map();
+  for (const raw of String(question || '').match(/[\uAC00-\uD7A3]{2,}/g) || []) {
+    const token = String(raw || '')
+      .trim()
+      .replace(/(?:\uD574\uC918|\uD574\uC694|\uD569\uB2C8\uB2E4)$/u, '');
+    if (!token || KOREAN_QUERY_NOISE_TOKENS.has(token)) continue;
+    const score = token.length;
+    const current = weights.get(token) || 0;
+    weights.set(token, Math.max(current, score));
+  }
+  return Array.from(weights.entries())
+    .sort((a, b) => Number(b[1] || 0) - Number(a[1] || 0) || String(a[0] || '').localeCompare(String(b[0] || '')))
+    .map(([token]) => token);
+}
+
+function extractAsciiQuestionTerms(question) {
+  const weights = new Map();
+  for (const raw of String(question || '').match(/[A-Za-z_][A-Za-z0-9_]{2,}/g) || []) {
+    const rawToken = String(raw || '').trim();
+    const token = rawToken.toLowerCase();
+    if (!token) continue;
+    const current = weights.get(token) || 0;
+    weights.set(token, Math.max(current, token.length));
+    for (const part of splitSymbolParts(rawToken)) {
+      const normalized = String(part || '').trim().toLowerCase();
+      if (normalized.length < 3) continue;
+      const currentPart = weights.get(normalized) || 0;
+      weights.set(normalized, Math.max(currentPart, normalized.length + 2));
+    }
+  }
+  return Array.from(weights.entries())
+    .sort((a, b) => Number(b[1] || 0) - Number(a[1] || 0) || String(a[0] || '').localeCompare(String(b[0] || '')))
+    .map(([token]) => token);
+}
+
+function expandQuestionTermVariants(terms = []) {
+  const weights = new Map();
+  for (const raw of Array.isArray(terms) ? terms : []) {
+    const token = String(raw || '').trim().toLowerCase();
+    if (!token) continue;
+    for (const part of splitSymbolParts(token)) {
+      const normalized = String(part || '').trim().toLowerCase();
+      if (normalized.length < 3) continue;
+      const current = weights.get(normalized) || 0;
+      weights.set(normalized, Math.max(current, normalized.length + 2));
+    }
+    if (/[_-]/.test(token)) {
+      const compact = token.replace(/[_-]+/g, '');
+      if (compact.length >= 4) {
+        const current = weights.get(compact) || 0;
+        weights.set(compact, Math.max(current, compact.length));
+      }
+    }
+  }
+  return Array.from(weights.entries())
+    .sort((a, b) => Number(b[1] || 0) - Number(a[1] || 0) || String(a[0] || '').localeCompare(String(b[0] || '')))
+    .map(([token]) => token);
+}
+
 function normalizeQuestionTerms(question) {
-  return extractIdentifiers(question)
+  const nativeTerms = extractNativeQuestionTerms(question);
+  const asciiTerms = extractAsciiQuestionTerms(question);
+  const identifierTerms = extractIdentifiers(question)
     .map((item) => String(item || '').trim().toLowerCase())
     .filter(Boolean);
+  return uniq([
+    ...identifierTerms,
+    ...asciiTerms,
+    ...nativeTerms
+      .map((item) => String(item || '').trim().toLowerCase())
+      .filter(Boolean),
+    ...expandQuestionTermVariants([...identifierTerms, ...asciiTerms, ...nativeTerms])
+      .map((item) => String(item || '').trim().toLowerCase())
+      .filter(Boolean),
+  ]);
 }
 
 function identifierStructureScore(symbol) {
@@ -419,27 +507,107 @@ async function resolveRootPath(workspacePath, question, selectedFilePath, trace)
   }
 
   const questionTerms = normalizeQuestionTerms(question);
-  if (questionTerms.length === 0) {
-    return '';
-  }
-
   const listResult = await pushTraceStep(trace, workspacePath, 'enumerate workspace files to anchor the local investigation', 'list_files', {
     limit: MAX_LIST_LIMIT,
   });
   const items = Array.isArray(listResult?.items) ? listResult.items : [];
-  const scored = items
-    .map((item) => {
-      const pathValue = normalizePath(item?.path);
-      const lowered = pathValue.toLowerCase();
-      let score = 0;
-      for (const term of questionTerms) {
-        if (lowered.includes(term)) score += 16;
-        if (pathStem(pathValue).toLowerCase().includes(term)) score += 12;
-      }
-      return { path: pathValue, score };
-    })
-    .sort((a, b) => Number(b.score || 0) - Number(a.score || 0) || String(a.path || '').localeCompare(String(b.path || '')));
-  return scored[0] && scored[0].score > 0 ? scored[0].path : '';
+  if (questionTerms.length > 0) {
+    const scored = items
+      .map((item) => {
+        const pathValue = normalizePath(item?.path);
+        const lowered = pathValue.toLowerCase();
+        let score = 0;
+        for (const term of questionTerms) {
+          const loweredTerm = String(term || '').trim().toLowerCase();
+          if (!loweredTerm) continue;
+          if (lowered.includes(loweredTerm)) score += 16;
+          if (pathStem(pathValue).toLowerCase().includes(loweredTerm)) score += 12;
+        }
+        return { path: pathValue, score };
+      })
+      .sort((a, b) => Number(b.score || 0) - Number(a.score || 0) || String(a.path || '').localeCompare(String(b.path || '')));
+    if (scored[0] && scored[0].score > 0) {
+      return scored[0].path;
+    }
+  }
+
+  const anchorQueries = buildAnchorQueries(question, questionTerms);
+  for (const queryText of anchorQueries) {
+    const grepObservation = await pushTraceStep(
+      trace,
+      workspacePath,
+      `search workspace text to find a local anchor for ${queryText}`,
+      'grep',
+      {
+        query: queryText,
+        limit: MAX_GREP_LIMIT,
+      },
+    );
+    const bestHit = pickBestGrepAnchor(grepObservation?.items, questionTerms, queryText);
+    if (bestHit && Number(bestHit.score || 0) > 0) {
+      return bestHit.path;
+    }
+  }
+  return '';
+}
+
+function scoreGrepAnchorHit(item, questionTerms, queryText) {
+  const pathValue = normalizePath(item?.path);
+  const loweredPath = pathValue.toLowerCase();
+  const text = String(item?.text || '').trim();
+  const loweredText = text.toLowerCase();
+  const rawQuery = String(queryText || '').trim().toLowerCase();
+  let score = 0;
+
+  if (!pathValue) {
+    return 0;
+  }
+  if (rawQuery && loweredText.includes(rawQuery)) score += 24;
+  if (rawQuery && loweredPath.includes(rawQuery)) score += 12;
+  for (const term of Array.isArray(questionTerms) ? questionTerms : []) {
+    const loweredTerm = String(term || '').trim().toLowerCase();
+    if (!loweredTerm) continue;
+    if (loweredText.includes(loweredTerm)) score += 10;
+    if (loweredPath.includes(loweredTerm)) score += 6;
+  }
+  if (/\/(?:obj|bin|dist|build|out|node_modules)\//i.test(pathValue)) score -= 30;
+  if (/\b(class|interface|struct|enum|record|namespace|module)\b/i.test(text)) score += 4;
+  return score;
+}
+
+function pickBestGrepAnchor(items, questionTerms, queryText) {
+  const bestByPath = new Map();
+  for (const item of Array.isArray(items) ? items : []) {
+    const pathValue = normalizePath(item?.path);
+    if (!pathValue) continue;
+    const candidate = {
+      path: pathValue,
+      score: scoreGrepAnchorHit(item, questionTerms, queryText),
+      line: Number(item?.line || 0),
+      text: String(item?.text || '').trim(),
+    };
+    const current = bestByPath.get(pathValue.toLowerCase());
+    if (!current || Number(candidate.score || 0) > Number(current.score || 0)) {
+      bestByPath.set(pathValue.toLowerCase(), candidate);
+    }
+  }
+  return Array.from(bestByPath.values())
+    .sort((a, b) => Number(b.score || 0) - Number(a.score || 0) || String(a.path || '').localeCompare(String(b.path || '')))[0] || null;
+}
+
+function buildAnchorQueries(question, questionTerms) {
+  const rawQuestion = String(question || '').trim();
+  const queries = [];
+  for (const term of Array.isArray(questionTerms) ? questionTerms : []) {
+    const token = String(term || '').trim();
+    if (!token) continue;
+    queries.push(token);
+    if (queries.length >= 10) break;
+  }
+  if (rawQuestion) {
+    queries.push(rawQuestion);
+  }
+  return uniq(queries);
 }
 
 function summarizeTraceTargets(trace) {
@@ -615,7 +783,7 @@ async function runLocalToolLoop({
       trace,
       summary: 'No local file anchor was available.',
       contextText: JSON.stringify({ question, root_path: '' }, null, 2),
-      error: '',
+      error: 'No local file anchor was available.',
       primaryFilePath: '',
       primaryFileContent: '',
       selectedFiles: [],

@@ -32,6 +32,7 @@ class DefaultReasoningBackend:
             intent_confidence=float(prepared.intent_resolution.get("confidence", 0.0) or 0.0),
             retrieval_bias=str(prepared.intent_resolution.get("retrieval_bias") or ""),
             answer_style=str(prepared.intent_resolution.get("answer_style") or ""),
+            question_contract=dict(prepared.intent_resolution.get("question_contract") or {}),
             history_messages=prepared.history_messages,
             model_name=prepared.req.model or config.VLLM_MODEL,
             max_tokens=prepared.max_tokens,

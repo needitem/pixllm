@@ -3,30 +3,19 @@ import json
 import re
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
-from .... import rag_config
-from ....core.llm_utils import (
-    build_chat_template_extra_body,
-    extract_completion_finish_reason,
-    safe_chat_completion_create,
-    stream_chat_completion_text_with_meta,
-)
-from ....utils.source_guard import find_ungrounded_source_mentions, normalize_source_path
-from ..retrieval.routing import build_sources
+from ..question_contract import normalize_question_contract
 from ..workspace_graph import (
     build_workspace_grounding_report,
     collect_grounded_overlay_paths,
     extract_workspace_graph,
 )
-from ...tools.runtime import find_symbol, read_code_lines
 from ...tools.query_terms import identifier_structure_score
+from ...tools.runtime import find_symbol, read_code_lines
 
 
-TokenCallback = Optional[Callable[[str], Awaitable[None] | None]]
 ProgressCallback = Optional[Callable[[Dict[str, Any]], Awaitable[None] | None]]
 ToolCallback = Optional[Callable[[str, Dict[str, Any], str], Awaitable[None] | None]]
 
-_SYMBOL_TOKEN_RE = re.compile(r"\b[A-Z][A-Za-z0-9_]{4,}\b")
-_MEMBER_ACCESS_SYMBOL_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*(?:\.|::|->)\s*([A-Za-z_][A-Za-z0-9_]*)")
 _CODE_LIKE_SYMBOL_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{2,}")
 _METHOD_DECL_RE = re.compile(
     r"^\s*(?:public|private|protected|internal|static|virtual|override|sealed|partial|async|\s)+"
@@ -36,6 +25,8 @@ _MEMBER_CALL_RE = re.compile(
     r"\b([A-Za-z_][A-Za-z0-9_]*)\s*(?:\.|::|->)\s*([A-Za-z_][A-Za-z0-9_]*)\s*\("
 )
 _DIRECT_CALL_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(")
+_QUESTION_ASCII_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{2,}")
+_QUESTION_HANGUL_RE = re.compile(r"[\uAC00-\uD7A3]{2,}")
 _CALL_KEYWORDS = {
     "if",
     "for",
@@ -112,7 +103,7 @@ def _collect_local_prefixes(local_overlay: Dict[str, Any]) -> set[str]:
     return prefixes
 
 
-def _dedupe_tokens(tokens: List[str], *, limit: int = 12) -> List[str]:
+def _dedupe_tokens(tokens: List[str], *, limit: int | None = None) -> List[str]:
     ordered: List[str] = []
     seen = set()
     for token in tokens:
@@ -124,9 +115,14 @@ def _dedupe_tokens(tokens: List[str], *, limit: int = 12) -> List[str]:
             continue
         seen.add(key)
         ordered.append(normalized)
-        if len(ordered) >= limit:
+        if limit is not None and len(ordered) >= max(1, int(limit)):
             break
     return ordered
+
+
+def _split_symbol_parts(value: Any) -> List[str]:
+    parts = re.split(r"_|(?=[A-Z])", str(value or "").strip())
+    return [str(item or "").strip() for item in parts if str(item or "").strip()]
 
 
 def _is_generic_external_symbol(symbol: str) -> bool:
@@ -386,7 +382,7 @@ def _collect_trace_relations(local_overlay: Dict[str, Any]) -> List[Dict[str, An
             )
         items = list(observation.get("items") or [])
         if items:
-            for item in items[:16]:
+            for item in items[:24]:
                 if not isinstance(item, dict):
                     continue
                 _append(
@@ -408,13 +404,18 @@ def _collect_trace_relations(local_overlay: Dict[str, Any]) -> List[Dict[str, An
                 snippet=str(observation.get("content") or "").strip()[:240],
             )
 
-    return relations[:48]
+    return relations[:64]
 
 
-def _extract_flow_observations(local_windows: List[Dict[str, Any]], local_overlay: Dict[str, Any]) -> List[Dict[str, Any]]:
+def _extract_flow_observations(
+    local_windows: List[Dict[str, Any]],
+    local_overlay: Dict[str, Any],
+    *,
+    limit: int,
+) -> List[Dict[str, Any]]:
     observations: List[Dict[str, Any]] = []
     seen = set()
-    for window in _sort_local_windows(local_windows, local_overlay)[:4]:
+    for window in _sort_local_windows(local_windows, local_overlay):
         path = str(window.get("path") or "").strip()
         start_line, _ = _parse_line_range(str(window.get("line_range") or ""))
         current_method = str(window.get("symbol") or "").strip()
@@ -445,6 +446,8 @@ def _extract_flow_observations(local_windows: List[Dict[str, Any]], local_overla
                         "snippet": stripped[:240],
                     }
                 )
+                if len(observations) >= limit:
+                    return observations
             if "." in line or "::" in line or "->" in line:
                 continue
             for direct in _DIRECT_CALL_RE.findall(line):
@@ -467,10 +470,12 @@ def _extract_flow_observations(local_windows: List[Dict[str, Any]], local_overla
                         "snippet": stripped[:240],
                     }
                 )
-    return observations[:20]
+                if len(observations) >= limit:
+                    return observations
+    return observations
 
 
-def _collect_graph_symbols(local_overlay: Dict[str, Any]) -> List[str]:
+def _collect_graph_symbols(local_overlay: Dict[str, Any], *, limit: int) -> List[str]:
     graph = extract_workspace_graph(local_overlay)
     graph_state = dict(graph.get("graph_state") or {}) if isinstance(graph.get("graph_state"), dict) else {}
     candidates: List[str] = []
@@ -503,7 +508,7 @@ def _collect_graph_symbols(local_overlay: Dict[str, Any]) -> List[str]:
             if _is_generic_external_symbol(normalized):
                 continue
             candidates.append(normalized)
-    return _dedupe_tokens(candidates, limit=10)
+    return _dedupe_tokens(candidates, limit=limit)
 
 
 def _score_primary_paths(
@@ -563,7 +568,7 @@ def _score_primary_paths(
             *_path_priority(path, focus_path=focus_path, selected_path=selected_path),
         ),
     )
-    return [path for path in ordered if path][:3]
+    return [path for path in ordered if path][:4]
 
 
 def _sort_reads(
@@ -598,6 +603,7 @@ def _select_trace_relations(
     primary_paths: List[str],
     primary_symbols: List[str],
     support_paths: List[str],
+    limit: int,
 ) -> List[Dict[str, Any]]:
     primary_path_set = {path.lower() for path in list(primary_paths or []) if path}
     support_path_set = {path.lower() for path in list(support_paths or []) if path}
@@ -641,7 +647,7 @@ def _select_trace_relations(
             int(item[1].get("line") or 0),
         )
     )
-    return [relation for _, relation in scored[:12]]
+    return [relation for _, relation in scored[:limit]]
 
 
 def _select_support_reads(
@@ -651,6 +657,7 @@ def _select_support_reads(
     primary_paths: List[str],
     primary_symbols: List[str],
     trace_relations: List[Dict[str, Any]],
+    limit: int,
 ) -> List[Dict[str, Any]]:
     primary_path_set = {path.lower() for path in list(primary_paths or []) if path}
     primary_symbol_set = {str(item or "").strip().lower() for item in list(primary_symbols or []) if str(item or "").strip()}
@@ -714,7 +721,7 @@ def _select_support_reads(
             ),
         )
     )
-    return [item for _, item in scored[:4]]
+    return [item for _, item in scored[:limit]]
 
 
 def _extract_grounded_symbols(
@@ -725,9 +732,10 @@ def _extract_grounded_symbols(
     flow_observations: List[Dict[str, Any]],
     trace_relations: List[Dict[str, Any]],
     engine_windows: List[Dict[str, Any]],
+    limit: int,
 ) -> List[str]:
     tokens: List[str] = []
-    tokens.extend(_collect_graph_symbols(local_overlay))
+    tokens.extend(_collect_graph_symbols(local_overlay, limit=max(limit, 16)))
     for read in list(primary_reads or []) + list(support_reads or []):
         symbol = str(read.get("symbol") or "").strip()
         if symbol and not _is_generic_external_symbol(symbol):
@@ -746,48 +754,381 @@ def _extract_grounded_symbols(
         symbol = str(window.get("symbol") or "").strip()
         if symbol and not _is_generic_external_symbol(symbol):
             tokens.append(symbol)
-    return _dedupe_tokens(tokens, limit=28)
+    return _dedupe_tokens(tokens, limit=limit)
 
 
-def _extract_external_symbol_candidates(
+def _resolve_frontier_budget(
+    *,
+    question_contract: Dict[str, Any] | None,
+    local_overlay: Dict[str, Any],
+    read_evidence: List[Dict[str, Any]],
+    trace_relations: List[Dict[str, Any]],
+) -> Dict[str, int]:
+    normalized_contract = normalize_question_contract(
+        question_contract,
+        workspace_overlay_present=bool(local_overlay.get("present")),
+    )
+    configured = dict(normalized_contract.get("budget") or {})
+    graph = extract_workspace_graph(local_overlay)
+    graph_state = dict(graph.get("graph_state") or {}) if isinstance(graph.get("graph_state"), dict) else {}
+    open_frontiers = list(graph_state.get("frontiers") or [])
+    if isinstance(graph_state.get("frontier"), dict):
+        open_frontiers = [dict(graph_state.get("frontier") or {}), *open_frontiers]
+    frontier_count = len(open_frontiers)
+    node_count = len(list(graph.get("nodes") or []))
+    trace_count = len(list(trace_relations or []))
+    read_count = len(list(read_evidence or []))
+    frontier_score = max(
+        1,
+        frontier_count * 4
+        + min(node_count, 8) * 2
+        + min(trace_count, 18) // 2
+        + min(read_count, 12) // 2,
+    )
+
+    configured_symbol_cap = max(3, int(configured.get("max_engine_symbol_candidates") or 6))
+    configured_window_cap = max(2, int(configured.get("max_engine_windows") or configured_symbol_cap))
+
+    return {
+        "frontier_score": frontier_score,
+        "primary_read_cap": min(6, max(3, 2 + frontier_score // 6)),
+        "support_read_cap": min(8, max(3, 2 + frontier_score // 5)),
+        "flow_observation_cap": min(18, max(8, 6 + frontier_score // 4)),
+        "trace_relation_cap": min(18, max(8, 6 + frontier_score // 3)),
+        "grounded_symbol_cap": min(36, max(18, 12 + frontier_score)),
+        "open_frontier_symbol_cap": min(configured_symbol_cap, max(3, 2 + frontier_score // 4)),
+        "unresolved_edge_cap": min(12, max(4, 2 + frontier_score // 4)),
+        "engine_match_cap": min(6, max(2, 1 + frontier_score // 5)),
+        "engine_window_cap": min(configured_window_cap, max(2, 2 + frontier_score // 5)),
+        "next_search_candidate_cap": min(12, max(4, 3 + frontier_score // 4)),
+    }
+
+
+def _merge_symbol_candidate(
+    candidates: Dict[str, Dict[str, Any]],
+    *,
+    symbol: Any,
+    score: float,
+    reason: str,
+    source_kind: str,
+    path: Any = "",
+    caller_symbol: Any = "",
+    callee_symbol: Any = "",
+    line: Any = 0,
+) -> None:
+    normalized_symbol = _maybe_symbol(symbol)
+    if not normalized_symbol or _is_generic_external_symbol(normalized_symbol):
+        return
+    key = normalized_symbol.lower()
+    entry = candidates.setdefault(
+        key,
+        {
+            "symbol": normalized_symbol,
+            "score": 0.0,
+            "reasons": [],
+            "source_kinds": [],
+            "path": "",
+            "caller_symbol": "",
+            "callee_symbol": "",
+            "line": 0,
+        },
+    )
+    entry["score"] = float(entry.get("score") or 0.0) + float(score or 0.0)
+    if reason and reason not in entry["reasons"]:
+        entry["reasons"].append(reason)
+    if source_kind and source_kind not in entry["source_kinds"]:
+        entry["source_kinds"].append(source_kind)
+    if not str(entry.get("path") or "").strip():
+        entry["path"] = _normalize_path(path)
+    if not str(entry.get("caller_symbol") or "").strip():
+        entry["caller_symbol"] = str(caller_symbol or "").strip()
+    if not str(entry.get("callee_symbol") or "").strip():
+        entry["callee_symbol"] = str(callee_symbol or "").strip()
+    if not int(entry.get("line") or 0):
+        try:
+            entry["line"] = int(line or 0)
+        except Exception:
+            entry["line"] = 0
+
+
+def _extract_open_frontier_symbol_candidates(
     *,
     local_overlay: Dict[str, Any],
-    primary_symbols: List[str],
+    grounded_symbols: List[str],
     flow_observations: List[Dict[str, Any]],
     trace_relations: List[Dict[str, Any]],
-) -> List[str]:
-    grounded = {str(item or "").strip().lower() for item in list(primary_symbols or []) if str(item or "").strip()}
-    scores: Dict[str, float] = {}
+    limit: int,
+) -> List[Dict[str, Any]]:
+    grounded = {str(item or "").strip().lower() for item in list(grounded_symbols or []) if str(item or "").strip()}
+    candidates: Dict[str, Dict[str, Any]] = {}
+
     for item in list(flow_observations or []):
-        callee = str(item.get("callee_symbol") or "").strip()
+        caller = str(item.get("caller_symbol") or "").strip()
         owner = str(item.get("owner_symbol") or "").strip()
-        if callee and callee.lower() not in grounded and not _is_generic_external_symbol(callee):
-            scores[callee] = scores.get(callee, 0.0) + 7.0
-        if owner and owner not in {"this", "base"} and owner.lower() not in grounded and not _is_generic_external_symbol(owner):
-            scores[owner] = scores.get(owner, 0.0) + 2.0
+        callee = str(item.get("callee_symbol") or "").strip()
+        path = _normalize_path(item.get("path"))
+        line = item.get("line") or 0
+        if callee and callee.lower() not in grounded:
+            _merge_symbol_candidate(
+                candidates,
+                symbol=callee,
+                score=8.0,
+                reason="unresolved callee from grounded local read",
+                source_kind="flow_observation",
+                path=path,
+                caller_symbol=caller,
+                callee_symbol=callee,
+                line=line,
+            )
+        if owner and owner.lower() not in grounded and owner.lower() not in {"this", "base"}:
+            _merge_symbol_candidate(
+                candidates,
+                symbol=owner,
+                score=3.0,
+                reason="unresolved owner from grounded local read",
+                source_kind="flow_observation",
+                path=path,
+                caller_symbol=caller,
+                callee_symbol=callee,
+                line=line,
+            )
+
     for relation in list(trace_relations or []):
         for token in (relation.get("anchor_symbol"), relation.get("related_symbol")):
             normalized = str(token or "").strip()
-            if not normalized or normalized.lower() in grounded or _is_generic_external_symbol(normalized):
+            if not normalized or normalized.lower() in grounded:
                 continue
-            scores[normalized] = scores.get(normalized, 0.0) + 2.0
+            _merge_symbol_candidate(
+                candidates,
+                symbol=normalized,
+                score=2.0,
+                reason="trace relation exposes unresolved symbol",
+                source_kind=str(relation.get("tool") or "trace_relation"),
+                path=relation.get("path"),
+                line=relation.get("line"),
+            )
+
     graph = extract_workspace_graph(local_overlay)
     graph_state = dict(graph.get("graph_state") or {}) if isinstance(graph.get("graph_state"), dict) else {}
     frontier_items: List[Dict[str, Any]] = []
-    frontier = graph_state.get("frontier")
-    if isinstance(frontier, dict):
-        frontier_items.append(frontier)
+    if isinstance(graph_state.get("frontier"), dict):
+        frontier_items.append(dict(graph_state.get("frontier") or {}))
     for item in list(graph_state.get("frontiers") or []):
         if isinstance(item, dict):
-            frontier_items.append(item)
-    for item in frontier_items[:6]:
+            frontier_items.append(dict(item))
+    for item in frontier_items:
         for token in (item.get("symbol"), item.get("base_symbol"), item.get("via")):
             normalized = _maybe_symbol(token)
-            if not normalized or normalized.lower() in grounded or _is_generic_external_symbol(normalized):
+            if not normalized or normalized.lower() in grounded:
                 continue
-            scores[normalized] = scores.get(normalized, 0.0) + 3.0
-    ordered = sorted(scores.items(), key=lambda item: (-item[1], -len(item[0]), item[0].lower()))
-    return [token for token, score in ordered if score >= 3.0][:2]
+            _merge_symbol_candidate(
+                candidates,
+                symbol=normalized,
+                score=4.0,
+                reason="workspace frontier exposes unresolved symbol",
+                source_kind="workspace_graph",
+                path=item.get("path"),
+                line=item.get("line"),
+            )
+
+    ordered = sorted(
+        candidates.values(),
+        key=lambda item: (
+            -float(item.get("score") or 0.0),
+            -len(str(item.get("symbol") or "")),
+            str(item.get("symbol") or "").lower(),
+        ),
+    )
+    out: List[Dict[str, Any]] = []
+    for item in ordered[:limit]:
+        out.append(
+            {
+                "symbol": str(item.get("symbol") or "").strip(),
+                "score": float(item.get("score") or 0.0),
+                "reason": "; ".join(list(item.get("reasons") or [])[:2]),
+                "source_kind": str((list(item.get("source_kinds") or []) or ["frontier"])[0]),
+                "path": _normalize_path(item.get("path")),
+                "caller_symbol": str(item.get("caller_symbol") or "").strip(),
+                "callee_symbol": str(item.get("callee_symbol") or "").strip(),
+                "line": int(item.get("line") or 0),
+            }
+        )
+    return out
+
+
+def _extract_unresolved_caller_callee_edges(
+    *,
+    flow_observations: List[Dict[str, Any]],
+    grounded_symbols: List[str],
+    primary_paths: List[str],
+    limit: int,
+) -> List[Dict[str, Any]]:
+    grounded = {str(item or "").strip().lower() for item in list(grounded_symbols or []) if str(item or "").strip()}
+    primary_path_set = {str(item or "").strip().lower() for item in list(primary_paths or []) if str(item or "").strip()}
+    edges: List[Dict[str, Any]] = []
+    seen = set()
+
+    for item in list(flow_observations or []):
+        path = _normalize_path(item.get("path"))
+        caller = str(item.get("caller_symbol") or "").strip()
+        owner = str(item.get("owner_symbol") or "").strip()
+        callee = str(item.get("callee_symbol") or "").strip()
+        unresolved_symbol = ""
+        if callee and callee.lower() not in grounded:
+            unresolved_symbol = callee
+        elif owner and owner.lower() not in grounded and owner.lower() not in {"this", "base"}:
+            unresolved_symbol = owner
+        if not unresolved_symbol:
+            continue
+        key = (
+            path.lower(),
+            int(item.get("line") or 0),
+            caller.lower(),
+            owner.lower(),
+            callee.lower(),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        score = 8.0
+        if path.lower() in primary_path_set:
+            score += 3.0
+        if caller:
+            score += 1.0
+        if callee and callee == unresolved_symbol:
+            score += 2.0
+        edges.append(
+            {
+                "path": path,
+                "line": int(item.get("line") or 0),
+                "caller_symbol": caller,
+                "owner_symbol": owner,
+                "callee_symbol": callee,
+                "unresolved_symbol": unresolved_symbol,
+                "snippet": str(item.get("snippet") or "").strip()[:240],
+                "score": score,
+            }
+        )
+
+    edges.sort(
+        key=lambda item: (
+            -float(item.get("score") or 0.0),
+            0 if str(item.get("path") or "").strip().lower() in primary_path_set else 1,
+            int(item.get("line") or 0),
+        )
+    )
+    return edges[:limit]
+
+
+def _extract_question_search_terms(question: str, *, limit: int) -> List[str]:
+    tokens: List[str] = []
+    text = str(question or "").strip()
+    for raw in _QUESTION_ASCII_RE.findall(text):
+        token = str(raw or "").strip()
+        if not token:
+            continue
+        tokens.append(token)
+        for part in _split_symbol_parts(token):
+            if len(part) >= 3:
+                tokens.append(part.lower())
+    for raw in _QUESTION_HANGUL_RE.findall(text):
+        token = str(raw or "").strip()
+        if len(token) >= 2:
+            tokens.append(token)
+    return _dedupe_tokens(tokens, limit=limit)
+
+
+def _build_next_search_candidates(
+    *,
+    question: str,
+    open_frontier_symbol_candidates: List[Dict[str, Any]],
+    unresolved_edges: List[Dict[str, Any]],
+    limit: int,
+) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    seen = set()
+
+    def _append(*, tool: str, query: str = "", symbol: str = "", reason: str = "", path: str = "") -> None:
+        probe = str(symbol or query or "").strip()
+        if not probe:
+            return
+        key = (str(tool or "").strip().lower(), probe.lower(), _normalize_path(path).lower())
+        if key in seen:
+            return
+        seen.add(key)
+        out.append(
+            {
+                "tool": str(tool or "").strip().lower(),
+                "query": str(query or "").strip(),
+                "symbol": str(symbol or "").strip(),
+                "reason": str(reason or "").strip(),
+                "path": _normalize_path(path),
+            }
+        )
+
+    for item in list(open_frontier_symbol_candidates or []):
+        symbol = str(item.get("symbol") or "").strip()
+        if symbol:
+            _append(
+                tool="find_symbol",
+                symbol=symbol,
+                reason=str(item.get("reason") or "").strip() or "open frontier symbol",
+                path=str(item.get("path") or "").strip(),
+            )
+        if len(out) >= limit:
+            return out[:limit]
+
+    for item in list(unresolved_edges or []):
+        caller = str(item.get("caller_symbol") or "").strip()
+        callee = str(item.get("callee_symbol") or "").strip()
+        unresolved_symbol = str(item.get("unresolved_symbol") or "").strip()
+        path = str(item.get("path") or "").strip()
+        if unresolved_symbol:
+            _append(
+                tool="find_symbol",
+                symbol=unresolved_symbol,
+                reason="close unresolved caller/callee edge",
+                path=path,
+            )
+        if caller and callee:
+            _append(
+                tool="grep",
+                query=f"{caller} {callee}",
+                reason="probe caller/callee relation in grounded flow",
+                path=path,
+            )
+        elif caller:
+            _append(
+                tool="grep",
+                query=caller,
+                reason="probe unresolved caller context",
+                path=path,
+            )
+        if len(out) >= limit:
+            return out[:limit]
+
+    for token in _extract_question_search_terms(question, limit=limit):
+        _append(
+            tool="grep",
+            query=token,
+            reason="question term fallback",
+        )
+        if len(out) >= limit:
+            break
+
+    return out[:limit]
+
+
+def _build_bootstrap_summary(pack: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "primary_read_count": len(list(pack.get("primary_reads") or [])),
+        "support_read_count": len(list(pack.get("support_reads") or [])),
+        "flow_observation_count": len(list(pack.get("flow_observations") or [])),
+        "trace_relation_count": len(list(pack.get("trace_relations") or [])),
+        "engine_window_count": len(list(pack.get("engine_windows") or [])),
+        "open_frontier_symbol_count": len(list(pack.get("open_frontier_symbols") or [])),
+        "unresolved_edge_count": len(list(pack.get("unresolved_caller_callee_edges") or [])),
+    }
 
 
 def _build_evidence_pack(
@@ -795,17 +1136,32 @@ def _build_evidence_pack(
     question: str,
     local_overlay: Dict[str, Any],
     engine_windows: List[Dict[str, Any]],
+    question_contract: Dict[str, Any] | None,
 ) -> Dict[str, Any]:
     read_evidence = _collect_local_reads(local_overlay)
     trace_relations = _collect_trace_relations(local_overlay)
+    frontier_budget = _resolve_frontier_budget(
+        question_contract=question_contract,
+        local_overlay=local_overlay,
+        read_evidence=read_evidence,
+        trace_relations=trace_relations,
+    )
     primary_paths = _score_primary_paths(local_overlay, read_evidence, trace_relations)
     ordered_reads = _sort_reads(read_evidence, local_overlay=local_overlay, primary_paths=primary_paths)
     primary_path_set = {path.lower() for path in list(primary_paths or []) if path}
-    primary_reads = [read for read in ordered_reads if _normalize_path(read.get("path")).lower() in primary_path_set][:5]
-    flow_observations = _extract_flow_observations(primary_reads, local_overlay)
+    primary_reads = [
+        read
+        for read in ordered_reads
+        if _normalize_path(read.get("path")).lower() in primary_path_set
+    ][: int(frontier_budget.get("primary_read_cap") or 4)]
+    flow_observations = _extract_flow_observations(
+        primary_reads,
+        local_overlay,
+        limit=int(frontier_budget.get("flow_observation_cap") or 12),
+    )
 
     primary_symbol_tokens: List[str] = []
-    primary_symbol_tokens.extend(_collect_graph_symbols(local_overlay))
+    primary_symbol_tokens.extend(_collect_graph_symbols(local_overlay, limit=16))
     for read in list(primary_reads or []):
         symbol = str(read.get("symbol") or "").strip()
         if symbol and not _is_generic_external_symbol(symbol):
@@ -823,13 +1179,15 @@ def _build_evidence_pack(
         primary_paths=primary_paths,
         primary_symbols=primary_symbols,
         trace_relations=trace_relations,
+        limit=int(frontier_budget.get("support_read_cap") or 4),
     )
-    support_paths = _dedupe_tokens([_normalize_path(item.get("path")) for item in list(support_reads or [])], limit=6)
+    support_paths = _dedupe_tokens([_normalize_path(item.get("path")) for item in list(support_reads or [])], limit=8)
     selected_trace_relations = _select_trace_relations(
         trace_relations,
         primary_paths=primary_paths,
         primary_symbols=primary_symbols,
         support_paths=support_paths,
+        limit=int(frontier_budget.get("trace_relation_cap") or 12),
     )
     grounded_symbols = _extract_grounded_symbols(
         local_overlay=local_overlay,
@@ -838,13 +1196,32 @@ def _build_evidence_pack(
         flow_observations=flow_observations,
         trace_relations=selected_trace_relations,
         engine_windows=engine_windows,
+        limit=int(frontier_budget.get("grounded_symbol_cap") or 24),
     )
-    unresolved_external_symbols = _extract_external_symbol_candidates(
+    open_frontier_symbol_candidates = _extract_open_frontier_symbol_candidates(
         local_overlay=local_overlay,
-        primary_symbols=grounded_symbols,
+        grounded_symbols=grounded_symbols,
         flow_observations=flow_observations,
         trace_relations=selected_trace_relations,
+        limit=int(frontier_budget.get("open_frontier_symbol_cap") or 4),
     )
+    open_frontier_symbols = _dedupe_tokens(
+        [str(item.get("symbol") or "").strip() for item in list(open_frontier_symbol_candidates or [])],
+        limit=int(frontier_budget.get("open_frontier_symbol_cap") or 4),
+    )
+    unresolved_edges = _extract_unresolved_caller_callee_edges(
+        flow_observations=flow_observations,
+        grounded_symbols=grounded_symbols,
+        primary_paths=primary_paths,
+        limit=int(frontier_budget.get("unresolved_edge_cap") or 4),
+    )
+    next_search_candidates = _build_next_search_candidates(
+        question=question,
+        open_frontier_symbol_candidates=open_frontier_symbol_candidates,
+        unresolved_edges=unresolved_edges,
+        limit=int(frontier_budget.get("next_search_candidate_cap") or 6),
+    )
+
     workspace_graph = extract_workspace_graph(local_overlay)
     grounding_report = build_workspace_grounding_report(
         workspace_graph,
@@ -856,7 +1233,7 @@ def _build_evidence_pack(
             *[_normalize_path(item.get("path")) for item in list(support_reads or [])],
             *[_normalize_path(item.get("path")) for item in list(engine_windows or [])],
         ],
-        limit=12,
+        limit=18,
     )
     return {
         "question": question,
@@ -875,12 +1252,16 @@ def _build_evidence_pack(
         },
         "primary_reads": primary_reads,
         "support_reads": support_reads,
-        "flow_observations": flow_observations[:12],
-        "trace_relations": selected_trace_relations[:12],
-        "engine_windows": list(engine_windows or [])[:2],
+        "flow_observations": flow_observations,
+        "trace_relations": selected_trace_relations,
+        "engine_windows": list(engine_windows or [])[: int(frontier_budget.get("engine_window_cap") or 4)],
         "allowed_paths": allowed_paths,
         "grounded_symbols": grounded_symbols,
-        "unresolved_external_symbols": unresolved_external_symbols,
+        "open_frontier_symbol_candidates": open_frontier_symbol_candidates,
+        "open_frontier_symbols": open_frontier_symbols,
+        "unresolved_caller_callee_edges": unresolved_edges,
+        "next_search_candidates": next_search_candidates,
+        "frontier_budget": frontier_budget,
     }
 
 
@@ -904,12 +1285,18 @@ async def _collect_engine_windows(
     tool_callback: ToolCallback = None,
 ) -> Dict[str, Any]:
     local_prefixes = _collect_local_prefixes(local_overlay)
-    symbol_candidates = list(evidence_pack.get("unresolved_external_symbols") or [])[:2]
+    frontier_budget = dict(evidence_pack.get("frontier_budget") or {})
+    symbol_candidates = list(evidence_pack.get("open_frontier_symbol_candidates") or [])
+    engine_window_cap = max(1, int(frontier_budget.get("engine_window_cap") or 4))
+    engine_match_cap = max(1, int(frontier_budget.get("engine_match_cap") or 3))
     engine_windows: List[Dict[str, Any]] = []
     tool_calls: List[Dict[str, Any]] = []
     seen_paths = set()
 
-    for symbol in symbol_candidates:
+    for candidate in symbol_candidates:
+        symbol = str(dict(candidate or {}).get("symbol") or "").strip()
+        if not symbol:
+            continue
         cache_key = symbol.lower()
         cached_matches = _ENGINE_SYMBOL_MATCH_CACHE.get(cache_key)
         if cached_matches is None:
@@ -917,13 +1304,14 @@ async def _collect_engine_windows(
                 redis,
                 code_tools,
                 symbol=symbol,
-                limit=8,
+                limit=max(8, engine_match_cap * 2),
                 session_id=session_id,
             )
             symbol_matches = [dict(item) for item in list(symbol_result.get("matches") or [])]
             _ENGINE_SYMBOL_MATCH_CACHE[cache_key] = list(symbol_matches)
         else:
             symbol_matches = [dict(item) for item in cached_matches]
+
         filtered_matches = []
         for row in symbol_matches:
             path = _normalize_path(dict(row or {}).get("path") or "")
@@ -933,11 +1321,12 @@ async def _collect_engine_windows(
             if path_prefix and path_prefix in local_prefixes:
                 continue
             filtered_matches.append(dict(row))
+
         preview = json.dumps(
             {
                 "symbol": symbol,
                 "match_count": len(filtered_matches),
-                "matches": filtered_matches[:4],
+                "matches": filtered_matches[: min(4, engine_match_cap)],
             },
             ensure_ascii=False,
         )[:500]
@@ -945,20 +1334,28 @@ async def _collect_engine_windows(
             {
                 "round": 0,
                 "tool": "find_symbol",
-                "input": {"symbol": symbol, "limit": 8},
+                "input": {"symbol": symbol, "limit": max(8, engine_match_cap * 2)},
                 "output_preview": preview,
             }
         )
-        await _maybe_await(tool_callback, "find_symbol", {"symbol": symbol, "limit": 8}, preview)
+        await _maybe_await(
+            tool_callback,
+            "find_symbol",
+            {"symbol": symbol, "limit": max(8, engine_match_cap * 2)},
+            preview,
+        )
         if not filtered_matches:
             continue
 
-        for match in filtered_matches[:2]:
+        for match in filtered_matches[:engine_match_cap]:
             path = _normalize_path(match.get("path") or "")
             if not path or path.lower() in seen_paths:
                 continue
             seen_paths.add(path.lower())
-            start_line, end_line = _build_engine_read_window(str(match.get("line_range") or ""), max_line_span)
+            start_line, end_line = _build_engine_read_window(
+                str(match.get("line_range") or match.get("lineRange") or ""),
+                max_line_span,
+            )
             read_result = read_code_lines(
                 code_tools,
                 path=path,
@@ -997,210 +1394,42 @@ async def _collect_engine_windows(
                     "line_range": str(read_result.get("line_range") or f"{start_line}-{end_line}"),
                     "content": str(read_result.get("content") or ""),
                     "symbol": symbol,
-                    "source_kind": "engine_baseline",
+                    "source_kind": "engine_frontier_read",
                     "tool": "engine_read",
                 }
             )
-            if len(engine_windows) >= 2:
+            if len(engine_windows) >= engine_window_cap:
                 return {"windows": engine_windows, "tool_calls": tool_calls}
 
     return {"windows": engine_windows, "tool_calls": tool_calls}
 
 
-def _window_payload(window: Dict[str, Any], *, max_chars: int = 1200) -> Dict[str, Any]:
-    return {
-        "path": str(window.get("path") or "").strip(),
-        "line_range": str(window.get("line_range") or "").strip(),
-        "tool": str(window.get("tool") or window.get("source_kind") or "").strip(),
-        "content": str(window.get("content") or "")[:max_chars],
-        "symbol": str(window.get("symbol") or "").strip(),
-        "source_kind": str(window.get("source_kind") or "").strip(),
-    }
-
-
-def _build_prompt_payload(
-    *,
-    question: str,
-    local_overlay: Dict[str, Any],
-    engine_windows: List[Dict[str, Any]],
-) -> Dict[str, Any]:
-    pack = _build_evidence_pack(
-        question=question,
-        local_overlay=local_overlay,
-        engine_windows=engine_windows,
-    )
-    return {
-        "question": question,
-        "anchor": dict(pack.get("anchor") or {}),
-        "grounding_report": dict(pack.get("grounding_report") or {}),
-        "allowed_paths": list(pack.get("allowed_paths") or []),
-        "grounded_symbols": list(pack.get("grounded_symbols") or []),
-        "primary_reads": [_window_payload(window, max_chars=1600) for window in list(pack.get("primary_reads") or [])],
-        "support_reads": [_window_payload(window, max_chars=900) for window in list(pack.get("support_reads") or [])],
-        "flow_observations": list(pack.get("flow_observations") or []),
-        "trace_relations": list(pack.get("trace_relations") or []),
-        "engine_windows": [_window_payload(window, max_chars=800) for window in list(pack.get("engine_windows") or [])],
-        "evidence_summary": {
-            "primary_read_count": len(list(pack.get("primary_reads") or [])),
-            "support_read_count": len(list(pack.get("support_reads") or [])),
-            "flow_observation_count": len(list(pack.get("flow_observations") or [])),
-            "trace_relation_count": len(list(pack.get("trace_relations") or [])),
-            "engine_window_count": len(list(pack.get("engine_windows") or [])),
-        },
-    }
-
-
-def _find_ungrounded_symbols(answer: str, allowed_symbols: List[str]) -> List[str]:
-    allowed = {str(item or "").strip().lower() for item in list(allowed_symbols or []) if str(item or "").strip()}
-    ungrounded: List[str] = []
-    seen = set()
-    for token in _SYMBOL_TOKEN_RE.findall(str(answer or "")):
-        normalized = str(token or "").strip()
-        lowered = normalized.lower()
-        if not normalized or lowered in allowed or lowered in seen:
-            continue
-        if _is_generic_external_symbol(normalized):
-            continue
-        seen.add(lowered)
-        ungrounded.append(normalized)
-    return ungrounded
-
-
-async def _generate_answer(
-    *,
-    vllm_client,
-    model_name: str,
-    max_tokens: int,
-    temperature: float,
-    system_prompt_seed: str,
-    prompt_payload: Dict[str, Any],
-    token_callback: TokenCallback = None,
-) -> Dict[str, Any]:
-    if vllm_client is None:
-        return {"text": "", "truncated": False}
-
-    system_prompt = (
-        (str(system_prompt_seed or "").strip() + "\n\n") if str(system_prompt_seed or "").strip() else ""
-    ) + (
-        "You are writing a grounded Korean code explanation from a structured evidence pack.\n"
-        "Narrative priority is: anchor.primary_paths -> primary_reads -> flow_observations -> trace_relations -> support_reads -> engine_windows.\n"
-        "Explain only relations that are explicitly supported by those structures.\n"
-        "Do not turn support_reads into the main flow unless a flow_observation or trace_relation links them to the anchor.\n"
-        "If the evidence only confirms one slice such as registration, persistence, loading, or adapter wiring, describe that slice precisely instead of claiming the whole feature flow.\n"
-        "Use engine_windows only when they directly explain an unresolved local symbol.\n"
-        "Never mention file paths, symbols, or call chains that are not present in the provided evidence.\n"
-        "If the grounded local evidence does not fully close the flow, say that the remaining upstream or downstream relation was not confirmed.\n"
-        "Use only paths from allowed_paths and only code-like identifiers from grounded_symbols.\n"
-        "Answer in Korean with compact prose and short bullets only when needed.\n"
-    )
-    user_prompt = (
-        "Grounded code explanation payload:\n"
-        f"{json.dumps(prompt_payload, ensure_ascii=False)}\n\n"
-        "Write the final answer now."
-    )
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_prompt},
-    ]
-    extra_body = build_chat_template_extra_body(
-        False if token_callback is not None else rag_config.model_native_generation_enable_thinking()
-    )
-    if token_callback is not None:
-        return await stream_chat_completion_text_with_meta(
-            model=model_name,
-            messages=messages,
-            max_tokens=max(256, min(int(max_tokens or 1400), 2200)),
-            temperature=max(0.0, min(float(temperature), 0.3)),
-            client=vllm_client,
-            extra_body=extra_body,
-            on_token=token_callback,
-        )
-
-    completion = await asyncio.to_thread(
-        safe_chat_completion_create,
-        model=model_name,
-        messages=messages,
-        max_tokens=max(256, min(int(max_tokens or 1400), 2200)),
-        temperature=max(0.0, min(float(temperature), 0.3)),
-        client=vllm_client,
-        extra_body=extra_body,
-    )
-    if not completion.choices:
-        return {"text": "", "truncated": False}
-    return {
-        "text": str(completion.choices[0].message.content or "").strip(),
-        "truncated": extract_completion_finish_reason(completion) == "length",
-    }
-
-
-async def _repair_answer_scope(
-    *,
-    vllm_client,
-    model_name: str,
-    original_answer: str,
-    prompt_payload: Dict[str, Any],
-    max_tokens: int,
-) -> str:
-    if vllm_client is None:
-        return str(original_answer or "").strip()
-    system_prompt = (
-        "You are repairing a Korean code explanation so every file path, symbol, and flow step stays grounded.\n"
-        "Keep the narrative centered on anchor.primary_paths, primary_reads, and flow_observations.\n"
-        "Use trace_relations, support_reads, and engine_windows only when they directly support that main flow.\n"
-        "Use only allowed_paths for file mentions and only grounded_symbols for code-like identifiers.\n"
-        "Remove or soften unsupported claims instead of inventing details.\n"
-    )
-    user_prompt = (
-        "Grounded payload:\n"
-        f"{json.dumps(prompt_payload, ensure_ascii=False)}\n\n"
-        "Draft answer:\n"
-        f"{original_answer}\n\n"
-        "Rewrite the answer now."
-    )
-    completion = await asyncio.to_thread(
-        safe_chat_completion_create,
-        model=model_name,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        max_tokens=max(256, min(int(max_tokens or 1400), 1800)),
-        temperature=0.0,
-        client=vllm_client,
-        extra_body=build_chat_template_extra_body(False),
-    )
-    if not completion.choices:
-        return str(original_answer or "").strip()
-    return str(completion.choices[0].message.content or "").strip() or str(original_answer or "").strip()
-
-
-async def run_local_overlay_code_explain(
+async def collect_local_overlay_code_explain_bootstrap(
     *,
     chat_deps,
-    accumulator,
     clean_message: str,
     local_overlay: Dict[str, Any],
-    model_name: str,
-    max_tokens: int,
-    temperature: float,
-    system_prompt_seed: str,
     session_id: str,
-    routing_profile: Dict[str, Any],
     max_chars: int,
     max_line_span: int,
     progress_callback: ProgressCallback = None,
-    token_callback: TokenCallback = None,
     tool_callback: ToolCallback = None,
-) -> Optional[Dict[str, Any]]:
+    question_contract: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
     local_reads = _collect_local_reads(local_overlay)
     if not local_reads:
-        return None
+        return {}
 
+    normalized_contract = normalize_question_contract(
+        question_contract,
+        message=clean_message,
+        workspace_overlay_present=bool(local_overlay.get("present")),
+    )
     await _maybe_await(
         progress_callback,
         {
             "phase": "retrieve",
-            "message": "로컬 워크스페이스 근거를 우선 정리하는 중..",
+            "message": "Collecting grounded local reads and open frontier candidates.",
             "tool": "local_overlay",
         },
     )
@@ -1209,8 +1438,8 @@ async def run_local_overlay_code_explain(
         question=clean_message,
         local_overlay=local_overlay,
         engine_windows=[],
+        question_contract=normalized_contract,
     )
-
     engine_result = await _collect_engine_windows(
         redis=getattr(chat_deps, "redis", None),
         code_tools=chat_deps.code_tools,
@@ -1222,64 +1451,26 @@ async def run_local_overlay_code_explain(
         tool_callback=tool_callback,
     )
     engine_windows = list(engine_result.get("windows") or [])
-    for window in engine_windows:
-        accumulator.add_code_window(
-            {
-                "path": window.get("path"),
-                "line_range": window.get("line_range"),
-                "content": window.get("content", ""),
-            }
-        )
+    final_pack = _build_evidence_pack(
+        question=clean_message,
+        local_overlay=local_overlay,
+        engine_windows=engine_windows,
+        question_contract=normalized_contract,
+    )
+    final_pack["tool_calls"] = list(engine_result.get("tool_calls") or [])
+    final_pack["summary"] = _build_bootstrap_summary(final_pack)
 
     await _maybe_await(
         progress_callback,
         {
-            "phase": "answer",
-            "message": "로컬 근거 중심으로 코드 흐름을 정리하는 중..",
+            "phase": "retrieve",
+            "message": "Bootstrap frontier collected from local reads and unresolved edges.",
             "source_count": len(local_reads) + len(engine_windows),
+            "open_frontier_symbol_count": len(list(final_pack.get("open_frontier_symbols") or [])),
+            "unresolved_edge_count": len(list(final_pack.get("unresolved_caller_callee_edges") or [])),
         },
     )
-    prompt_payload = _build_prompt_payload(
-        question=clean_message,
-        local_overlay=local_overlay,
-        engine_windows=engine_windows,
-    )
-    answer_result = await _generate_answer(
-        vllm_client=getattr(chat_deps, "vllm_client", None),
-        model_name=model_name,
-        max_tokens=max_tokens,
-        temperature=temperature,
-        system_prompt_seed=system_prompt_seed,
-        prompt_payload=prompt_payload,
-        token_callback=token_callback,
-    )
-    answer = str(answer_result.get("text") or "").strip()
-    if not answer:
-        return None
-    if token_callback is None:
-        allowed_paths = [normalize_source_path(item) for item in list(prompt_payload.get("allowed_paths") or []) if str(item or "").strip()]
-        grounded_symbols = list(prompt_payload.get("grounded_symbols") or [])
-        ungrounded_paths = find_ungrounded_source_mentions(answer, allowed_paths)
-        ungrounded_symbols = _find_ungrounded_symbols(answer, grounded_symbols)
-        if ungrounded_paths or ungrounded_symbols:
-            answer = await _repair_answer_scope(
-                vllm_client=getattr(chat_deps, "vllm_client", None),
-                model_name=model_name,
-                original_answer=answer,
-                prompt_payload=prompt_payload,
-                max_tokens=max_tokens,
-            )
-
-    results = accumulator.to_results()
-    return {
-        "answer": answer,
-        "results": results,
-        "sources": build_sources(results),
-        "tool_calls": list(engine_result.get("tool_calls") or []),
-        "answer_truncated": bool(answer_result.get("truncated")),
-        "mode": "local_overlay_code_explain",
-        "profile": routing_profile,
-    }
+    return final_pack
 
 
-__all__ = ["run_local_overlay_code_explain"]
+__all__ = ["collect_local_overlay_code_explain_bootstrap"]

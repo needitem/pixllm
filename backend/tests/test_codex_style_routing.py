@@ -43,6 +43,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.services.chat.intent import classify_intent_hybrid
 from app.services.chat.planning import infer_expected_artifacts
+from app.services.chat.question_contract import build_question_contract
 from app.services.chat.retrieval.mode_policy import assess_retrieval_quality
 from app.services.chat.runtime_profile import resolve_runtime_routing_profile
 from app.services.tools import runtime as tool_runtime
@@ -70,13 +71,32 @@ class _Policy:
 def test_code_like_read_question_defaults_to_general_response_type() -> None:
     result = classify_intent_hybrid(
         policy=_Policy(),
-        message="FooBarManager.Run(payload) 이 흐름 설명해줘",
+        message="Show FooBarManager.Run(payload)",
         model_name="test-model",
         llm_client=None,
     )
 
     assert result["response_type"] == "general"
     assert result["retrieval_bias"] == "code"
+    assert result["question_contract"]["kind"] == "code_read"
+
+
+def test_flow_question_builds_question_contract_instead_of_response_type_override() -> None:
+    result = classify_intent_hybrid(
+        policy=_Policy(),
+        message="Explain the caller to sink flow for FooBarManager.Run",
+        model_name="test-model",
+        llm_client=None,
+        workspace_overlay_present=True,
+    )
+
+    assert result["response_type"] == "general"
+    assert result["question_contract"]["kind"] == "code_flow_explanation"
+    assert [axis["id"] for axis in result["question_contract"]["coverage_axes"]] == [
+        "entry_or_caller",
+        "focal_processing",
+        "downstream_effect",
+    ]
 
 
 def test_usage_guide_profile_no_longer_prefers_usage_bundle() -> None:
@@ -92,6 +112,27 @@ def test_usage_guide_profile_no_longer_prefers_usage_bundle() -> None:
     assert profile["tool_priority"][:3] == ["find_symbol", "grep", "read"]
     assert "usage_bundle" not in profile["tool_priority"]
     assert profile["answer_style"] == "explanation"
+
+
+def test_overlay_profile_keeps_neutral_code_search_order() -> None:
+    question_contract = build_question_contract(
+        message="Explain the caller to sink flow for FooBarManager.Run",
+        workspace_overlay_present=True,
+    )
+
+    profile = resolve_runtime_routing_profile(
+        response_type="general",
+        intent_source="heuristic",
+        intent_confidence=0.0,
+        retrieval_bias="",
+        answer_style="",
+        workspace_overlay_present=True,
+        question_contract=question_contract,
+    )
+
+    assert profile["tool_priority"][:3] == ["find_symbol", "grep", "read"]
+    assert profile["workspace_overlay_policy"] == "overlay_bootstrap_not_authoritative_ground_with_reads"
+    assert profile["tool_strategy"] == "frontier_search_loop_with_overlay_bootstrap"
 
 
 def test_usage_guide_expected_artifacts_drop_bundle() -> None:
@@ -134,7 +175,7 @@ def test_symbol_rerank_runs_for_general_code_queries(monkeypatch) -> None:
         tool_runtime._collect_code_evidence_async(
             redis=None,
             session_id="s",
-            query="FooBarManager 사용법 알려줘",
+            query="Show FooBarManager usage",
             capped_limit=5,
             max_chars=4000,
             max_line_span=120,
@@ -148,7 +189,7 @@ def test_symbol_rerank_runs_for_general_code_queries(monkeypatch) -> None:
 
     code_search_result, code_windows, trace_steps = result
 
-    assert calls == [{"query_text": "FooBarManager 사용법 알려줘", "preferred_symbol": "FooBarManager", "count": 2}]
+    assert calls == [{"query_text": "Show FooBarManager usage", "preferred_symbol": "FooBarManager", "count": 2}]
     assert len(code_search_result["matches"]) == 2
     assert code_windows == []
     assert trace_steps[-1]["reason"] == "search_only"

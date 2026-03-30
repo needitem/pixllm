@@ -2,20 +2,20 @@
 Minimal routing for chat requests.
 
 This module intentionally avoids a heavyweight intent classifier.
-Instead, it resolves a small coarse routing bucket first:
+Instead, it resolves:
 
-- `read_code`
-- `change_code`
-- `doc_lookup`
+- a coarse routing bucket
+- a response-style hint
+- a structured question contract for retrieval coverage
 
-Then it derives a compatible response_type hint for downstream routing.
-The goal is fail-open, code-first behavior.
+The goal is fail-open, evidence-first behavior.
 """
 
 import logging
 import re
 from typing import Any, Dict, Iterable, List
 
+from .question_contract import build_question_contract
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +52,6 @@ _SPECIALIZED_TASK_RESPONSE_TYPES = {
     "migration": "migration",
     "refactor": "refactor",
     "troubleshooting": "troubleshooting",
-    "workspace_overlay": "code_explain",
 }
 
 
@@ -90,6 +89,13 @@ def _default_answer_style_for_response_type(response_type: str) -> str:
     if rt in {"bug_fix", "troubleshooting"}:
         return "troubleshooting"
     return "explanation" if rt in {"code_explain", "code_generate", "refactor", "usage_guide", "api_lookup"} else "default"
+
+
+def _default_answer_style_for_contract(question_contract: Dict[str, Any], response_type: str) -> str:
+    contract_hint = _normalize_str(dict(question_contract or {}).get("answer_style_hint")).lower()
+    if contract_hint in {"tutorial", "reference", "explanation", "troubleshooting", "comparison"}:
+        return contract_hint
+    return _default_answer_style_for_response_type(response_type)
 
 
 def _coarse_bucket_from_signals(
@@ -153,8 +159,6 @@ def _explicit_response_type(
         return "code_generate"
     if normalized_scope & _DOC_TOOL_SCOPE and not (normalized_scope & _WRITE_TOOL_SCOPE):
         return "doc_lookup"
-    if workspace_overlay_present:
-        return "code_explain"
     return ""
 
 
@@ -248,15 +252,25 @@ def classify_intent_hybrid(
         tool_scope=tool_scope,
         workspace_overlay_present=workspace_overlay_present,
     )
+    question_contract = build_question_contract(
+        message=message,
+        task_type=task_type,
+        tool_scope=tool_scope,
+        workspace_overlay_present=workspace_overlay_present,
+        response_type=response_type,
+    )
     intent_id = _resolve_intent_for_response_type(policy, response_type, allowed_intents)
-    retrieval_bias = "docs" if response_type == "doc_lookup" else ("code" if response_type != "general" or routing_bucket in {"read_code", "change_code"} else "")
-    answer_style = _default_answer_style_for_response_type(response_type)
+    retrieval_bias = _normalize_str(question_contract.get("retrieval_mode")).lower()
+    if retrieval_bias not in {"code", "docs", "hybrid"}:
+        retrieval_bias = "docs" if routing_bucket == "doc_lookup" else ("code" if routing_bucket in {"read_code", "change_code"} else "")
+    answer_style = _default_answer_style_for_contract(question_contract, response_type)
 
     logger.debug(
-        "Intent resolved by minimal router: bucket=%s response_type=%s intent=%s",
+        "Intent resolved by minimal router: bucket=%s response_type=%s intent=%s contract=%s",
         routing_bucket,
         response_type,
         intent_id,
+        question_contract.get("kind"),
     )
 
     return {
@@ -264,6 +278,7 @@ def classify_intent_hybrid(
         "response_type": response_type,
         "retrieval_bias": retrieval_bias,
         "answer_style": answer_style,
+        "question_contract": question_contract,
         "source": "heuristic",
         "confidence": 0.0,
         "used_llm": False,
