@@ -44,6 +44,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.services.chat.intent import classify_intent_hybrid
 from app.services.chat.planning import infer_expected_artifacts
 from app.services.chat.question_contract import build_question_contract
+from app.services.chat.react import engine as react_engine
 from app.services.chat.retrieval.mode_policy import assess_retrieval_quality
 from app.services.chat.runtime_profile import resolve_runtime_routing_profile
 from app.services.tools import runtime as tool_runtime
@@ -193,3 +194,62 @@ def test_symbol_rerank_runs_for_general_code_queries(monkeypatch) -> None:
     assert len(code_search_result["matches"]) == 2
     assert code_windows == []
     assert trace_steps[-1]["reason"] == "search_only"
+
+
+def test_react_engine_overlay_flow_contract_no_longer_uses_legacy_name(monkeypatch) -> None:
+    async def _fake_bootstrap(**kwargs):
+        return {}
+
+    async def _fake_resolve_tool_user_context(*args, **kwargs):
+        return None
+
+    async def _fake_run_react_loop(**kwargs):
+        return {
+            "answer": "Grounded answer.",
+            "tool_calls": [],
+            "thoughts": [],
+            "rounds": 0,
+            "error": "",
+        }
+
+    monkeypatch.setattr(react_engine, "extract_local_workspace_overlay", lambda req: {"present": True})
+    monkeypatch.setattr(react_engine, "build_local_overlay_evidence", lambda overlay: [])
+    monkeypatch.setattr(react_engine, "extract_workspace_graph", lambda overlay: {"graph_state": {}})
+    monkeypatch.setattr(react_engine, "collect_grounded_overlay_paths", lambda overlay: [])
+    monkeypatch.setattr(react_engine, "collect_grounded_overlay_windows", lambda overlay: [])
+    monkeypatch.setattr(react_engine, "build_workspace_grounding_report", lambda workspace_graph, grounded_paths: {})
+    monkeypatch.setattr(react_engine, "collect_local_overlay_code_explain_bootstrap", _fake_bootstrap)
+    monkeypatch.setattr(react_engine, "resolve_tool_user_context", _fake_resolve_tool_user_context)
+    monkeypatch.setattr(react_engine, "build_system_prompt", lambda **kwargs: "system")
+    monkeypatch.setattr(react_engine, "run_react_loop", _fake_run_react_loop)
+
+    result = asyncio.run(
+        react_engine.run_react_chat_generation(
+            chat_deps=types.SimpleNamespace(
+                redis=None,
+                search_svc=None,
+                embed_model=None,
+                vllm_client=None,
+                code_tools=None,
+            ),
+            req=types.SimpleNamespace(
+                collection=None,
+                task_type="",
+                tool_scope=[],
+                language_filter=None,
+                module_filter=None,
+            ),
+            clean_message="Explain the caller to sink flow for FooBarManager.Run",
+            response_type="general",
+            history_messages=[],
+            model_name="test-model",
+            max_tokens=512,
+            temperature=0.0,
+            system_prompt_seed="",
+            session_id="session-test",
+        )
+    )
+
+    assert result["error"] == ""
+    assert result["answer"] == "Grounded answer."
+    assert result["react"]["rounds"] == 0

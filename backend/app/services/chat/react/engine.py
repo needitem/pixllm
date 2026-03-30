@@ -520,6 +520,7 @@ async def run_react_chat_generation(
         workspace_overlay_present=workspace_overlay_present,
     )
     routing_profile["question_contract"] = normalized_question_contract
+    contract_kind = str(normalized_question_contract.get("kind") or "").strip().lower()
     preferred_mode = str(routing_profile.get("preferred_tool_mode") or "code")
     docs_enabled = bool(routing_profile.get("docs_enabled"))
     phase_log.classify(intent=response_type, method="hybrid")
@@ -531,7 +532,7 @@ async def run_react_chat_generation(
     )
     overlay_bootstrap: Dict[str, Any] = {}
     bootstrap_tool_calls: List[Dict[str, Any]] = []
-    if workspace_overlay_present and str(normalized_question_contract.get("kind") or "") == "code_flow_explanation":
+    if workspace_overlay_present and contract_kind == "code_flow_explanation":
         overlay_bootstrap = await collect_local_overlay_code_explain_bootstrap(
             chat_deps=chat_deps,
             clean_message=clean_message,
@@ -918,8 +919,14 @@ async def run_react_chat_generation(
             ordered.append(str(item))
         return ordered
 
+    frontier_policy = dict(normalized_question_contract.get("frontier_policy") or {})
+    exhaustive_retrieval_enabled = bool(
+        contract_kind == "code_flow_explanation"
+        or frontier_policy.get("continue_while_open_frontier")
+        or frontier_policy.get("continue_while_axes_missing")
+    )
     retrieval_tracker: Dict[str, Any] = {
-        "enabled": exhaustive_local_code_explain,
+        "enabled": exhaustive_retrieval_enabled,
         "last_signature": (
             len(list(accumulator.doc_search_rows or [])),
             len(list(accumulator.doc_chunks or [])),
@@ -1127,7 +1134,6 @@ async def run_react_chat_generation(
         doc_chunk_count = len(list(accumulator.doc_chunks or []))
         direct_read_count = code_window_count + doc_chunk_count
         search_only_count = len(list(accumulator.code_matches or [])) + len(list(accumulator.doc_search_rows or []))
-        contract_kind = str(normalized_question_contract.get("kind") or "").strip().lower()
 
         issues: List[str] = []
         if direct_read_count == 0 and bool(normalized_question_contract.get("require_direct_reads")):
