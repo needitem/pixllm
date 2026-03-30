@@ -43,7 +43,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.services.chat.intent import classify_intent_hybrid
 from app.services.chat.planning import infer_expected_artifacts
-from app.services.chat.question_contract import build_question_contract
+from app.services.chat.question_contract import build_question_contract, evaluate_question_contract
+from app.services.chat.react import code_explain_overlay
 from app.services.chat.react import engine as react_engine
 from app.services.chat.retrieval.mode_policy import assess_retrieval_quality
 from app.services.chat.runtime_profile import resolve_runtime_routing_profile
@@ -253,3 +254,100 @@ def test_react_engine_overlay_flow_contract_no_longer_uses_legacy_name(monkeypat
     assert result["error"] == ""
     assert result["answer"] == "Grounded answer."
     assert result["react"]["rounds"] == 0
+
+
+def test_flow_contract_does_not_close_on_enum_only_reads() -> None:
+    contract = build_question_contract(
+        message="Explain the caller to sink flow for ImageCombinationType",
+        workspace_overlay_present=True,
+    )
+    state = evaluate_question_contract(
+        contract,
+        graph_gate={},
+        direct_read_count=1,
+        bootstrap={
+            "primary_reads": [
+                {
+                    "path": "Base/Common/Enums.cs",
+                    "symbol": "ImageCombinationType",
+                    "content": "public enum ImageCombinationType { EOIR = 3, EOSAR = 5 }",
+                }
+            ],
+            "support_reads": [],
+            "flow_observations": [],
+            "trace_relations": [
+                {
+                    "tool": "find_references",
+                    "anchor_symbol": "ImageCombinationType",
+                    "path": "MATR/ViewModels/UserControls/TargetDetectionRecognition/Vm_TargetDetectionRecognition_ModelParamManagement.cs",
+                }
+            ],
+            "engine_windows": [],
+            "open_frontier_symbols": [],
+            "unresolved_caller_callee_edges": [],
+        },
+    )
+
+    assert state["passed"] is False
+    assert "missing_contract_axes" in state["issues"]
+    assert "entry_or_caller" in state["missing_axes"]
+    assert "focal_processing" in state["missing_axes"]
+    assert "downstream_effect" in state["missing_axes"]
+
+
+def test_overlay_bootstrap_extracts_flow_candidates_from_support_reads() -> None:
+    contract = build_question_contract(
+        message="영상 정합 흐름 설명",
+        workspace_overlay_present=True,
+    )
+    local_overlay = {
+        "present": True,
+        "selected_file_path": "Base/Common/Enums.cs",
+        "selected_file_content": "public enum ImageCombinationType { EOIR = 3, EOSAR = 5 }",
+        "local_trace": [
+            {
+                "tool": "read_symbol_span",
+                "symbol": "ImageCombinationType",
+                "round": 1,
+                "observation": {
+                    "path": "Base/Common/Enums.cs",
+                    "content": "public enum ImageCombinationType { EOIR = 3, EOSAR = 5 }",
+                    "lineRange": "47-60",
+                },
+            },
+            {
+                "tool": "symbol_neighborhood",
+                "symbol": "EmptyModelPropCheck",
+                "round": 1,
+                "observation": {
+                    "path": "MATR/ViewModels/UserControls/TargetDetectionRecognition/Vm_TargetDetectionRecognition_ModelParamManagement.cs",
+                    "content": (
+                        "private bool EmptyModelPropCheck()\n"
+                        "{\n"
+                        "    if (model.ImageCombinationType == ImageCombinationType.EOIR)\n"
+                        "    {\n"
+                        "        return RunConvergence();\n"
+                        "    }\n"
+                        "    return false;\n"
+                        "}\n"
+                    ),
+                    "lineRange": "1109-1117",
+                },
+            },
+        ],
+    }
+
+    pack = code_explain_overlay._build_evidence_pack(
+        question="영상 정합 흐름 설명",
+        local_overlay=local_overlay,
+        engine_windows=[],
+        question_contract=contract,
+    )
+
+    assert any(item["caller_symbol"] == "EmptyModelPropCheck" for item in pack["flow_observations"])
+    assert any(item["callee_symbol"] == "RunConvergence" for item in pack["flow_observations"])
+    assert any(item["unresolved_symbol"] == "RunConvergence" for item in pack["unresolved_caller_callee_edges"])
+    assert any(
+        item.get("tool") == "find_symbol" and item.get("symbol") == "RunConvergence"
+        for item in pack["next_search_candidates"]
+    )

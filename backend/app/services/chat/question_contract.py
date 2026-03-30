@@ -17,6 +17,26 @@ _HANGUL_FLOW_HINT_RE = re.compile(
     r"(\uC124\uBA85|\uD750\uB984|\uACFC\uC815|\uD638\uCD9C|\uACBD\uB85C|\uC5B4\uB514|\uC9C4\uC785|\uCD9C\uAD6C|\uC601\uD5A5|\uD6C4\uC18D)"
 )
 _HANGUL_DOC_HINT_RE = re.compile(r"(\uBB38\uC11C|\uAC00\uC774\uB4DC|\uB808\uD37C\uB7F0\uC2A4|\uC0AC\uC6A9\uBC95|\uD30C\uB77C\uBBF8\uD130|\uC635\uC158)")
+_FLOW_METHOD_DECL_RE = re.compile(
+    r"^\s*(?:(?:public|private|protected|internal|static|virtual|override|sealed|partial|async)\s+)+"
+    r"[\w<>\[\],\s]+\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(",
+    re.MULTILINE,
+)
+_FLOW_CALL_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(")
+_TYPE_DECL_RE = re.compile(r"^\s*(?:public|private|protected|internal|static|sealed|partial|\s)*(?:enum|class|struct|interface)\b", re.MULTILINE)
+_FLOW_CALL_KEYWORDS = {
+    "if",
+    "for",
+    "foreach",
+    "while",
+    "switch",
+    "catch",
+    "using",
+    "nameof",
+    "typeof",
+    "return",
+    "new",
+}
 
 
 def _normalize_str(value: Any) -> str:
@@ -266,6 +286,20 @@ def _collect_candidate_symbols(items: Iterable[Dict[str, Any]], *keys: str) -> L
     return _ordered_unique(collected)
 
 
+def _read_has_flow_signal(read: Dict[str, Any]) -> bool:
+    text = _normalize_str(dict(read or {}).get("content"))
+    if not text:
+        return False
+    if _FLOW_METHOD_DECL_RE.search(text):
+        return True
+    if _TYPE_DECL_RE.search(text) and not _FLOW_METHOD_DECL_RE.search(text):
+        return False
+    for token in _FLOW_CALL_RE.findall(text):
+        if str(token or "").strip().lower() not in _FLOW_CALL_KEYWORDS:
+            return True
+    return False
+
+
 def evaluate_question_contract(
     contract: Dict[str, Any] | None,
     *,
@@ -297,22 +331,24 @@ def evaluate_question_contract(
     unresolved_edges = list(bootstrap_state.get("unresolved_caller_callee_edges") or [])
     graph_chain = list(graph_state.get("chain") or [])
     graph_frontiers = list(graph_state.get("frontiers") or [])
+    flow_reads = [*list(primary_reads or []), *list(support_reads or [])]
+    flow_read_signal = any(_read_has_flow_signal(read) for read in flow_reads)
 
     entry_covered = bool(
         any("caller" in str(item.get("relation") or "").lower() for item in graph_chain)
-        or any(str(item.get("tool") or "").lower() in {"find_callers", "find_references", "symbol_neighborhood"} for item in trace_relations)
+        or any(str(item.get("tool") or "").lower() == "find_callers" for item in trace_relations)
         or any(str(item.get("caller_symbol") or "").strip() for item in flow_observations)
     )
     focal_covered = bool(
         int(direct_read_count or 0) > 0
         and (
-            primary_reads
+            flow_read_signal
             or _collect_candidate_symbols(flow_observations, "caller_symbol", "callee_symbol")
-            or _collect_candidate_symbols(graph_chain, "symbol")
+            or any("call" in str(item.get("relation") or "").lower() for item in graph_chain)
         )
     )
     downstream_covered = bool(
-        support_reads
+        unresolved_edges
         or engine_windows
         or any(str(item.get("callee_symbol") or "").strip() for item in flow_observations)
         or any("callee" in str(item.get("relation") or "").lower() or "downstream" in str(item.get("relation") or "").lower() for item in graph_chain)

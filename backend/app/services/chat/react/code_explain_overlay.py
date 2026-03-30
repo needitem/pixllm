@@ -18,7 +18,7 @@ ToolCallback = Optional[Callable[[str, Dict[str, Any], str], Awaitable[None] | N
 
 _CODE_LIKE_SYMBOL_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{2,}")
 _METHOD_DECL_RE = re.compile(
-    r"^\s*(?:public|private|protected|internal|static|virtual|override|sealed|partial|async|\s)+"
+    r"^\s*(?:(?:public|private|protected|internal|static|virtual|override|sealed|partial|async)\s+)+"
     r"[\w<>\[\],\s]+\s+([A-Za-z_][A-Za-z0-9_]*)\s*\("
 )
 _MEMBER_CALL_RE = re.compile(
@@ -741,10 +741,9 @@ def _extract_grounded_symbols(
         if symbol and not _is_generic_external_symbol(symbol):
             tokens.append(symbol)
     for item in list(flow_observations or []):
-        for token in (item.get("caller_symbol"), item.get("owner_symbol"), item.get("callee_symbol")):
-            normalized = str(token or "").strip()
-            if normalized and not _is_generic_external_symbol(normalized):
-                tokens.append(normalized)
+        caller_symbol = str(item.get("caller_symbol") or "").strip()
+        if caller_symbol and not _is_generic_external_symbol(caller_symbol):
+            tokens.append(caller_symbol)
     for relation in list(trace_relations or []):
         for token in (relation.get("anchor_symbol"), relation.get("related_symbol")):
             normalized = str(token or "").strip()
@@ -1154,7 +1153,7 @@ def _build_evidence_pack(
         for read in ordered_reads
         if _normalize_path(read.get("path")).lower() in primary_path_set
     ][: int(frontier_budget.get("primary_read_cap") or 4)]
-    flow_observations = _extract_flow_observations(
+    initial_flow_observations = _extract_flow_observations(
         primary_reads,
         local_overlay,
         limit=int(frontier_budget.get("flow_observation_cap") or 12),
@@ -1166,7 +1165,7 @@ def _build_evidence_pack(
         symbol = str(read.get("symbol") or "").strip()
         if symbol and not _is_generic_external_symbol(symbol):
             primary_symbol_tokens.append(symbol)
-    for item in list(flow_observations or []):
+    for item in list(initial_flow_observations or []):
         for token in (item.get("caller_symbol"), item.get("owner_symbol"), item.get("callee_symbol")):
             normalized = str(token or "").strip()
             if normalized and not _is_generic_external_symbol(normalized):
@@ -1180,6 +1179,11 @@ def _build_evidence_pack(
         primary_symbols=primary_symbols,
         trace_relations=trace_relations,
         limit=int(frontier_budget.get("support_read_cap") or 4),
+    )
+    flow_observations = _extract_flow_observations(
+        [*list(primary_reads or []), *list(support_reads or [])],
+        local_overlay,
+        limit=int(frontier_budget.get("flow_observation_cap") or 12),
     )
     support_paths = _dedupe_tokens([_normalize_path(item.get("path")) for item in list(support_reads or [])], limit=8)
     selected_trace_relations = _select_trace_relations(
