@@ -95,12 +95,12 @@ async def _emit_progress(
 def _tool_progress_message(tool_name: str, tool_input: Dict[str, Any]) -> str:
     query = str(tool_input.get("query") or tool_input.get("pattern") or tool_input.get("symbol") or "").strip()
     if tool_name == "find_symbol":
-        return f"'{query}' ?뺤쓽 ?꾩튂瑜?李얜뒗 以?.." if query else "?щ낵 ?뺤쓽瑜?李얜뒗 以?.."
+        return f"Locating the definition for '{query}'..." if query else "Locating the relevant definition..."
     if tool_name in {"grep", "doc_search"}:
-        return f"'{query}' 洹쇨굅瑜?李얜뒗 以?.." if query else "愿??洹쇨굅瑜?李얜뒗 以?.."
+        return f"Searching for '{query}'..." if query else "Searching for relevant evidence..."
     if tool_name in {"read", "doc_read"}:
-        return "李얠? 洹쇨굅瑜??먯꽭???쎈뒗 以?.."
-    return f"{tool_name} ?꾧뎄瑜??ㅽ뻾?섎뒗 以?.."
+        return "Reading the matched evidence in detail..."
+    return f"Running {tool_name}..."
 
 
 def _merge_unique(rows: List[Dict[str, Any]], added: List[Dict[str, Any]], key_fields: List[str]) -> List[Dict[str, Any]]:
@@ -527,7 +527,7 @@ async def run_react_chat_generation(
     await _emit_progress(
         progress_callback,
         phase="classify",
-        message="吏덈Ц ?섎룄? ?듬? ?좏삎??遺꾩꽍?섎뒗 以?..",
+        message="Classifying the question and required evidence...",
         response_type=response_type,
     )
     overlay_bootstrap: Dict[str, Any] = {}
@@ -839,7 +839,7 @@ async def run_react_chat_generation(
     await _emit_progress(
         progress_callback,
         phase="plan",
-        message="寃??怨꾪쉷???몄슦怨??ъ슜???꾧뎄瑜?怨좊Ⅴ??以?..",
+        message="Selecting the retrieval plan and available tools...",
         tools=registry.list_tools(),
         preferred_mode=preferred_mode,
     )
@@ -1381,7 +1381,7 @@ async def run_react_chat_generation(
             "answer": guarded_answer,
         }
 
-    await _emit_progress(progress_callback, phase="retrieve", message="洹쇨굅 ?섏쭛???쒖옉?⑸땲??..")
+    await _emit_progress(progress_callback, phase="retrieve", message="Starting evidence collection...")
 
     react_result = await run_react_loop(
         llm_call=_llm_call,
@@ -1417,7 +1417,7 @@ async def run_react_chat_generation(
     has_error = bool(react_error)
     evidence_policy = "error" if has_error else ("answer" if answer else "insufficient")
     phase_log.verify(policy=evidence_policy)
-    await _emit_progress(progress_callback, phase="verify", message="洹쇨굅? ?듬????뺣━?섎뒗 以?..")
+    await _emit_progress(progress_callback, phase="verify", message="Verifying and finalizing the grounded answer...")
 
     results = accumulator.to_results()
     sources = build_sources(results)
