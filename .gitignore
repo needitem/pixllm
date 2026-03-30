@@ -1,0 +1,23 @@
+# Environment / secrets (never commit)
+.env
+.env.local
+backend/.env
+backend/.env.local
+
+# Local orchestration/state
+.omx/
+.svn/
+.codex/
+.codex-backups/
+.tmp/
+.vscode/
+Workspaces
+pixoneer_source
+.pytest_cache/
+
+# Logs/temp
+*.log
+
+# Python artifacts
+__pycache__/
+*.py[cod]

@@ -1,0 +1,155 @@
+services:
+  agent-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    image: infrastructure-agent-api
+    container_name: pixllm-agent
+    restart: unless-stopped
+    ipc: host
+    shm_size: "16gb"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: ["gpu"]
+    ports:
+      - "8000:8000"
+    environment:
+      QDRANT_URL: ${QDRANT_URL:-http://pixllm-qdrant:6333}
+      REDIS_URL: ${REDIS_URL:-redis://:${REDIS_PASSWORD:-CHANGE_ME_REDIS_PASSWORD}@pixllm-redis:6379/0}
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-pixllm-minio:9000}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-pixllm}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-pixllm2024!}
+      MINIO_BUCKET: ${MINIO_BUCKET:-documents}
+      VLLM_URL: ${VLLM_URL:-http://192.168.2.212:8001}
+      # Switch models by commenting/uncommenting VLLM_MODEL in backend/.env.
+      VLLM_MODEL: ${VLLM_MODEL:-Jackrong/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-BAAI/bge-m3}
+      EMBEDDING_DEVICE: ${EMBEDDING_DEVICE:-cuda}
+      EMBEDDING_USE_FP16: ${EMBEDDING_USE_FP16:-true}
+      EMBEDDING_BATCH_SIZE: ${EMBEDDING_BATCH_SIZE:-64}
+      API_SESSION_TOKEN: ${API_SESSION_TOKEN:-pixllm-desktop-local}
+      PIPELINE_API_TOKEN: ${PIPELINE_API_TOKEN:-}
+      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
+      NVIDIA_DRIVER_CAPABILITIES: ${NVIDIA_DRIVER_CAPABILITIES:-compute,utility}
+      TOOL_POLICY_STRICT: ${TOOL_POLICY_STRICT:-true}
+      CODE_SEARCH_ROOTS: ${CODE_SEARCH_ROOTS:-/workspace_host/pixoneer_source}
+      IMPORT_DOCS_ROOT: ${IMPORT_DOCS_ROOT:-/workspace_host/pixoneer_project}
+      IMPORT_CODE_ROOT: ${IMPORT_CODE_ROOT:-/workspace_host/pixoneer_source}
+      IMPORT_CODE_RESTORE_ON_START: ${IMPORT_CODE_RESTORE_ON_START:-true}
+      SVN_BIN: ${SVN_BIN:-svn}
+      TF_BIN: ${TF_BIN:-tf}
+      TFS_DOCS_SYNC_COMMAND: ${TFS_DOCS_SYNC_COMMAND:-}
+    volumes:
+      - ../:/workspace_host
+      - hf_model_cache:/root/.cache/huggingface
+    depends_on:
+      qdrant:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    networks:
+      - pixllm-net
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: pixllm-qdrant
+    restart: unless-stopped
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /qdrant/entrypoint.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+    networks:
+      - pixllm-net
+
+  redis:
+    image: redis:7-alpine
+    container_name: pixllm-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-CHANGE_ME_REDIS_PASSWORD}
+    command: ["sh", "-c", "redis-server --appendonly yes --requirepass \"${REDIS_PASSWORD:-CHANGE_ME_REDIS_PASSWORD}\""]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"${REDIS_PASSWORD:-CHANGE_ME_REDIS_PASSWORD}\" ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+    networks:
+      - pixllm-net
+
+  minio:
+    image: minio/minio:latest
+    container_name: pixllm-minio
+    restart: unless-stopped
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-pixllm}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-pixllm2024!}
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+    networks:
+      - pixllm-net
+
+  neo4j:
+    image: neo4j:5-community
+    container_name: pixllm-neo4j
+    restart: unless-stopped
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    environment:
+      NEO4J_AUTH: ${NEO4J_AUTH:-neo4j/pixllm2024}
+      NEO4J_PLUGINS: '["apoc"]'
+      NEO4J_apoc_import_file_enabled: "true"
+      NEO4J_apoc_export_file_enabled: "true"
+      NEO4J_apoc_import_file_use__neo4j__config: "true"
+      NEO4J_dbms_security_procedures_unrestricted: apoc.*
+      NEO4J_dbms_security_procedures_allowlist: apoc.*
+      NEO4J_dbms_memory_heap_initial__size: 512M
+      NEO4J_dbms_memory_heap_max__size: 2G
+      NEO4J_dbms_memory_pagecache_size: 512M
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+      - neo4j_plugins:/plugins
+    networks:
+      - pixllm-net
+
+volumes:
+  qdrant_data:
+  redis_data:
+  minio_data:
+  hf_model_cache:
+  neo4j_data:
+  neo4j_logs:
+  neo4j_plugins:
+
+networks:
+  pixllm-net:
+    name: pixllm-net
