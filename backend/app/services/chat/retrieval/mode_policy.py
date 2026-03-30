@@ -154,7 +154,7 @@ def assess_retrieval_quality(*, response_type: str, total_results: int, doc_resu
         reason = "no_results"
     elif rt in {"api_lookup", "doc_lookup"} and docs == 0:
         reason = "doc_evidence_missing"
-    elif rt in {"code_explain", "bug_fix", "code_review", "usage_guide"} and code == 0:
+    elif rt in {"code_explain", "bug_fix", "code_review"} and code == 0:
         reason = "code_evidence_missing"
 
     return RetrievalQuality(

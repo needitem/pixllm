@@ -88,7 +88,7 @@ def _default_answer_style_for_response_type(response_type: str) -> str:
         return "comparison"
     if rt in {"bug_fix", "troubleshooting"}:
         return "troubleshooting"
-    return "explanation" if rt in {"code_explain", "code_generate", "refactor", "usage_guide", "api_lookup"} else "default"
+    return "explanation" if rt in {"code_explain", "code_generate", "refactor", "api_lookup"} else "default"
 
 
 def _default_answer_style_for_contract(question_contract: Dict[str, Any], response_type: str) -> str:

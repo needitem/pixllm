@@ -56,7 +56,6 @@ class _Policy:
     intents = [
         {"id": "general", "response_type": "general"},
         {"id": "code_explain", "response_type": "code_explain"},
-        {"id": "usage_guide", "response_type": "usage_guide"},
         {"id": "doc_lookup", "response_type": "doc_lookup"},
     ]
 
@@ -65,7 +64,6 @@ class _Policy:
         mapping = {
             "general": "general",
             "code_explain": "code_explain",
-            "usage_guide": "usage_guide",
             "doc_lookup": "doc_lookup",
         }
         return mapping.get(str(response_type or "").strip(), "general")
@@ -102,19 +100,17 @@ def test_flow_question_builds_question_contract_instead_of_response_type_overrid
     ]
 
 
-def test_usage_guide_profile_no_longer_prefers_usage_bundle() -> None:
-    profile = resolve_runtime_routing_profile(
-        response_type="usage_guide",
-        intent_source="heuristic",
-        intent_confidence=0.0,
-        retrieval_bias="code",
-        answer_style="",
-        workspace_overlay_present=False,
+def test_usage_task_type_stays_general_with_code_read_contract() -> None:
+    result = classify_intent_hybrid(
+        policy=_Policy(),
+        message="How do I use FooBarManager?",
+        model_name="test-model",
+        llm_client=None,
+        task_type="usage",
     )
 
-    assert profile["tool_priority"][:3] == ["find_symbol", "grep", "read"]
-    assert "usage_bundle" not in profile["tool_priority"]
-    assert profile["answer_style"] == "explanation"
+    assert result["response_type"] == "general"
+    assert result["question_contract"]["kind"] == "code_read"
 
 
 def test_overlay_profile_keeps_neutral_code_search_order() -> None:
@@ -138,15 +134,15 @@ def test_overlay_profile_keeps_neutral_code_search_order() -> None:
     assert profile["tool_strategy"] == "frontier_search_loop_with_overlay_bootstrap"
 
 
-def test_usage_guide_expected_artifacts_drop_bundle() -> None:
-    artifacts = infer_expected_artifacts(response_type="usage_guide", needs_approval=False)
+def test_general_expected_artifacts_do_not_include_usage_bundle() -> None:
+    artifacts = infer_expected_artifacts(response_type="general", needs_approval=False)
 
     assert "usage_bundle" not in artifacts
 
 
-def test_usage_guide_quality_gate_no_longer_requires_count_based_code_minimum() -> None:
+def test_general_quality_gate_no_longer_requires_count_based_code_minimum() -> None:
     quality = assess_retrieval_quality(
-        response_type="usage_guide",
+        response_type="general",
         total_results=5,
         doc_results=4,
         current_top_k=8,

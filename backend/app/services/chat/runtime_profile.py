@@ -48,7 +48,7 @@ def _normalize_answer_style(value: str, question_contract: Dict[str, Any], respo
         return "comparison"
     if rt in {"bug_fix", "troubleshooting"}:
         return "troubleshooting"
-    if rt in {"code_explain", "usage_guide", "api_lookup"}:
+    if rt in {"code_explain", "api_lookup"}:
         return "explanation"
     return "default"
 

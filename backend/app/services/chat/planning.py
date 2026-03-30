@@ -7,7 +7,6 @@ _LOW_RISK_RESPONSE_TYPES = {
     "general",
     "doc_lookup",
     "api_lookup",
-    "usage_guide",
     "code_explain",
 }
 _MEDIUM_RISK_RESPONSE_TYPES = {
@@ -54,7 +53,7 @@ def infer_task_family(*, response_type: str, task_type: str = "") -> str:
         return explicit
 
     rt = _normalize_str(response_type).lower()
-    if rt in {"doc_lookup", "api_lookup", "usage_guide"}:
+    if rt in {"doc_lookup", "api_lookup"}:
         return "knowledge"
     if rt in {"code_explain", "compare", "design_review"}:
         return "analysis"
@@ -125,7 +124,7 @@ def infer_workspace_agent_needed(request: Any, *, response_type: str) -> bool:
     workspace_id = _normalize_str(getattr(request, "workspace_id", ""))
     module_filter = _normalize_str(getattr(request, "module_filter", ""))
     attachments = list(getattr(request, "attachments", []) or [])
-    if rt not in {"usage_guide", "code_explain", "code_review", "bug_fix", "troubleshooting", "code_generate", "refactor", "migration"}:
+    if rt not in {"code_explain", "code_review", "bug_fix", "troubleshooting", "code_generate", "refactor", "migration"}:
         return False
     if _has_local_workspace_overlay_attachment(request):
         return False
