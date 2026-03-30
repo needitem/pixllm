@@ -672,7 +672,14 @@ async def run_react_chat_generation(
         symbol_text = str(symbol or "").strip()
         if not symbol_text:
             candidates = extract_symbol_query_candidates(clean_message, max_candidates=1)
-            symbol_text = candidates[0] if candidates else clean_message
+            symbol_text = candidates[0] if candidates else ""
+        if not symbol_text:
+            return {
+                "symbol": "",
+                "match_count": 0,
+                "matches": [],
+                "reason": "missing_explicit_symbol",
+            }
 
         await _emit_progress(
             progress_callback,

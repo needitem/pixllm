@@ -8,6 +8,7 @@ _ASCII_WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
 _HANGUL_WORD_RE = re.compile(r"[가-힣]{2,}")
 _IDENTIFIER_PART_RE = re.compile(r"[A-Z]+[0-9]*(?=[A-Z][a-z]|\b)|[A-Z]?[a-z]+[0-9]*")
 _MEMBER_ACCESS_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\s*(?:\.|::|->)\s*([A-Za-z_][A-Za-z0-9_]*)")
+_BACKTICK_CONTENT_RE = re.compile(r"`([^`]+)`")
 _QUERY_STOPWORDS = {
     "about",
     "after",
@@ -188,30 +189,43 @@ def extract_query_score_tokens(query: str, limit: int = 6) -> List[str]:
     return extract_query_compacts(query, limit=limit)
 
 
+def _looks_like_explicit_symbol_token(token: str) -> bool:
+    raw = str(token or "").strip()
+    if not raw:
+        return False
+    if "_" in raw:
+        return True
+    if any(ch.isdigit() for ch in raw):
+        return True
+    if any(ch.isupper() for ch in raw[1:]):
+        return True
+    return len(split_identifier_parts(raw)) > 1
+
+
+def _iter_backtick_identifier_tokens(query: str) -> List[str]:
+    tokens: List[str] = []
+    for content in _BACKTICK_CONTENT_RE.findall(str(query or "")):
+        for token in _IDENTIFIER_RE.findall(str(content or "")):
+            normalized = str(token or "").strip()
+            if normalized:
+                tokens.append(normalized)
+    return _unique_preserving_order(tokens)
+
+
 def _iter_symbol_candidate_pool(query: str) -> List[Tuple[str, str]]:
-    config = _query_term_config()
     candidates: List[Tuple[str, str]] = []
     member_tokens = _MEMBER_ACCESS_RE.findall(str(query or ""))
     for token in member_tokens:
         candidates.append(("member", token))
-    explicit_tokens = _IDENTIFIER_RE.findall(str(query or ""))
+    for token in _iter_backtick_identifier_tokens(query):
+        candidates.append(("backtick", token))
+    explicit_tokens = [
+        token
+        for token in _IDENTIFIER_RE.findall(str(query or ""))
+        if _looks_like_explicit_symbol_token(token)
+    ]
     for token in explicit_tokens:
         candidates.append(("explicit", token))
-
-    has_structured_explicit = any(identifier_structure_score(token) > 0 or any(ch.isupper() for ch in str(token or "")[1:]) for token in explicit_tokens)
-    if explicit_tokens and (member_tokens or has_structured_explicit):
-        return candidates
-
-    ascii_words = _ascii_query_words(query)
-    max_n = int(config["score_ngram_max"])
-    min_compact_length = int(config["compound_symbol_min_compact"])
-    for n in range(2, max(2, max_n) + 1):
-        for idx in range(0, max(0, len(ascii_words) - n + 1)):
-            window = ascii_words[idx : idx + n]
-            compact = "".join(window)
-            if len(compact) < min_compact_length:
-                continue
-            candidates.append(("ngram", _title_compound(window)))
     return candidates
 
 
@@ -234,9 +248,8 @@ def extract_symbol_query_candidates(query: str, max_candidates: int = 3) -> List
             score += int(config["explicit_symbol_bonus"])
         elif source == "member":
             score += int(config["member_symbol_bonus"])
-        elif source == "ngram":
-            score += int(config["ngram_symbol_bonus"])
-            score -= max(0, len(split_identifier_parts(token)) - 2) * 12
+        elif source == "backtick":
+            score += int(config["explicit_symbol_bonus"])
         scored.append((score, token))
 
     ordered: List[str] = []

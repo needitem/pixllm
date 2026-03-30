@@ -48,6 +48,7 @@ from app.services.chat.react import code_explain_overlay
 from app.services.chat.react import engine as react_engine
 from app.services.chat.retrieval.mode_policy import assess_retrieval_quality
 from app.services.chat.runtime_profile import resolve_runtime_routing_profile
+from app.services.tools import query_terms
 from app.services.tools import runtime as tool_runtime
 
 
@@ -192,6 +193,55 @@ def test_symbol_rerank_runs_for_general_code_queries(monkeypatch) -> None:
     code_search_result, code_windows, trace_steps = result
 
     assert calls == [{"query_text": "Show FooBarManager usage", "preferred_symbol": "FooBarManager", "count": 2}]
+    assert len(code_search_result["matches"]) == 2
+    assert code_windows == []
+    assert trace_steps[-1]["reason"] == "search_only"
+
+
+def test_natural_language_query_does_not_synthesize_symbol_candidates() -> None:
+    assert query_terms.extract_symbol_query_candidates("Where is the config bound?", max_candidates=3) == []
+    assert query_terms.extract_symbol_query_candidates("How is image registration done?", max_candidates=3) == []
+    assert query_terms.extract_symbol_query_candidates("Show FooBarManager usage", max_candidates=3) == ["FooBarManager"]
+    assert query_terms.extract_symbol_query_candidates("Where is `bind` defined?", max_candidates=3) == ["bind"]
+
+
+def test_symbol_rerank_skips_natural_language_queries_without_explicit_identifier(monkeypatch) -> None:
+    calls = []
+
+    async def _fake_search_code(redis, code_tools, query_or_regex, path_filter, limit, session_id=None):
+        return {
+            "matches": [
+                {"path": "/repo/src/config.py", "line_range": "10-10", "match": "config.bind(service)"},
+                {"path": "/repo/src/setup.py", "line_range": "20-20", "match": "configure_binding()"},
+            ]
+        }
+
+    def _fake_prioritize(matches, *, query_text="", preferred_symbol=""):
+        calls.append({"query_text": query_text, "preferred_symbol": preferred_symbol, "count": len(matches)})
+        return list(matches)
+
+    monkeypatch.setattr(tool_runtime, "search_code", _fake_search_code)
+    monkeypatch.setattr(tool_runtime, "prioritize_usage_matches", _fake_prioritize)
+
+    result = asyncio.run(
+        tool_runtime._collect_code_evidence_async(
+            redis=None,
+            session_id="s",
+            query="Where is the config bound?",
+            capped_limit=5,
+            max_chars=4000,
+            max_line_span=120,
+            response_type="general",
+            search_only=True,
+            code_window_cap=6,
+            code_tools=None,
+            state=None,
+        )
+    )
+
+    code_search_result, code_windows, trace_steps = result
+
+    assert calls == []
     assert len(code_search_result["matches"]) == 2
     assert code_windows == []
     assert trace_steps[-1]["reason"] == "search_only"
