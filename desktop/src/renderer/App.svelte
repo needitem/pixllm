@@ -177,7 +177,6 @@
   let sidebarOpen = true;
   let compactLayoutActive = false;
   const RUN_DETAIL_POLL_MS = 1800;
-  const EXECUTION_ITEM_LIMIT = 8;
   const SIDEBAR_OVERLAY_BREAKPOINT = 1360;
 
   $: selectedRun = runs.find((run) => run.run_id === selectedRunId) ?? null;
@@ -197,7 +196,7 @@
   $: executionMessage =
     resolveExecutionMessage(conversation, selectedExecutionMessageId);
   $: executionItems = executionMessage ? buildExecutionInspectorItems(executionMessage) : [];
-  $: visibleExecutionItems = executionItems.slice(-EXECUTION_ITEM_LIMIT);
+  $: visibleExecutionItems = executionItems;
   $: activeExecutionMessageId = executionMessage?.id || '';
   $: if (visibleExecutionItems.length > 0) {
     if (!visibleExecutionItems.some((item) => item.id === selectedExecutionItemId)) {
@@ -727,7 +726,7 @@
   }
 
   function getVisibleExecutionItems(message: ConversationMessage): ExecutionInspectorItem[] {
-    return buildExecutionInspectorItems(message).slice(-EXECUTION_ITEM_LIMIT);
+    return buildExecutionInspectorItems(message);
   }
 
   function hasVisibleExecutionItems(message: ConversationMessage): boolean {
@@ -801,6 +800,30 @@
     }
 
     const items: ExecutionInspectorItem[] = [];
+
+    for (const [index, event] of (message.statusEvents ?? []).entries()) {
+      const subtitleParts = [
+        event.phase,
+        event.tool,
+        event.timestamp.toLocaleTimeString()
+      ].filter(Boolean);
+      items.push({
+        id: `${message.id}-status-${event.id || index + 1}`,
+        title: event.message || `Update ${index + 1}`,
+        subtitle: subtitleParts.join(' / ') || 'Execution update',
+        badge: 'update',
+        tone: toneClass(event.phase || message.state || 'active'),
+        detailTitle: `Execution update ${index + 1}`,
+        detail: {
+          order: index + 1,
+          message: event.message,
+          phase: event.phase || '',
+          tool: event.tool || '',
+          timestamp: event.timestamp.toISOString()
+        },
+        note: event.message || ''
+      });
+    }
 
     if (message.localSummary || message.localError) {
       items.push({
@@ -2637,6 +2660,9 @@
   .activity-list {
     display: grid;
     gap: 8px;
+    max-height: min(60vh, 720px);
+    overflow-y: auto;
+    padding-right: 4px;
   }
 
   .activity-entry {
