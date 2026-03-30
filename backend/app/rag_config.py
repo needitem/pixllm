@@ -114,7 +114,6 @@ def routing_code_first_response_types() -> List[str]:
                 "design_review",
                 "compare",
                 "migration",
-                "usage_guide",
                 "api_lookup",
             ],
         )
@@ -123,21 +122,6 @@ def routing_code_first_response_types() -> List[str]:
 
 def routing_doc_first_response_types() -> List[str]:
     return list(_get("routing", "doc_first_response_types", ["doc_lookup"]))
-
-
-def retrieval_escalation_rules() -> Dict[str, Dict[str, int]]:
-    return dict(
-        _get(
-            "retrieval",
-            "escalation_rules",
-            {
-                "usage_guide": {"min_docs": 2, "min_code": 2},
-                "api_lookup": {"min_docs": 3},
-                "doc_lookup": {"min_docs": 3},
-                "general": {"min_total": 5},
-            },
-        )
-    )
 
 
 def retrieval_query_rewrite_enabled() -> bool:
@@ -158,16 +142,10 @@ def retrieval_query_rewrite_max_candidates() -> int:
 
 
 def context_doc_limit(response_type: str = "general") -> int:
-    rt = str(response_type or "").strip().lower()
-    if rt == "usage_guide":
-        return int(_get("context", "usage_guide_doc_limit", _get("context", "doc_limit", 5)))
     return int(_get("context", "doc_limit", 5))
 
 
 def context_code_limit(response_type: str = "general") -> int:
-    rt = str(response_type or "").strip().lower()
-    if rt == "usage_guide":
-        return int(_get("context", "usage_guide_code_limit", _get("context", "code_limit", 6)))
     return int(_get("context", "code_limit", 6))
 
 

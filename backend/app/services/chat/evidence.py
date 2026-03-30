@@ -23,17 +23,93 @@ def _normalize_score(raw: Any) -> float:
     return 1.0
 
 
-def _iter_scores(results: Iterable[Dict[str, Any]], sources: Iterable[Dict[str, Any]]) -> List[float]:
-    values: List[float] = []
+def _payload_text(payload: Dict[str, Any]) -> str:
+    return str(payload.get("text") or payload.get("preview_text") or "").strip()
+
+
+def _source_key(payload: Dict[str, Any]) -> str:
+    return str(
+        payload.get("file_path")
+        or payload.get("source_file")
+        or payload.get("document_id")
+        or ""
+    ).strip().lower()
+
+
+def _anchor_key(payload: Dict[str, Any]) -> str:
+    source_key = _source_key(payload)
+    if not source_key:
+        return ""
+    line_start = payload.get("line_start")
+    line_end = payload.get("line_end")
+    if line_start is not None or line_end is not None:
+        return f"{source_key}::{line_start or ''}-{line_end or ''}"
+    section_path = str(payload.get("section_path") or payload.get("paragraph_range") or "").strip().lower()
+    if section_path:
+        return f"{source_key}::{section_path}"
+    return source_key
+
+
+def _is_anchorable_payload(payload: Dict[str, Any]) -> bool:
+    text = _payload_text(payload)
+    if not text:
+        return False
+    if _source_key(payload):
+        return True
+    return bool(payload.get("line_start") is not None or payload.get("line_end") is not None)
+
+
+def _score_from_result(item: Dict[str, Any]) -> float:
+    for key in ("combined_score", "dense_score", "score"):
+        if key in item:
+            return _normalize_score(item.get(key))
+    return 0.0
+
+
+def _score_from_source(item: Dict[str, Any]) -> float:
+    return _normalize_score(item.get("score"))
+
+
+def _collect_result_evidence(results: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    seen = set()
     for item in results or []:
-        for key in ("combined_score", "dense_score", "score"):
-            if key in item:
-                values.append(_normalize_score(item.get(key)))
-                break
-    for src in sources or []:
-        if "score" in src:
-            values.append(_normalize_score(src.get("score")))
-    return [v for v in values if v > 0.0]
+        payload = dict(item.get("payload", {}) or {})
+        anchor_key = _anchor_key(payload)
+        if anchor_key and anchor_key in seen:
+            continue
+        if anchor_key:
+            seen.add(anchor_key)
+        rows.append(
+            {
+                "score": _score_from_result(item),
+                "anchorable": _is_anchorable_payload(payload),
+                "source_key": _source_key(payload),
+                "anchor_key": anchor_key,
+            }
+        )
+    return rows
+
+
+def _collect_source_evidence(sources: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    seen = set()
+    for item in sources or []:
+        payload = dict(item or {})
+        anchor_key = _anchor_key(payload)
+        if anchor_key and anchor_key in seen:
+            continue
+        if anchor_key:
+            seen.add(anchor_key)
+        rows.append(
+            {
+                "score": _score_from_source(payload),
+                "anchorable": _is_anchorable_payload(payload),
+                "source_key": _source_key(payload),
+                "anchor_key": anchor_key,
+            }
+        )
+    return rows
 
 
 def _count_unique_sources(results: Iterable[Dict[str, Any]], sources: Iterable[Dict[str, Any]]) -> int:
@@ -51,14 +127,26 @@ def _count_unique_sources(results: Iterable[Dict[str, Any]], sources: Iterable[D
 
 
 def compute_evidence_score(results: List[Dict[str, Any]], sources: List[Dict[str, Any]]) -> float:
-    scores = sorted(_iter_scores(results, sources), reverse=True)
-    score_component = (sum(scores[:3]) / min(3, len(scores))) if scores else 0.0
-    result_count_component = _clamp01(len(results or []) / 4.0)
-    unique_source_component = _clamp01(_count_unique_sources(results, sources) / 3.0)
+    rows = _collect_result_evidence(results) or _collect_source_evidence(sources)
+    anchor_rows = [row for row in rows if bool(row.get("anchorable"))]
+    anchor_scores = sorted((float(row.get("score") or 0.0) for row in anchor_rows), reverse=True)
+
+    if not anchor_scores:
+        fallback = max((float(row.get("score") or 0.0) for row in rows), default=0.0)
+        return _clamp01(round(0.20 * fallback, 4))
+
+    anchor_score = anchor_scores[0]
+    supporting_anchor_score = anchor_scores[1] if len(anchor_scores) > 1 else (anchor_score * 0.5)
+    distinct_anchor_sources = {
+        str(row.get("source_key") or "").strip().lower()
+        for row in anchor_rows
+        if str(row.get("source_key") or "").strip()
+    }
+    source_support = 1.0 if len(distinct_anchor_sources) >= 2 else 0.5
     score = (
-        0.60 * score_component
-        + 0.25 * result_count_component
-        + 0.15 * unique_source_component
+        0.80 * anchor_score
+        + 0.15 * supporting_anchor_score
+        + 0.05 * source_support
     )
     return _clamp01(round(score, 4))
 
@@ -69,6 +157,9 @@ def build_evidence_gate(
 ) -> Dict[str, Any]:
     threshold = _clamp01(rag_config.evidence_threshold())
     policy = rag_config.evidence_policy()
+    rows = _collect_result_evidence(results) or _collect_source_evidence(sources)
+    anchor_rows = [row for row in rows if bool(row.get("anchorable"))]
+    anchor_scores = sorted((float(row.get("score") or 0.0) for row in anchor_rows), reverse=True)
     score = compute_evidence_score(results, sources)
     passed = score >= threshold
     return {
@@ -80,6 +171,9 @@ def build_evidence_gate(
         "result_count": len(results or []),
         "source_count": len(sources or []),
         "unique_source_count": _count_unique_sources(results, sources),
+        "anchor_count": len(anchor_rows),
+        "best_anchor_score": round(anchor_scores[0], 4) if anchor_scores else 0.0,
+        "supporting_anchor_score": round(anchor_scores[1], 4) if len(anchor_scores) > 1 else 0.0,
     }
 
 

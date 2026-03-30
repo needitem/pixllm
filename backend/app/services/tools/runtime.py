@@ -208,8 +208,8 @@ async def _collect_code_evidence_async(
 
     merged_matches = list(code_search_result.get("matches", []))
 
-    if str(response_type or "").strip().lower() in {"usage_guide", "api_lookup"}:
-        symbol_candidates = extract_symbol_query_candidates(query, max_candidates=1)
+    symbol_candidates = extract_symbol_query_candidates(query, max_candidates=1)
+    if symbol_candidates:
         merged_matches = prioritize_usage_matches(
             merged_matches,
             query_text=query,
@@ -224,7 +224,7 @@ async def _collect_code_evidence_async(
 
     seen_windows: Set[str] = set()
     per_path_count: Dict[str, int] = {}
-    per_path_cap = 3 if str(response_type or "").strip().lower() in {"usage_guide", "api_lookup"} else 2
+    per_path_cap = 3 if symbol_candidates else 2
     max_windows = min(code_window_cap, max(capped_limit // 2, 6))
 
     for match in merged_matches:

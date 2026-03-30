@@ -46,7 +46,7 @@ def clamp_int(value: int, low: int, high: int) -> int:
     return max(low, min(high, int(value)))
 
 
-_USAGE_CODE_RESPONSE_TYPES = {"usage_guide", "api_lookup"}
+_USAGE_CODE_RESPONSE_TYPES = {"api_lookup"}
 
 
 def route_collect_mode(response_type: str, mode: str) -> str:

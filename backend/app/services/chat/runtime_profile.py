@@ -51,7 +51,7 @@ def _normalize_answer_style(value: str, response_type: str) -> str:
         return token
     rt = str(response_type or "").strip().lower()
     if rt == "usage_guide":
-        return "tutorial"
+        return "explanation"
     if rt == "doc_lookup":
         return "reference"
     if rt in {"code_explain", "api_lookup"}:
@@ -70,23 +70,18 @@ def _docs_enabled_for_response_type(response_type: str, preferred_tool_mode: str
 
 
 def _tool_priority_for_mode(preferred_tool_mode: str, response_type: str, *, docs_enabled: bool) -> List[str]:
-    rt = str(response_type or "").strip().lower()
     if preferred_tool_mode == "docs":
-        base = ["doc_search", "doc_read", "find_symbol", "grep", "read", "glob"]
-        return ["usage_bundle", *base] if rt == "usage_guide" else base
+        return ["doc_search", "doc_read", "find_symbol", "grep", "read", "glob"]
     if docs_enabled:
-        base = ["find_symbol", "grep", "read", "glob", "doc_search", "doc_read"]
-        return ["usage_bundle", *base] if rt == "usage_guide" else base
-    base = ["find_symbol", "grep", "read", "glob"]
-    return ["usage_bundle", *base] if rt == "usage_guide" else base
+        return ["find_symbol", "grep", "read", "glob", "doc_search", "doc_read"]
+    return ["find_symbol", "grep", "read", "glob"]
 
 
 def _workspace_overlay_tool_priority(response_type: str, *, docs_enabled: bool) -> List[str]:
-    rt = str(response_type or "").strip().lower()
     base = ["find_symbol", "read"]
     if docs_enabled:
         base.extend(["doc_search", "doc_read"])
-    return base if rt == "usage_guide" else base
+    return base
 
 
 def _primary_agent(response_type: str) -> str:

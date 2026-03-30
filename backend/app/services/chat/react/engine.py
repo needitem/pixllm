@@ -1,4 +1,4 @@
-import asyncio
+﻿import asyncio
 import json
 import re
 import time
@@ -24,18 +24,10 @@ from ..workspace_graph import (
     workspace_graph_has_content,
     workspace_graph_is_ready_for_answer,
 )
-from .usage_guide import (
-    _generate_usage_guide_answer_from_bundle,
-    _postprocess_usage_guide_answer,
-    _repair_usage_guide_answer_from_results,
-    _usage_bundle_has_tutorial_signal,
-)
 from .code_explain_overlay import run_local_overlay_code_explain
 from ....core.llm_utils import (
     build_chat_template_extra_body,
     safe_chat_completion_create,
-    extract_completion_finish_reason,
-    stream_chat_completion_text,
     stream_chat_completion_text_with_meta,
 )
 from .loop import build_system_prompt, run_react_loop
@@ -49,7 +41,7 @@ from ...tools.runtime import (
 )
 from ...tools.code_runtime import relativize_code_path
 from ...tools.query_strategy import prioritize_usage_matches
-from ...tools.usage_bundle import collect_usage_guide_bundle, extract_symbol_candidates
+from ...tools.query_terms import extract_symbol_query_candidates
 from ...tools.access import resolve_tool_user_context
 from ...tools.registry import ToolParam, ToolRegistry
 
@@ -103,15 +95,13 @@ async def _emit_progress(
 
 def _tool_progress_message(tool_name: str, tool_input: Dict[str, Any]) -> str:
     query = str(tool_input.get("query") or tool_input.get("pattern") or tool_input.get("symbol") or "").strip()
-    if tool_name == "usage_bundle":
-        return "코드 사용 흐름을 구조화하는 중..."
     if tool_name == "find_symbol":
-        return f"'{query}' 정의 위치를 찾는 중..." if query else "심볼 정의를 찾는 중..."
+        return f"'{query}' ?뺤쓽 ?꾩튂瑜?李얜뒗 以?.." if query else "?щ낵 ?뺤쓽瑜?李얜뒗 以?.."
     if tool_name in {"grep", "doc_search"}:
-        return f"'{query}' 근거를 찾는 중..." if query else "관련 근거를 찾는 중..."
+        return f"'{query}' 洹쇨굅瑜?李얜뒗 以?.." if query else "愿??洹쇨굅瑜?李얜뒗 以?.."
     if tool_name in {"read", "doc_read"}:
-        return "찾은 근거를 자세히 읽는 중..."
-    return f"{tool_name} 도구를 실행하는 중..."
+        return "李얠? 洹쇨굅瑜??먯꽭???쎈뒗 以?.."
+    return f"{tool_name} ?꾧뎄瑜??ㅽ뻾?섎뒗 以?.."
 
 
 def _merge_unique(rows: List[Dict[str, Any]], added: List[Dict[str, Any]], key_fields: List[str]) -> List[Dict[str, Any]]:
@@ -167,7 +157,7 @@ def _build_tool_mode_hint(
     if answer_style == "tutorial":
         answer_style_hint = (
             "Write the final answer as a grounded usage explanation with a short overview, the strongest confirmed code path, "
-            "a minimal grounded example when available, and caveats. "
+            "a minimal grounded snippet when available, and caveats. "
             "Do not default to property or method tables unless the user explicitly asks for API reference.\n"
         )
     elif answer_style == "reference":
@@ -204,16 +194,13 @@ def _build_tool_mode_hint(
             "Write the answer from local workspace evidence first, and use engine references only as supporting context."
         )
 
-    repo_hint = "Start with find_symbol or grep on the most distinctive symbol/API name and then read the most relevant files."
-    usage_guide_hint = (
-            "For usage_guide questions, call usage_bundle first when the question is about a concrete symbol or file-backed feature. "
-            "If usage_bundle is unavailable or weak, call find_symbol before grep to anchor the exact definition file. "
-            "Use usage_bundle.sections and usage_bundle.recommended_sequence only as grounded hints, not as a fixed template. "
-            "Prefer one cohesive anchor file before using secondary files. "
-            "Do not invent missing stages, flows, or example files just to fill structure. "
-            "Avoid plain method/event tables unless the user explicitly asked for API reference.\n"
-        if response_kind == "usage_guide"
-        else ""
+    repo_hint = (
+        "Start with find_symbol when the question names a concrete type, member, function, or API; "
+        "otherwise grep for the most distinctive term and then read the strongest matching files."
+    )
+    code_usage_hint = (
+        "For how-to or usage questions, anchor on a concrete definition or call site first and read the matched code blocks before answering. "
+        "Do not invent lifecycle stages, setup sequences, or supporting files that are not grounded.\n"
     )
     mode_hint = (
         "For this question type, balance code and document evidence together.\n"
@@ -231,11 +218,10 @@ def _build_tool_mode_hint(
             else ""
         )
         +
-        "Prefer find_symbol before broad grep when the question mentions a concrete class, control, method, or API name.\n"
-        "For usage or tutorial questions, prefer reading the matched code blocks before writing the answer.\n"
+        "Prefer find_symbol before broad grep when the question mentions a concrete type, member, function, or API name.\n"
+        f"{code_usage_hint}"
         "Default to prose. Only include a code block when it comes directly from a grounded read span.\n"
         f"{answer_style_hint}"
-        f"{usage_guide_hint}"
         "Use document tools when code evidence is insufficient."
     )
 
@@ -440,7 +426,6 @@ async def run_react_chat_generation(
     active_collection = getattr(req, "collection", None) or config.RAG_DEFAULT_COLLECTION
     max_chars = min(int(config.CHAT_TOOL_MAX_CHARS), 12000)
     max_line_span = min(int(config.CHAT_TOOL_MAX_LINE_SPAN), 500)
-    retrieve_timeout_sec = _timeout_value(rag_config.react_retrieve_timeout_sec())
     answer_timeout_sec = _timeout_value(rag_config.react_answer_timeout_sec())
 
     # Redis client from app state
@@ -477,126 +462,9 @@ async def run_react_chat_generation(
     await _emit_progress(
         progress_callback,
         phase="classify",
-        message="질문 의도와 답변 유형을 분석하는 중...",
+        message="吏덈Ц ?섎룄? ?듬? ?좏삎??遺꾩꽍?섎뒗 以?..",
         response_type=response_type,
     )
-
-    if str(response_type or "").strip().lower() == "usage_guide":
-        usage_query = (extract_symbol_candidates(clean_message) or [clean_message])[0]
-        await _emit_progress(
-            progress_callback,
-            phase="retrieve",
-            message="코드 사용 흐름과 예제를 수집하는 중...",
-            tool="usage_bundle",
-            query=usage_query,
-        )
-        prefetched_bundle = await _run_with_stage_timeout(
-            collect_usage_guide_bundle(
-                redis=redis,
-                code_tools=chat_deps.code_tools,
-                session_id=session_id,
-                query=usage_query,
-                limit=12,
-                max_chars=max_chars,
-                max_line_span=max_line_span,
-            ),
-            stage="retrieve",
-            timeout_sec=retrieve_timeout_sec,
-        )
-        bundle = dict(prefetched_bundle.get("bundle", {}) or {})
-        bundle_matches = list(prefetched_bundle.get("matches", []) or [])[:12]
-        bundle_windows = list(prefetched_bundle.get("windows", []) or [])[:8]
-        accumulator.add_code_matches(bundle_matches)
-        for window in bundle_windows:
-            accumulator.add_code_window(
-                {
-                    "path": window.get("path"),
-                    "line_range": window.get("line_range"),
-                    "content": window.get("content", ""),
-                }
-            )
-
-        prefetched_tool_calls: List[Dict[str, Any]] = []
-        if bundle:
-            await _maybe_await_callback(
-                tool_callback,
-                "usage_bundle",
-                {
-                    "query": str(bundle.get("symbol") or clean_message),
-                    "limit": 12,
-                },
-                json.dumps(bundle, ensure_ascii=False)[:500],
-            )
-            prefetched_tool_calls.append(
-                {
-                    "round": 0,
-                    "tool": "usage_bundle",
-                    "input": {
-                        "query": str(bundle.get("symbol") or clean_message),
-                        "limit": 12,
-                    },
-                    "output_preview": json.dumps(bundle, ensure_ascii=False)[:500],
-                }
-            )
-            phase_log.retrieve(tool="usage_bundle", round=0, result_count=max(1, len(bundle_windows)))
-            await _emit_progress(
-                progress_callback,
-                phase="retrieve",
-                message="코드 근거를 정리했습니다. 답변 작성을 준비하는 중...",
-                tool="usage_bundle",
-                match_count=len(bundle_matches),
-                window_count=len(bundle_windows),
-            )
-
-        if _usage_bundle_has_tutorial_signal(bundle):
-            results = accumulator.to_results()
-            sources = build_sources(results)
-            await _maybe_await_callback(sources_callback, sources)
-            await _emit_progress(
-                progress_callback,
-                phase="answer",
-                message="근거를 바탕으로 답변을 작성하는 중...",
-                source_count=len(sources),
-            )
-            generation_result = await _run_with_stage_timeout(
-                _generate_usage_guide_answer_from_bundle(
-                    state=chat_deps, # _generate doesn't strictly need state if it uses vllm_client etc, but we'll adapt it later if needed or pass chat_deps
-                    model_name=model_name,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    system_prompt_seed=system_prompt_seed,
-                    clean_message=clean_message,
-                    bundle=bundle,
-                    token_callback=token_callback,
-                ),
-                stage="answer",
-                timeout_sec=answer_timeout_sec,
-            )
-            answer = str(generation_result.get("text") or "").strip()
-            answer_truncated = bool(generation_result.get("truncated"))
-            if answer:
-                phase_log.verify(policy="answer")
-                await _emit_progress(progress_callback, phase="verify", message="근거와 답변을 정리하는 중...")
-                elapsed_ms = (time.perf_counter() - started) * 1000.0
-                phase_log.finalize(answer_len=len(answer), total_ms=elapsed_ms)
-                return {
-                    "answer": answer,
-                    "results": results,
-                    "sources": sources,
-                    "query_time_ms": elapsed_ms,
-                    "react": {
-                        "mode": "usage_bundle_synthesis",
-                        "preferred_tool_mode": preferred_mode,
-                        "profile": routing_profile,
-                        "rounds": 1,
-                        "tool_calls": prefetched_tool_calls,
-                        "thoughts": [],
-                    },
-                    "routing_profile": routing_profile,
-                    "session_id": session_id,
-                    "answer_truncated": answer_truncated,
-                }
-
     if workspace_overlay_authoritative and str(response_type or "").strip().lower() == "code_explain":
         graph_answer = render_workspace_graph_answer(
             clean_message,
@@ -612,7 +480,7 @@ async def run_react_chat_generation(
             sources = build_sources(results)
             await _maybe_await_callback(sources_callback, sources)
             phase_log.verify(policy="workspace_graph")
-            await _emit_progress(progress_callback, phase="verify", message="워크스페이스 그래프를 바탕으로 답변을 정리하는 중...")
+            await _emit_progress(progress_callback, phase="verify", message="?뚰겕?ㅽ럹?댁뒪 洹몃옒?꾨? 諛뷀깢?쇰줈 ?듬????뺣━?섎뒗 以?..")
             elapsed_ms = (time.perf_counter() - started) * 1000.0
             phase_log.finalize(answer_len=len(graph_answer), total_ms=elapsed_ms)
             return {
@@ -659,7 +527,7 @@ async def run_react_chat_generation(
             sources = list(overlay_code_explain.get("sources") or [])
             await _maybe_await_callback(sources_callback, sources)
             phase_log.verify(policy="local_overlay_code_explain")
-            await _emit_progress(progress_callback, phase="verify", message="로컬 근거를 기준으로 답변을 정리하는 중..")
+            await _emit_progress(progress_callback, phase="verify", message="濡쒖뺄 洹쇨굅瑜?湲곗??쇰줈 ?듬????뺣━?섎뒗 以?.")
             elapsed_ms = (time.perf_counter() - started) * 1000.0
             phase_log.finalize(
                 answer_len=len(str(overlay_code_explain.get("answer") or "")),
@@ -757,8 +625,8 @@ async def run_react_chat_generation(
             session_id=session_id,
         )
         matches = list(res.get("matches", []) or [])
-        if str(response_type or "").strip().lower() in {"usage_guide", "api_lookup"}:
-            symbol_candidates = extract_symbol_candidates(query_text)
+        symbol_candidates = extract_symbol_query_candidates(query_text or clean_message, max_candidates=1)
+        if symbol_candidates:
             matches = prioritize_usage_matches(
                 matches,
                 query_text=query_text,
@@ -793,7 +661,7 @@ async def run_react_chat_generation(
     ) -> Dict[str, Any]:
         symbol_text = str(symbol or "").strip()
         if not symbol_text:
-            candidates = extract_symbol_candidates(clean_message)
+            candidates = extract_symbol_query_candidates(clean_message, max_candidates=1)
             symbol_text = candidates[0] if candidates else clean_message
 
         await _emit_progress(
@@ -861,38 +729,6 @@ async def run_react_chat_generation(
             "truncated": bool(res.get("truncated")),
             "reason": res.get("reason"),
         }
-
-    async def _tool_usage_bundle(query: str = "", limit: int = 12) -> Dict[str, Any]:
-        await _emit_progress(
-            progress_callback,
-            phase="retrieve",
-            message=_tool_progress_message("usage_bundle", {"query": query}),
-            tool="usage_bundle",
-        )
-        bundle_result = await _run_with_stage_timeout(
-            collect_usage_guide_bundle(
-                redis=redis,
-                code_tools=chat_deps.code_tools,
-                session_id=session_id,
-                query=str(query or clean_message or "").strip(),
-                limit=max(6, min(int(limit or 12), 24)),
-                max_chars=max_chars,
-                max_line_span=max_line_span,
-            ),
-            stage="retrieve",
-            timeout_sec=retrieve_timeout_sec,
-        )
-        accumulator.add_code_matches(list(bundle_result.get("matches", []) or []))
-        for window in list(bundle_result.get("windows", []) or []):
-            accumulator.add_code_window(
-                {
-                    "path": window.get("path"),
-                    "line_range": window.get("line_range"),
-                    "content": window.get("content", ""),
-                }
-            )
-        return dict(bundle_result.get("bundle", {}) or {})
-
     # ------------------------------------------------------------------
     # Tool registration with per-tool output caps
     # ------------------------------------------------------------------
@@ -944,22 +780,10 @@ async def run_react_chat_generation(
                 ],
                 max_output_chars=8000,
             )
-
-    if str(response_type or "").strip().lower() == "usage_guide":
-        registry.register(
-            name="usage_bundle",
-            func=_tool_usage_bundle,
-            description="Build a structured usage-guide evidence bundle for a concrete symbol, centered on grounded definition, usage, calls, updates, and supporting files. Use this first for how-to questions.",
-            parameters=[
-                ToolParam("query", "string", "Concrete symbol or usage question", required=False, default=clean_message),
-                ToolParam("limit", "integer", "Maximum internal matches to inspect", required=False, default=12),
-            ],
-            max_output_chars=12000,
-        )
     registry.register(
         name="find_symbol",
         func=_tool_find_symbol,
-        description="Locate likely definition files and line ranges for a concrete class, control, method, or API symbol before broader code search.",
+        description="Locate likely definition files and line ranges for a concrete type, member, function, or API symbol before broader code search.",
         parameters=[
             ToolParam("symbol", "string", "Concrete symbol name to resolve", required=False, default=""),
             ToolParam("path_filter", "string", "Optional path substring filter", required=False, default=""),
@@ -1005,7 +829,7 @@ async def run_react_chat_generation(
     await _emit_progress(
         progress_callback,
         phase="plan",
-        message="검색 계획을 세우고 사용할 도구를 고르는 중...",
+        message="寃??怨꾪쉷???몄슦怨??ъ슜???꾧뎄瑜?怨좊Ⅴ??以?..",
         tools=registry.list_tools(),
         preferred_mode=preferred_mode,
     )
@@ -1486,7 +1310,7 @@ async def run_react_chat_generation(
             "answer": guarded_answer,
         }
 
-    await _emit_progress(progress_callback, phase="retrieve", message="근거 수집을 시작합니다...")
+    await _emit_progress(progress_callback, phase="retrieve", message="洹쇨굅 ?섏쭛???쒖옉?⑸땲??..")
 
     react_result = await run_react_loop(
         llm_call=_llm_call,
@@ -1522,7 +1346,7 @@ async def run_react_chat_generation(
     has_error = bool(react_error)
     evidence_policy = "error" if has_error else ("answer" if answer else "insufficient")
     phase_log.verify(policy=evidence_policy)
-    await _emit_progress(progress_callback, phase="verify", message="근거와 답변을 정리하는 중...")
+    await _emit_progress(progress_callback, phase="verify", message="洹쇨굅? ?듬????뺣━?섎뒗 以?..")
 
     results = accumulator.to_results()
     sources = build_sources(results)
@@ -1554,6 +1378,9 @@ async def run_react_chat_generation(
         "answer_truncated": answer_truncated,
         "error": react_error,
     }
+
+
+
 
 
 

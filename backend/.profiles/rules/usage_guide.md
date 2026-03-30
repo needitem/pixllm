@@ -1,14 +1,14 @@
 ---
 id: usage_guide
-sections: 개요,준비,예제 코드,근거 파일
+sections: Overview, Grounded Evidence, Representative Snippet, Source Files
 include_code: true
-lead: 질문한 기능은 문서와 코드에서 확인된 API와 구현 흐름만 기준으로 설명합니다.
+lead: Explain only APIs, behaviors, and file relationships that are directly confirmed by grounded code or docs.
 ---
 
-응답 형식: 개요 -> 준비 -> 구현 순서 -> 예제 코드 -> 주의사항 -> 근거 파일 순서로 작성합니다.
-- API 이름과 심볼은 근거 파일이나 근거 코드에서 확인된 것만 사용합니다.
-- 예제 코드는 근거가 가장 강한 파일들의 주 사용 언어를 따라갑니다. 특정 언어를 고정하지 말고, C#을 기본값처럼 강제하지 마세요.
-- 사용 흐름은 근거에 실제로 드러나는 단계만 설명하세요. 고정된 lifecycle 순서를 가정하지 말고, 확인된 setup/init/load/event/update/cleanup 단계가 있을 때만 그 순서를 사용하세요.
-- `designer`, `xaml`, `form`, `window`, 특정 상태관리 패턴 같은 프레임워크 전용 단계는 근거에 실제로 나타날 때만 언급합니다.
-- 예제 코드와 구현 순서에는 근거 문서나 코드에서 확인 가능한 API와 흐름만 포함하고, 임의의 메서드 이름을 만들지 않습니다.
-- 특정 단계의 근거가 부족하면 추정으로 메우지 말고, 확인되지 않았다고 명시합니다.
+Response format: Overview -> Preconditions -> Observed usage -> Representative snippet -> Caveats -> Source files
+- Use only names and behaviors confirmed in grounded code or docs.
+- Follow the dominant language and structure from the grounded evidence instead of forcing a framework-specific style.
+- Describe only the stages that are explicitly shown by the evidence. Do not assume a fixed setup/init/load/event/update/cleanup order.
+- Do not assume any framework-specific UI, runtime, or state-management convention unless the evidence explicitly shows it.
+- Representative snippets and step descriptions must use only grounded API and symbol names. Do not invent helper methods, files, or sample code.
+- If the evidence is partial, say what is confirmed and what remains unconfirmed instead of filling gaps.

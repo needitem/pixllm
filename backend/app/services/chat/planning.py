@@ -136,8 +136,6 @@ def infer_expected_artifacts(*, response_type: str, needs_approval: bool) -> Lis
     rt = _normalize_str(response_type).lower()
     artifacts = ["execution_plan", "routing_metadata", "source_bundle", "final_answer"]
 
-    if rt == "usage_guide":
-        artifacts.append("usage_bundle")
     if rt == "code_review":
         artifacts.append("findings_report")
     if rt in {"bug_fix", "troubleshooting"}:

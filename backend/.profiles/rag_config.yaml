@@ -16,7 +16,6 @@ routing:
     - design_review
     - compare
     - migration
-    - usage_guide
     - api_lookup
   doc_first_response_types:
     - doc_lookup
@@ -28,24 +27,12 @@ retrieval:
   top_k_cap: 50
   query_rewrite_enabled: true
   query_rewrite_max_candidates: 3
-  escalation_rules:
-    usage_guide:
-      min_docs: 2
-      min_code: 2
-    api_lookup:
-      min_docs: 3
-    doc_lookup:
-      min_docs: 3
-    general:
-      min_total: 5
 
 context:
   max_chars: 5000
   max_line_span: 220
   doc_limit: 5
   code_limit: 6
-  usage_guide_doc_limit: 6
-  usage_guide_code_limit: 4
 
 react:
   max_rounds: 3
@@ -76,9 +63,6 @@ evidence:
 
 heuristics:
   usage_match_score:
-    example_path_bonus: 3.0
-    entrypoint_bonus: 1.5
-    markup_backing_bonus: 1.0
     source_extension_bonus: 1.0
     query_path_overlap: 1.2
     query_text_overlap: 1.4
@@ -89,8 +73,6 @@ heuristics:
     call_activity_bonus: 0.45
     member_call_activity_bonus: 0.6
     assignment_activity_bonus: 0.3
-    subscription_bonus: 1.0
-    lifecycle_group_bonus: 0.6
     base_result_score_bonus: 0.25
     definition_penalty: 1.0
     test_path_penalty: 2.5
@@ -129,7 +111,6 @@ heuristics:
     path_hit: 2.0
     match_hit: 2.0
     definition_hit: 2.5
-    example_hit: 1.5
     content_hit: 1.5
     structure_multiplier: 0.75
   repo_symbol_candidate_score:
@@ -140,7 +121,6 @@ heuristics:
     path_hit: 0.0
     match_hit: 0.0
     definition_hit: 0.0
-    example_hit: 0.0
     content_hit: 0.0
     structure_multiplier: 1.0
   search_expansion_term_score:
@@ -151,25 +131,19 @@ heuristics:
     path_hit: 0.0
     match_hit: 0.0
     definition_hit: 0.0
-    example_hit: 0.0
     content_hit: 0.0
     structure_multiplier: 1.0
-  usage_bundle_symbol_candidate_score:
-    structure_multiplier: 3
   match_rerank_score:
-    cluster_bonus: 6.0
-    dir_bonus: 3.5
-    entrypoint_bonus: 1.5
+    cluster_bonus: 0.0
+    dir_bonus: 0.0
   path_relevance_score:
     min_token_bonus: 2
   file_profile_score:
     category_unit: 10
-    load_flow_bonus: 6
-    render_update_bonus: 5
-    cleanup_bonus: 4
-    events_bonus: 3
-    setup_initialization_bonus: 4
-    example_bonus: 8
+    usage_bonus: 6
+    calls_bonus: 5
+    updates_bonus: 4
+    definition_bonus: 3
   code_definition_score:
     type_declaration: 8.5
     function_declaration: 8.0

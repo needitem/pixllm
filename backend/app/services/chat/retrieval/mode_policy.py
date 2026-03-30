@@ -148,21 +148,14 @@ def assess_retrieval_quality(*, response_type: str, total_results: int, doc_resu
     code = max(0, total - docs)
     rt = str(response_type or "").strip().lower()
 
-    # Use escalation rules from rag_config
-    rules = rag_config.retrieval_escalation_rules()
-    rule = rules.get(rt, {})
-
     reason = ""
-    if total < max(3, min(max(1, int(current_top_k)), 6) - 1):
-        reason = "too_few_results"
-    elif rt == "usage_guide" and (docs < rule.get("min_docs", 2) or code < rule.get("min_code", 2)):
-        reason = "usage_guide_imbalanced_docs_code"
-    elif rt in {"api_lookup", "doc_lookup"} and docs < rule.get("min_docs", 3):
-        reason = "doc_evidence_too_low"
-    elif rt in {"code_explain", "bug_fix", "code_review"} and code < 2:
-        reason = "code_evidence_too_low"
-    elif rt == "general" and total < rule.get("min_total", 5):
-        reason = "general_evidence_too_low"
+    _ = current_top_k
+    if total == 0:
+        reason = "no_results"
+    elif rt in {"api_lookup", "doc_lookup"} and docs == 0:
+        reason = "doc_evidence_missing"
+    elif rt in {"code_explain", "bug_fix", "code_review", "usage_guide"} and code == 0:
+        reason = "code_evidence_missing"
 
     return RetrievalQuality(
         low_quality=bool(reason),
@@ -180,10 +173,8 @@ def next_refinement_mode(*, current_mode: str, response_type: str, reason: str) 
 
     if rt == "doc_lookup":
         return "docs"
-    if why == "usage_guide_imbalanced_docs_code":
-        return "code" if mode == "docs" else "docs"
-    if why == "doc_evidence_too_low":
+    if why == "doc_evidence_missing":
         return "docs"
-    if why == "code_evidence_too_low":
+    if why == "code_evidence_missing":
         return "code"
     return mode

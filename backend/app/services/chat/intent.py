@@ -52,7 +52,6 @@ _SPECIALIZED_TASK_RESPONSE_TYPES = {
     "migration": "migration",
     "refactor": "refactor",
     "troubleshooting": "troubleshooting",
-    "usage_guide": "usage_guide",
     "workspace_overlay": "code_explain",
 }
 
@@ -84,15 +83,13 @@ def _looks_code_context(text: str) -> bool:
 
 def _default_answer_style_for_response_type(response_type: str) -> str:
     rt = _normalize_str(response_type).lower()
-    if rt == "usage_guide":
-        return "tutorial"
     if rt == "doc_lookup":
         return "reference"
     if rt == "compare":
         return "comparison"
     if rt in {"bug_fix", "troubleshooting"}:
         return "troubleshooting"
-    return "explanation" if rt in {"code_explain", "code_generate", "refactor"} else "default"
+    return "explanation" if rt in {"code_explain", "code_generate", "refactor", "usage_guide", "api_lookup"} else "default"
 
 
 def _coarse_bucket_from_signals(
@@ -183,7 +180,7 @@ def _response_type_for_bucket(
     elif bucket == "change_code":
         candidate = "code_generate"
     else:
-        candidate = "code_explain" if bucket == "read_code" and _looks_code_context(message) else "general"
+        candidate = "general"
 
     return candidate if candidate in allowed_response_types else "general"
 
