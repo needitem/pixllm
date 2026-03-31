@@ -20,6 +20,7 @@ from .workspace_graph import (
     extract_workspace_graph,
     render_workspace_graph_answer,
     workspace_graph_has_content,
+    workspace_graph_has_grounded_focus,
     workspace_graph_is_ready_for_answer,
 )
 from ..tools.access import resolve_tool_user_context
@@ -44,9 +45,10 @@ def _should_render_workspace_graph_answer(
         return False
     if not workspace_graph_has_content(workspace_graph):
         return False
-    return bool(
-        workspace_graph_is_ready_for_answer(workspace_graph, grounded_overlay_paths).get("passed")
-    )
+    gate = workspace_graph_is_ready_for_answer(workspace_graph, grounded_overlay_paths)
+    if bool(gate.get("passed")):
+        return True
+    return bool(workspace_graph_has_grounded_focus(workspace_graph, grounded_overlay_paths))
 
 
 async def maybe_await_callback(callback, *args, **kwargs) -> None:
@@ -490,6 +492,7 @@ async def finalize_react_payload(
             prepared.clean_message,
             workspace_graph,
             grounded_paths=grounded_overlay_paths,
+            local_overlay=local_overlay,
         )
         if rendered_answer:
             answer = rendered_answer

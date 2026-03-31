@@ -43,6 +43,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.services.chat.intent import classify_intent_hybrid
 from app.services.chat import results as chat_results
+from app.services.chat import workspace_graph as chat_workspace_graph
 from app.services.chat.layered_merge import build_local_overlay_evidence
 from app.services.chat.planning import infer_expected_artifacts
 from app.services.chat.question_contract import build_question_contract, evaluate_question_contract
@@ -642,6 +643,7 @@ def test_workspace_graph_render_gate_uses_flow_contract_not_response_type(monkey
         "workspace_graph_is_ready_for_answer",
         lambda graph, grounded_paths: {"passed": True},
     )
+    monkeypatch.setattr(chat_results, "workspace_graph_has_grounded_focus", lambda graph, grounded_paths: True)
 
     assert chat_results._should_render_workspace_graph_answer(
         question_contract={"kind": "code_flow_explanation"},
@@ -653,6 +655,139 @@ def test_workspace_graph_render_gate_uses_flow_contract_not_response_type(monkey
         workspace_graph={"focus_file": "MATR/ViewModels/UserControls/ImageMatching/Vm_ImageMatching_Heterogeneous.cs"},
         grounded_overlay_paths=["MATR/ViewModels/UserControls/ImageMatching/Vm_ImageMatching_Heterogeneous.cs"],
     ) is False
+
+
+def test_workspace_graph_render_gate_allows_grounded_partial_flow(monkeypatch) -> None:
+    monkeypatch.setattr(chat_results, "workspace_graph_has_content", lambda graph: True)
+    monkeypatch.setattr(
+        chat_results,
+        "workspace_graph_is_ready_for_answer",
+        lambda graph, grounded_paths: {"passed": False, "issues": ["open_frontier"]},
+    )
+    monkeypatch.setattr(chat_results, "workspace_graph_has_grounded_focus", lambda graph, grounded_paths: True)
+
+    assert chat_results._should_render_workspace_graph_answer(
+        question_contract={"kind": "code_flow_explanation"},
+        workspace_graph={"focus_file": "MATR/ViewModels/UserControls/ImageMatching/Vm_ImageMatching_Heterogeneous.cs"},
+        grounded_overlay_paths=["MATR/ViewModels/UserControls/ImageMatching/Vm_ImageMatching_Heterogeneous.cs"],
+    ) is True
+
+
+def test_render_workspace_graph_answer_uses_anchor_span_and_downstream_calls() -> None:
+    graph = {
+        "focus_file": "MATR/ViewModels/UserControls/ImageMatching/Vm_ImageMatching_Heterogeneous.cs",
+        "core_files": ["MATR/ViewModels/UserControls/ImageMatching/Vm_ImageMatching_Heterogeneous.cs"],
+        "supporting_files": [
+            "MATR/Views/UserControls/ImageMatching/UC_ImageMatching_Heterogeneous.xaml.cs",
+            "DBManager/DBConnectManager.cs",
+        ],
+        "target_symbol": "SelectMatchingData",
+        "graph_state": {
+            "focus_path": "MATR/ViewModels/UserControls/ImageMatching/Vm_ImageMatching_Heterogeneous.cs",
+            "chain": [
+                {
+                    "relation": "anchor",
+                    "symbol": "SelectMatchingData",
+                    "path": "MATR/ViewModels/UserControls/ImageMatching/Vm_ImageMatching_Heterogeneous.cs",
+                    "line": 299,
+                    "covered": True,
+                    "discovered": True,
+                    "search_completed": True,
+                    "base_symbol": "",
+                },
+                {
+                    "relation": "related_owner",
+                    "symbol": "MatchList_MouseDoubleClick",
+                    "path": "MATR/Views/UserControls/ImageMatching/UC_ImageMatching_Heterogeneous.xaml.cs",
+                    "line": 94,
+                    "covered": True,
+                    "discovered": True,
+                    "search_completed": True,
+                    "base_symbol": "SelectMatchingData",
+                },
+                {
+                    "relation": "callee_definition",
+                    "symbol": "LoadReferenceImage",
+                    "path": "MATR/ViewModels/UserControls/ImageMatching/Vm_ImageMatching_Heterogeneous.cs",
+                    "line": 3185,
+                    "covered": True,
+                    "discovered": True,
+                    "search_completed": True,
+                    "base_symbol": "SelectMatchingData",
+                },
+                {
+                    "relation": "callee_definition",
+                    "symbol": "LoadLastResultReferenceImagePath",
+                    "path": "MATR/ViewModels/UserControls/ImageMatching/Vm_ImageMatching_Heterogeneous.cs",
+                    "line": 4940,
+                    "covered": True,
+                    "discovered": True,
+                    "search_completed": True,
+                    "base_symbol": "SelectMatchingData",
+                },
+                {
+                    "relation": "callee_definition",
+                    "symbol": "SearchMatchingResultForPair",
+                    "path": "DBManager/DBConnectManager.cs",
+                    "line": 1377,
+                    "covered": True,
+                    "discovered": True,
+                    "search_completed": True,
+                    "base_symbol": "LoadLastResultReferenceImagePath",
+                },
+            ],
+            "frontiers": [
+                {
+                    "relation": "callee_definition",
+                    "symbol": "HandleInitialState",
+                    "path": "",
+                    "line": 0,
+                    "covered": False,
+                    "discovered": True,
+                    "search_completed": False,
+                    "base_symbol": "SelectMatchingData",
+                    "reason": "definition_not_found",
+                }
+            ],
+        },
+    }
+    local_overlay = {
+        "selected_file_path": "MATR/ViewModels/UserControls/ImageMatching/Vm_ImageMatching_Heterogeneous.cs",
+        "selected_file_content": "",
+        "local_trace": [
+            {
+                "tool": "read_symbol_span",
+                "observation": {
+                    "path": "MATR/ViewModels/UserControls/ImageMatching/Vm_ImageMatching_Heterogeneous.cs",
+                    "lineRange": "299-334",
+                    "content": (
+                        "public void SelectMatchingData(){ "
+                        "HandleInitialState(); LoadTargetImage(); LoadReferenceImage(); "
+                        "IsTargerAndRefernceImageUsed(); LoadLastResultReferenceImagePath(); }"
+                    ),
+                },
+            }
+        ],
+    }
+
+    answer = chat_workspace_graph.render_workspace_graph_answer(
+        "영상 정합 흐름 정리해줘.",
+        graph,
+        grounded_paths=[
+            "MATR/ViewModels/UserControls/ImageMatching/Vm_ImageMatching_Heterogeneous.cs",
+            "MATR/Views/UserControls/ImageMatching/UC_ImageMatching_Heterogeneous.xaml.cs",
+            "DBManager/DBConnectManager.cs",
+        ],
+        local_overlay=local_overlay,
+    )
+
+    assert "확인된 진입점" in answer
+    assert "SelectMatchingData()" in answer
+    assert "MatchList_MouseDoubleClick()" in answer
+    assert "LoadReferenceImage()" in answer
+    assert "LoadLastResultReferenceImagePath()" in answer
+    assert "SearchMatchingResultForPair()" in answer
+    assert "아직 열린 frontier" in answer
 
 
 def test_tool_mode_hint_tells_model_to_use_client_grounded_overlay_reads() -> None:

@@ -1,6 +1,25 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, Iterable, List
+
+
+_FLOW_CALL_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(")
+_FLOW_CALL_KEYWORDS = {
+    "if",
+    "for",
+    "foreach",
+    "while",
+    "switch",
+    "catch",
+    "using",
+    "nameof",
+    "typeof",
+    "return",
+    "new",
+    "base",
+    "this",
+}
 
 
 def _normalize_path(value: Any) -> str:
@@ -402,11 +421,107 @@ def _edge_sentence(edge: Dict[str, Any]) -> str:
     return f"`{source}` -> `{target}`"
 
 
+def _uses_korean(text: str) -> bool:
+    return bool(re.search(r"[\uac00-\ud7a3]", str(text or "")))
+
+
+def _find_anchor_window(
+    local_overlay: Dict[str, Any] | None,
+    *,
+    focus_path: str,
+    target_symbol: str,
+) -> Dict[str, Any]:
+    windows = collect_grounded_overlay_windows(local_overlay)
+    normalized_focus = _normalize_path(focus_path)
+    normalized_target = str(target_symbol or "").strip()
+    for window in windows:
+        if _normalize_path(window.get("path")) != normalized_focus:
+            continue
+        content = str(window.get("content") or "")
+        if normalized_target and re.search(rf"\b{re.escape(normalized_target)}\s*\(", content):
+            return window
+    for window in windows:
+        if _normalize_path(window.get("path")) == normalized_focus:
+            return window
+    return {}
+
+
+def _extract_anchor_calls(content: str, *, anchor_symbol: str = "") -> List[str]:
+    out: List[str] = []
+    seen = set()
+    anchor_lower = str(anchor_symbol or "").strip().lower()
+    for token in _FLOW_CALL_RE.findall(str(content or "")):
+        symbol = str(token or "").strip()
+        lowered = symbol.lower()
+        if not symbol or not symbol[:1].isupper():
+            continue
+        if lowered in _FLOW_CALL_KEYWORDS or lowered == anchor_lower:
+            continue
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        out.append(symbol)
+    return out
+
+
+def _chain_nodes_for_base_symbols(
+    chain: List[Dict[str, Any]],
+    *,
+    relation: str,
+    base_symbols: Iterable[str],
+) -> List[Dict[str, Any]]:
+    normalized_bases = {str(item or "").strip().lower() for item in list(base_symbols or []) if str(item or "").strip()}
+    out: List[Dict[str, Any]] = []
+    seen = set()
+    for node in chain:
+        if str(node.get("relation") or "").strip().lower() != relation:
+            continue
+        if str(node.get("base_symbol") or "").strip().lower() not in normalized_bases:
+            continue
+        symbol = str(node.get("symbol") or "").strip()
+        path = str(node.get("path") or "").strip()
+        key = f"{path.lower()}::{symbol.lower()}"
+        if not symbol or key in seen:
+            continue
+        seen.add(key)
+        out.append(node)
+    return out
+
+
+def _frontier_nodes_for_base_symbols(
+    frontiers: List[Dict[str, Any]],
+    *,
+    base_symbols: Iterable[str],
+) -> List[Dict[str, Any]]:
+    normalized_bases = {str(item or "").strip().lower() for item in list(base_symbols or []) if str(item or "").strip()}
+    out: List[Dict[str, Any]] = []
+    seen = set()
+    for node in frontiers:
+        if str(node.get("base_symbol") or "").strip().lower() not in normalized_bases:
+            continue
+        symbol = str(node.get("symbol") or "").strip()
+        path = str(node.get("path") or "").strip()
+        key = f"{path.lower()}::{symbol.lower()}"
+        if not symbol or key in seen:
+            continue
+        seen.add(key)
+        out.append(node)
+    return out
+
+
+def _symbol_ref(symbol: str, path: str = "") -> str:
+    label = f"`{symbol}()`" if symbol else "`unknown`"
+    if path:
+        return f"{label} in `{path}`"
+    return label
+
+
 def render_workspace_graph_answer(
     question: str,
     graph: Dict[str, Any],
     *,
     grounded_paths: List[str] | None = None,
+    local_overlay: Dict[str, Any] | None = None,
 ) -> str:
     filtered_graph = _filter_workspace_graph(graph, grounded_paths)
     if grounded_paths is not None and not workspace_graph_has_grounded_focus(graph, grounded_paths):
@@ -421,45 +536,146 @@ def render_workspace_graph_answer(
     core_files = _ordered_unique(filtered_graph.get("core_files") or [])
     supporting_files = _ordered_unique(filtered_graph.get("supporting_files") or [])
     target_symbol = str(filtered_graph.get("target_symbol") or graph_state.get("anchor_symbol") or "").strip()
+    is_korean = _uses_korean(question)
+    caller_nodes = [
+        node
+        for node in chain
+        if str(node.get("relation") or "").strip().lower() in {"caller_owner", "related_owner"}
+        and str(node.get("base_symbol") or "").strip().lower() == target_symbol.lower()
+    ]
+    anchor_window = _find_anchor_window(local_overlay, focus_path=focus_path, target_symbol=target_symbol)
+    direct_call_names = _extract_anchor_calls(str(anchor_window.get("content") or ""), anchor_symbol=target_symbol)
+    direct_callees = _chain_nodes_for_base_symbols(chain, relation="callee_definition", base_symbols=[target_symbol])
+    direct_frontiers = _frontier_nodes_for_base_symbols(frontiers, base_symbols=[target_symbol])
+    direct_callee_map = {str(node.get("symbol") or "").strip().lower(): node for node in direct_callees}
+    direct_frontier_map = {str(node.get("symbol") or "").strip().lower(): node for node in direct_frontiers}
 
     title = str(question or "").strip() or "Workspace Graph"
     lines: List[str] = [f"## {title}", ""]
 
-    if focus_path:
-        lines.append(f"Primary grounded focus: `{focus_path}`")
-    if target_symbol:
-        lines.append(f"Current anchor symbol: `{target_symbol}`")
     if focus_path or target_symbol:
+        lines.append("### 확인된 진입점" if is_korean else "### Confirmed Entry Point")
+        if focus_path and target_symbol:
+            lines.append(
+                f"- `{focus_path}`의 `{target_symbol}()`가 현재 grounded anchor입니다."
+                if is_korean else
+                f"- The current grounded anchor is `{target_symbol}()` in `{focus_path}`."
+            )
+        elif focus_path:
+            lines.append(f"- Primary grounded focus: `{focus_path}`")
+        elif target_symbol:
+            lines.append(f"- Current anchor symbol: `{target_symbol}`")
+        if caller_nodes:
+            caller_refs = ", ".join(
+                _symbol_ref(str(node.get("symbol") or "").strip(), str(node.get("path") or "").strip())
+                for node in caller_nodes[:4]
+            )
+            lines.append(
+                f"- 호출 측에서는 {caller_refs} 에서 이 흐름으로 들어옵니다."
+                if is_korean else
+                f"- Confirmed callers into this flow include {caller_refs}."
+            )
         lines.append("")
 
-    if chain:
-        lines.append("### Evidence Chain")
-        for index, node in enumerate(chain[:8]):
-            state_label = "covered" if node.get("covered") else "open"
-            lines.append(f"- {_relation_label(node, index)}: {_node_ref(node)} ({state_label})")
+    direct_flow_lines: List[str] = []
+    seen_symbols = set()
+    for symbol in direct_call_names:
+        lowered = symbol.lower()
+        if lowered in seen_symbols:
+            continue
+        seen_symbols.add(lowered)
+        downstream_nodes = _chain_nodes_for_base_symbols(chain, relation="callee_definition", base_symbols=[symbol])
+        if lowered in direct_callee_map:
+            callee_node = direct_callee_map[lowered]
+            if downstream_nodes:
+                downstream_refs = ", ".join(
+                    _symbol_ref(str(node.get("symbol") or "").strip(), str(node.get("path") or "").strip())
+                    for node in downstream_nodes[:3]
+                )
+                direct_flow_lines.append(
+                    f"- `{target_symbol}()` -> {_symbol_ref(symbol, str(callee_node.get('path') or '').strip())}; 내부에서 {downstream_refs} 까지 확인됨"
+                    if is_korean else
+                    f"- `{target_symbol}()` -> {_symbol_ref(symbol, str(callee_node.get('path') or '').strip())}; downstream grounded calls include {downstream_refs}"
+                )
+            else:
+                direct_flow_lines.append(
+                    f"- `{target_symbol}()` -> {_symbol_ref(symbol, str(callee_node.get('path') or '').strip())}"
+                )
+        elif lowered in direct_frontier_map:
+            direct_flow_lines.append(
+                f"- `{target_symbol}()` -> `{symbol}()`; 정의 추적은 아직 열려 있음"
+                if is_korean else
+                f"- `{target_symbol}()` -> `{symbol}()`; definition tracking is still open"
+            )
+        else:
+            direct_flow_lines.append(
+                f"- `{target_symbol}()` -> `{symbol}()`; anchor span에서 호출만 직접 확인됨"
+                if is_korean else
+                f"- `{target_symbol}()` -> `{symbol}()`; directly observed in the anchor span"
+            )
+    if not direct_flow_lines:
+        for node in direct_callees[:6]:
+            symbol = str(node.get("symbol") or "").strip()
+            if not symbol:
+                continue
+            downstream_nodes = _chain_nodes_for_base_symbols(chain, relation="callee_definition", base_symbols=[symbol])
+            if downstream_nodes:
+                downstream_refs = ", ".join(
+                    _symbol_ref(str(item.get("symbol") or "").strip(), str(item.get("path") or "").strip())
+                    for item in downstream_nodes[:3]
+                )
+                direct_flow_lines.append(
+                    f"- `{target_symbol}()` -> {_symbol_ref(symbol, str(node.get('path') or '').strip())}; 내부에서 {downstream_refs} 까지 확인됨"
+                    if is_korean else
+                    f"- `{target_symbol}()` -> {_symbol_ref(symbol, str(node.get('path') or '').strip())}; downstream grounded calls include {downstream_refs}"
+                )
+            else:
+                direct_flow_lines.append(
+                    f"- `{target_symbol}()` -> {_symbol_ref(symbol, str(node.get('path') or '').strip())}"
+                )
+    if direct_flow_lines:
+        lines.append("### 직접 확인된 호출 흐름" if is_korean else "### Directly Grounded Flow")
+        lines.extend(direct_flow_lines[:8])
+        lines.append("")
+
+    downstream_roots = [str(node.get("symbol") or "").strip() for node in direct_callees[:6] if str(node.get("symbol") or "").strip()]
+    downstream_nodes = _chain_nodes_for_base_symbols(chain, relation="callee_definition", base_symbols=downstream_roots)
+    if downstream_nodes:
+        lines.append("### 확인된 downstream 효과" if is_korean else "### Confirmed Downstream Effects")
+        for node in downstream_nodes[:6]:
+            base_symbol = str(node.get("base_symbol") or "").strip()
+            lines.append(
+                f"- `{base_symbol}()` 내부에서 {_symbol_ref(str(node.get('symbol') or '').strip(), str(node.get('path') or '').strip())} 까지 이어집니다."
+                if is_korean else
+                f"- Inside `{base_symbol}()`, the flow continues to {_symbol_ref(str(node.get('symbol') or '').strip(), str(node.get('path') or '').strip())}."
+            )
         lines.append("")
 
     if frontiers:
-        lines.append("### Open Frontier")
-        for node in frontiers[:4]:
-            lines.append(f"- {_node_ref(node)}")
-        lines.append("")
-
-    relation_lines = [
-        _edge_sentence(edge)
-        for edge in list(filtered_graph.get("edges") or [])[:8]
-        if isinstance(edge, dict)
-    ]
-    relation_lines = [line for line in relation_lines if line]
-    if relation_lines:
-        lines.append("### Grounded Relations")
-        for line in relation_lines:
-            lines.append(f"- {line}")
+        lines.append("### 아직 열린 frontier" if is_korean else "### Remaining Open Frontier")
+        for node in frontiers[:5]:
+            base_symbol = str(node.get("base_symbol") or "").strip()
+            reason = str(node.get("reason") or "").strip()
+            summary = _symbol_ref(str(node.get("symbol") or "").strip(), str(node.get("path") or "").strip())
+            if base_symbol and reason:
+                lines.append(
+                    f"- `{base_symbol}()` 기준으로 {summary} 추적이 남아 있습니다. 사유: `{reason}`"
+                    if is_korean else
+                    f"- From `{base_symbol}()`, tracking to {summary} is still open. Reason: `{reason}`"
+                )
+            elif base_symbol:
+                lines.append(
+                    f"- `{base_symbol}()` 기준으로 {summary} 추적이 남아 있습니다."
+                    if is_korean else
+                    f"- From `{base_symbol}()`, tracking to {summary} is still open."
+                )
+            else:
+                lines.append(f"- {summary}")
         lines.append("")
 
     related_paths = _ordered_unique(([focus_path] if focus_path else []) + core_files + supporting_files)
     if related_paths:
-        lines.append("### Grounded Files")
+        lines.append("### 근거 파일" if is_korean else "### Grounded Files")
         for path in related_paths[:6]:
             lines.append(f"- `{path}`")
 
