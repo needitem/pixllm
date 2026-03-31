@@ -532,3 +532,47 @@ def test_strip_fenced_code_blocks_removes_unproven_block() -> None:
     assert "```" not in stripped
     assert "GenerateGroundTruth 호출" in stripped
     assert "이후 결과를 갱신합니다." in stripped
+
+
+def test_local_overlay_context_prioritizes_grounded_local_reads() -> None:
+    context = react_engine._build_local_overlay_context(
+        [
+            {
+                "kind": "local_summary",
+                "path": "workspace",
+                "text": "summary first",
+            },
+            {
+                "kind": "local_tool_step",
+                "tool": "read_symbol_span",
+                "path": "MATR/ViewModels/UserControls/ImageMatching/Vm_ImageMatching_Heterogeneous.cs",
+                "text": "void GenerateGroundTruth() { UpdateNoGeoInfo(); }",
+                "round": 3,
+            },
+        ],
+        grounding_report={"direct_paths": ["MATR/ViewModels/UserControls/ImageMatching/Vm_ImageMatching_Heterogeneous.cs"]},
+    )
+
+    assert "grounded_local_read" in context
+    assert "GenerateGroundTruth" in context
+    assert "Do not say the local workspace is inaccessible" in context
+
+
+def test_tool_mode_hint_tells_model_to_use_client_grounded_overlay_reads() -> None:
+    hint = react_engine._build_tool_mode_hint(
+        {
+            "preferred_tool_mode": "code",
+            "tool_priority": ["find_symbol", "grep", "read"],
+            "agent_lane": "general_assistant_lane",
+            "tool_strategy": "frontier_search_loop_with_overlay_bootstrap",
+            "answer_style": "default",
+            "question_contract": {
+                "kind": "code_flow_explanation",
+                "coverage_axes": [{"id": "entry_or_caller", "label": "entry or caller"}],
+            },
+        },
+        workspace_overlay_present=True,
+    )
+
+    assert "grounded local code excerpts" in hint
+    assert "Do not say the local workspace is inaccessible" in hint

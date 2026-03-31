@@ -203,6 +203,8 @@ def _build_tool_mode_hint(
             "The local workspace overlay is a bootstrap for the current frontier, not a stopping condition by itself.\n"
             f"Use tools in this order when possible: {tool_priority}.\n"
             "Prefer grounded local reads first.\n"
+            "The client overlay already includes grounded local code excerpts. Use those local read spans directly in the answer.\n"
+            "Do not say the local workspace is inaccessible or unverifiable when the client overlay already provides the relevant code content.\n"
             "Use server code tools to resolve unresolved engine or framework symbols exposed by the local frontier.\n"
             f"{contract_hint}"
             "Treat server search hits as supporting evidence until you confirm them with grounded reads.\n"
@@ -232,7 +234,7 @@ def _build_tool_mode_hint(
         f"Use tools in this order when possible: {tool_priority}.\n"
         f"{repo_hint}\n"
         + (
-            "Treat the attached local workspace overlay as the primary source of truth. Answer from the local workspace evidence first. The client overlay paths are evidence labels, not server-readable repository paths. Never pass a client overlay path directly to server read tools unless that exact path was returned by a server tool result in this run. Use server code tools only to resolve engine or framework symbols that are explicitly referenced by the local workspace evidence. Do not run broad baseline searches for generic local-domain keywords.\n"
+            "Treat the attached local workspace overlay as the primary source of truth. Answer from the local workspace evidence first. The client overlay paths are evidence labels, not server-readable repository paths, but the attached local read contents are already grounded evidence. Never pass a client overlay path directly to server read tools unless that exact path was returned by a server tool result in this run. Use server code tools only to resolve engine or framework symbols that are explicitly referenced by the local workspace evidence. Do not run broad baseline searches for generic local-domain keywords. Do not claim that the local workspace is inaccessible when the overlay already includes relevant file contents.\n"
             if workspace_overlay_present
             else ""
         )
@@ -272,6 +274,24 @@ def _build_history_messages(
     return messages
 
 
+def _overlay_context_priority(item: Dict[str, Any]) -> tuple[int, int]:
+    kind = str(item.get("kind") or "").strip().lower()
+    tool = str(item.get("tool") or "").strip().lower()
+    if kind == "local_tool_step" and tool in {"read_symbol_span", "symbol_neighborhood", "read_file"}:
+        return (0, 0)
+    if kind == "selected_file":
+        return (0, 1)
+    if kind == "local_tool_step":
+        return (1, 0)
+    if kind == "workspace_graph":
+        return (2, 0)
+    if kind == "local_summary":
+        return (2, 1)
+    if kind == "local_context":
+        return (2, 2)
+    return (3, 0)
+
+
 def _build_local_overlay_context(
     local_overlay_items: List[Dict[str, Any]],
     *,
@@ -279,8 +299,23 @@ def _build_local_overlay_context(
 ) -> str:
     if not local_overlay_items:
         return ""
-    parts = ["[Local Workspace Evidence]"]
-    for item in local_overlay_items[:4]:
+    parts = [
+        "[Local Workspace Evidence]",
+        "[Overlay Evidence Guidance]\n"
+        "The desktop client already read the local workspace spans below and sent their contents here."
+        " Treat those excerpts as grounded evidence for the final answer even if the server cannot reopen the same paths."
+        " Do not say the local workspace is inaccessible when these client-grounded reads are present.",
+    ]
+    ordered_items = sorted(
+        list(local_overlay_items or []),
+        key=lambda item: (
+            *_overlay_context_priority(item),
+            int(item.get("round") or 0),
+        ),
+    )
+    grounded_read_count = 0
+    supporting_count = 0
+    for item in ordered_items:
         kind = str(item.get("kind") or "evidence")
         if kind in {"workspace_status", "workspace_diff"}:
             continue
@@ -289,7 +324,22 @@ def _build_local_overlay_context(
         if not text:
             continue
         normalized_text = " ".join(text.split())
-        parts.append(f"- kind={kind} path={path}\n{normalized_text[:420]}")
+        tool = str(item.get("tool") or "").strip().lower()
+        is_grounded_read = kind == "selected_file" or (kind == "local_tool_step" and tool in {"read_file", "read_symbol_span", "symbol_neighborhood"})
+        if is_grounded_read:
+            if grounded_read_count >= 5:
+                continue
+            label = tool or kind
+            parts.append(f"- grounded_local_read tool={label} path={path}\n{normalized_text[:420]}")
+            grounded_read_count += 1
+            continue
+        if supporting_count >= 3:
+            continue
+        label = tool or kind
+        parts.append(f"- local_supporting_evidence kind={label} path={path}\n{normalized_text[:320]}")
+        supporting_count += 1
+        if grounded_read_count >= 5 and supporting_count >= 3:
+            break
     report = dict(grounding_report or {})
     confirmed_paths = [str(item).strip() for item in list(report.get("direct_paths") or []) if str(item).strip()]
     if confirmed_paths:
@@ -329,17 +379,23 @@ def _build_overlay_bootstrap_context(bootstrap: Dict[str, Any] | None) -> str:
     if primary_reads:
         parts.append("[Primary Reads]")
         for item in primary_reads[:4]:
-            parts.append(
-                "- "
-                + " @ ".join(
-                    value
-                    for value in [
-                        str(item.get("path") or "").strip(),
-                        str(item.get("line_range") or "").strip(),
-                    ]
-                    if value
-                )
+            header = " @ ".join(
+                value
+                for value in [
+                    str(item.get("path") or "").strip(),
+                    str(item.get("line_range") or "").strip(),
+                ]
+                if value
             )
+            text = " ".join(str(item.get("content") or "").split()).strip()
+            if text:
+                parts.append(f"- {header}\n{text[:320]}")
+            else:
+                parts.append(f"- {header}")
+        parts.append(
+            "[Primary Read Guidance]\n"
+            "These primary reads are grounded client-side local code excerpts. Use them directly in the final answer."
+        )
     open_symbols = [str(item).strip() for item in list(payload.get("open_frontier_symbols") or []) if str(item).strip()]
     if open_symbols:
         parts.append("[Open Frontier Symbols]")
