@@ -239,15 +239,23 @@ def _should_force_overlay_review_answer(
     sources: List[Dict[str, Any]] | None,
     answer: str = "",
 ) -> bool:
+    normalized_contract = normalize_question_contract(question_contract)
+    if str(normalized_contract.get("kind") or "").strip().lower() != "code_review":
+        return False
+    overlay = dict(local_overlay or {})
+    if not bool(overlay.get("present")):
+        return False
+    if not _overlay_review_evidence_present(overlay):
+        return False
+    if not _overlay_review_has_server_direct_reads(results):
+        return not _answer_matches_review_contract(answer)
     if not _should_render_overlay_review_fallback(
-        question_contract=question_contract,
-        local_overlay=local_overlay,
+        question_contract=normalized_contract,
+        local_overlay=overlay,
         results=results,
         sources=sources,
     ):
         return False
-    if not _overlay_review_has_server_direct_reads(results):
-        return True
     return not _answer_matches_review_contract(answer)
 
 
