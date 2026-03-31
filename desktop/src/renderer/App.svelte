@@ -528,11 +528,9 @@
           : {}
       };
     }
-    const includeWorkspaceChanges = /recent|latest|changed|modified|edit|edited|patch|diff|status|regression|변경|수정|패치|차이|diff|status|최근/i.test(
-      String(prompt || '').trim()
-    );
     const overlaySelectedFilePath = selectedFilePath || localPrimaryFilePath;
     const overlaySelectedFileContent = selectedFileContent || localPrimaryFileContent;
+    const workspaceChangePaths = extractChangedPaths(`${workspaceStatus || ''}\n${workspaceDiff || ''}`);
 
     const overlayAttachment = {
       kind: 'local_workspace_overlay',
@@ -543,8 +541,9 @@
         workspace_path: settings.workspacePath,
         selected_file_path: overlaySelectedFilePath || '',
         selected_file_content: overlaySelectedFileContent ? overlaySelectedFileContent.slice(0, 8000) : '',
-        workspace_status: includeWorkspaceChanges && workspaceStatus ? workspaceStatus.slice(0, 4000) : '',
-        workspace_diff: includeWorkspaceChanges && workspaceDiff ? workspaceDiff.slice(0, 6000) : '',
+        workspace_status: workspaceStatus ? workspaceStatus.slice(0, 4000) : '',
+        workspace_diff: workspaceDiff ? workspaceDiff.slice(0, 6000) : '',
+        workspace_change_paths: workspaceChangePaths.slice(0, 64),
         local_summary: localToolSummary || '',
         local_context_text: localToolContext || '',
         local_error: localToolError || '',

@@ -8,7 +8,7 @@ def _intent_family(response_type: str, question_contract: Dict[str, Any]) -> str
     contract_mode = str(dict(question_contract or {}).get("retrieval_mode") or "").strip().lower()
     if contract_kind == "doc_reference" or contract_mode == "docs":
         return "document"
-    if contract_kind in {"code_change", "code_flow_explanation", "code_read"} or contract_mode in {"code", "hybrid"}:
+    if contract_kind in {"code_change", "code_flow_explanation", "code_read", "code_review", "failure_analysis", "code_compare"} or contract_mode in {"code", "hybrid"}:
         return "code"
     return "general"
 
@@ -84,6 +84,8 @@ def _primary_agent(question_contract: Dict[str, Any], response_type: str) -> str
         return "general"
     if contract_kind == "code_change":
         return "build"
+    if contract_kind in {"code_review", "failure_analysis", "code_compare"}:
+        return "build"
     if rt in {"design_review", "compare", "migration"}:
         return "plan"
     return "build" if contract_kind in {"code_flow_explanation", "code_read"} else "general"
@@ -101,7 +103,7 @@ def _skillset(response_type: str, question_contract: Dict[str, Any]) -> List[str
     base = ["korean", "grounded", "no-meta"]
     contract_kind = str(dict(question_contract or {}).get("kind") or "").strip().lower()
     rt = str(response_type or "").strip().lower()
-    if contract_kind in {"code_change", "code_flow_explanation"} or rt in {"bug_fix", "troubleshooting", "code_review", "migration"}:
+    if contract_kind in {"code_change", "code_flow_explanation", "code_review", "failure_analysis", "code_compare"} or rt in {"bug_fix", "troubleshooting", "code_review", "migration", "compare"}:
         return [*base, "actionable"]
     return base
 

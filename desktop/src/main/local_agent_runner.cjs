@@ -74,63 +74,6 @@ const STRING_LITERAL_RE = /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g;
 const EXECUTABLE_FLOW_PATH_RE = /\.(?:cs|vb|c|cc|cpp|cxx|h|hh|hpp|hxx|py|js|cjs|mjs|ts|tsx|jsx)$/i;
 const MARKUP_FLOW_PATH_RE = /\.(?:xaml|xml|resx|json|yaml|yml|toml|ini|config|txt|md|rst|html|htm|css|scss|less)$/i;
 const PROJECT_METADATA_PATH_RE = /\.(?:sln|csproj|vcxproj|vbproj|fsproj|props|targets)$/i;
-const KOREAN_QUERY_NOISE_TOKENS = new Set([
-  '\uC124\uBA85',
-  '\uC124\uBA85\uD574\uC918',
-  '\uC815\uB9AC',
-  '\uC815\uB9AC\uD574\uC918',
-  '\uC54C\uB824\uC918',
-  '\uBCF4\uC5EC\uC918',
-  '\uADF8\uB0E5',
-  '\uC5B4\uB5BB\uAC8C',
-  '\uBB50\uC57C',
-  '\uB54C\uBB38',
-  '\uAE30\uC900',
-  '\uC911\uC2EC',
-  '\uAD00\uB828',
-  '\uB300\uD574',
-]);
-const FLOW_QUESTION_RE = /\b(flow|path|caller|callee|call chain|workflow|pipeline|entry|sink)\b|(\uD750\uB984|\uACFC\uC815|\uD638\uCD9C|\uACBD\uB85C|\uC5B4\uB514|\uC9C4\uC785|\uCD9C\uAD6C)/i;
-const FLOW_META_TERMS = new Set([
-  'flow',
-  'path',
-  'caller',
-  'callee',
-  'workflow',
-  'pipeline',
-  'entry',
-  'sink',
-  'code',
-  'explain',
-  'analysis',
-  'describe',
-  '\uD750\uB984',
-  '\uACFC\uC815',
-  '\uD638\uCD9C',
-  '\uACBD\uB85C',
-  '\uC124\uBA85',
-  '\uBD84\uC11D',
-]);
-const BROAD_ANCHOR_TERMS = new Set([
-  'image',
-  'images',
-  'video',
-  'file',
-  'files',
-  'data',
-  'result',
-  'results',
-  'view',
-  'screen',
-  'ui',
-  '\uC601\uC0C1',
-  '\uC774\uBBF8\uC9C0',
-  '\uD654\uBA74',
-  '\uD30C\uC77C',
-  '\uB370\uC774\uD130',
-  '\uACB0\uACFC',
-  '\uC815\uBCF4',
-]);
 
 function pathBasename(value) {
   const normalized = normalizePath(value);
@@ -187,7 +130,7 @@ function extractNativeQuestionTerms(question) {
     const token = String(raw || '')
       .trim()
       .replace(/(?:\uD574\uC918|\uD574\uC694|\uD569\uB2C8\uB2E4)$/u, '');
-    if (!token || KOREAN_QUERY_NOISE_TOKENS.has(token)) continue;
+    if (!token) continue;
     const score = token.length;
     const current = weights.get(token) || 0;
     weights.set(token, Math.max(current, score));
@@ -241,41 +184,45 @@ function expandQuestionTermVariants(terms = []) {
     .map(([token]) => token);
 }
 
-function isFlowQuestion(question) {
-  return FLOW_QUESTION_RE.test(String(question || '').trim());
-}
-
 function questionTermPriority(term) {
   const token = String(term || '').trim();
   if (!token) {
     return -100;
   }
-  let score = token.length;
+  let score = token.length + identifierStructureScore(token);
   if (/[\uAC00-\uD7A3]/.test(token)) score += 2;
-  if (/[A-Z_]/.test(token)) score += 12;
-  if (splitSymbolParts(token).length >= 2) score += 8;
-  if (FLOW_META_TERMS.has(token.toLowerCase())) score -= 24;
-  if (BROAD_ANCHOR_TERMS.has(token.toLowerCase())) score -= 10;
+  if (/[A-Z_]/.test(token)) score += 8;
+  if (splitSymbolParts(token).length >= 2) score += 6;
   return score;
 }
 
 function isBroadAnchorTerm(term) {
-  const token = String(term || '').trim().toLowerCase();
+  const token = String(term || '').trim();
   if (!token) return true;
-  return FLOW_META_TERMS.has(token) || BROAD_ANCHOR_TERMS.has(token);
+  if (/[\uAC00-\uD7A3]/.test(token)) return token.length < 2;
+  return identifierStructureScore(token) <= 0 && token.length < 5;
 }
 
 function hasSpecificQuestionTerms(questionTerms = []) {
   for (const term of Array.isArray(questionTerms) ? questionTerms : []) {
     const raw = String(term || '').trim();
-    const lowered = raw.toLowerCase();
-    if (!lowered || isBroadAnchorTerm(lowered)) continue;
+    if (!raw || isBroadAnchorTerm(raw)) continue;
     if (/[\uAC00-\uD7A3]/.test(raw) && raw.length >= 4) return true;
     if (splitSymbolParts(raw).length >= 2) return true;
     if (/[A-Z_]/.test(raw)) return true;
-    if (lowered.length >= 5) return true;
+    if (raw.length >= 5) return true;
   }
   return false;
+}
+
+function shouldPreferExecutableAnchors({ selectedPath = '', questionTerms = [], focusLines = [] } = {}) {
+  if ((Array.isArray(focusLines) ? focusLines : []).some((line) => Number(line || 0) > 0)) {
+    return true;
+  }
+  if (EXECUTABLE_FLOW_PATH_RE.test(String(selectedPath || '').trim())) {
+    return true;
+  }
+  return (Array.isArray(questionTerms) ? questionTerms : []).some((term) => identifierStructureScore(term) > 0);
 }
 
 function normalizeQuestionTerms(question) {
@@ -500,31 +447,17 @@ function outlineEntrySignalScore(name, { preferFlow = false } = {}) {
   if (!preferFlow) {
     return 0;
   }
-  const firstPart = splitSymbolParts(name)[0];
-  const lowered = String(firstPart || '').trim().toLowerCase();
-  if (!lowered) {
+  const token = String(name || '').trim();
+  if (!token) {
     return 0;
   }
-  if (['select', 'load', 'handle', 'init', 'initialize', 'perform', 'start', 'open', 'update', 'refresh'].includes(lowered)) {
-    return 22;
-  }
-  if (['generate', 'create', 'build', 'apply'].includes(lowered)) {
-    return 8;
+  if (splitSymbolParts(token).length >= 3) {
+    return 4;
   }
   return 0;
 }
 
 function outlineHandlerPenalty(name, { preferFlow = false, focusLines = [] } = {}) {
-  if (!preferFlow || (Array.isArray(focusLines) && focusLines.length > 0)) {
-    return 0;
-  }
-  const token = String(name || '').trim();
-  if (!token) {
-    return 0;
-  }
-  if (/(?:^On[A-Z]|Click|Clicked|Render|Renders|Changed|Changing|Mouse|Key|Drag|Drop|Preview|Selection|Loaded|Closing|Opened|Ortho)/.test(token)) {
-    return -26;
-  }
   return 0;
 }
 
@@ -534,7 +467,7 @@ function outlineCommentPenalty(text) {
 
 function chooseBestOutlineItems(outlineItems, questionTerms, { focusLines = [], preferFlow = false } = {}) {
   const terms = new Set(Array.isArray(questionTerms) ? questionTerms : []);
-  const effectiveFocusLines = preferFlow && !hasSpecificQuestionTerms(questionTerms) ? [] : focusLines;
+  const effectiveFocusLines = Array.isArray(focusLines) ? focusLines : [];
   const candidates = (Array.isArray(outlineItems) ? outlineItems : [])
     .filter((item) => ['method', 'function', 'event', 'type'].includes(String(item?.kind || '').trim().toLowerCase()))
     .map((item) => {
@@ -622,24 +555,11 @@ function scoreReadWindow(window, outlineNames, questionTerms, selectedPath) {
 
 function choosePrimaryWindow(trace, selectedPath, outlineItems, questionTerms, { focusLines = [], preferFlow = false } = {}) {
   const outlineNames = (Array.isArray(outlineItems) ? outlineItems : []).map((item) => String(item?.name || '').trim()).filter(Boolean);
-  const effectiveFocusLines = preferFlow && !hasSpecificQuestionTerms(questionTerms) ? [] : focusLines;
+  const effectiveFocusLines = Array.isArray(focusLines) ? focusLines : [];
   const rankedOutlineItems = chooseBestOutlineItems(outlineItems, questionTerms, {
     focusLines: effectiveFocusLines,
     preferFlow,
   });
-  if (preferFlow && !hasSpecificQuestionTerms(questionTerms)) {
-    for (const candidate of rankedOutlineItems) {
-      const candidateSymbol = String(candidate?.name || '').trim().toLowerCase();
-      if (!candidateSymbol) continue;
-      const matchedWindow = readWindowsFromTrace(trace).find((item) => {
-        return normalizePath(item.path).toLowerCase() === normalizePath(selectedPath).toLowerCase()
-          && String(item.symbol || '').trim().toLowerCase() === candidateSymbol;
-      });
-      if (matchedWindow) {
-        return matchedWindow;
-      }
-    }
-  }
   const outlineMetaByName = new Map();
   for (const item of Array.isArray(outlineItems) ? outlineItems : []) {
     const name = String(item?.name || '').trim();
@@ -1615,7 +1535,10 @@ function mergeAnchorCandidate(candidates, payload) {
 
 async function collectAnchorCandidates(workspacePath, question, selectedPath, questionTerms) {
   const candidates = new Map();
-  const preferFlow = isFlowQuestion(question);
+  const preferFlow = shouldPreferExecutableAnchors({
+    selectedPath,
+    questionTerms,
+  });
   const specificQuestionTerms = (Array.isArray(questionTerms) ? questionTerms : []).filter((item) => !isBroadAnchorTerm(item));
   if (selectedPath) {
     mergeAnchorCandidate(candidates, { path: selectedPath, selected: true, source: 'selected' });
@@ -1759,7 +1682,10 @@ function compareDecisionTuples(left, right) {
 }
 
 async function selectRootAnchorCandidate(workspacePath, question, selectedPath, questionTerms) {
-  const preferFlow = isFlowQuestion(question);
+  const preferFlow = shouldPreferExecutableAnchors({
+    selectedPath,
+    questionTerms,
+  });
   const candidates = await collectAnchorCandidates(workspacePath, question, selectedPath, questionTerms);
   const inspectedCandidates = [];
   for (const candidate of candidates.slice(0, MAX_ROOT_FILE_INSPECTIONS)) {
@@ -2105,8 +2031,11 @@ async function runLocalToolLoop({
   const rootFocusLines = Array.isArray(rootAnchor?.focusLines) ? rootAnchor.focusLines : [];
   const anchorQuestionTerms = normalizeQuestionTerms(question);
   const questionTerms = anchorTerms(question, rootPath);
-  const preferFlow = isFlowQuestion(question);
-  const hasSpecificFlowTerms = hasSpecificQuestionTerms(anchorQuestionTerms);
+  const preferFlow = shouldPreferExecutableAnchors({
+    selectedPath: rootPath || selectedFilePath,
+    questionTerms: anchorQuestionTerms,
+    focusLines: rootFocusLines,
+  });
   if (!rootPath) {
     return {
       trace,
@@ -2237,7 +2166,10 @@ async function runLocalToolLoop({
   if (
     callerWindow
     && normalizePath(callerWindow.path).toLowerCase() === normalizePath(analysis.primaryPath).toLowerCase()
-    && (!preferFlow || hasSpecificFlowTerms)
+    && (
+      Number(callerWindow.startLine || 0) <= Number(analysis.primaryWindow?.startLine || Number.MAX_SAFE_INTEGER)
+      || signalScore(analysis.callerOwner?.symbol || '', { mode: 'anchor' }) > signalScore(analysis.primarySymbol || '', { mode: 'anchor' })
+    )
     && signalScore(analysis.callerOwner?.symbol || '', { mode: 'anchor' }) >= signalScore(analysis.primarySymbol || '', { mode: 'anchor' }) - 8
   ) {
     analysis.primarySymbol = String(analysis.callerOwner?.symbol || analysis.primarySymbol || '').trim();

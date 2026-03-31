@@ -85,13 +85,52 @@ def test_code_like_read_question_defaults_to_general_response_type() -> None:
     assert result["question_contract"]["kind"] == "code_read"
 
 
-def test_flow_question_builds_question_contract_instead_of_response_type_override() -> None:
+def test_overlay_flow_evidence_builds_question_contract_instead_of_response_type_override() -> None:
+    local_overlay = {
+        "selected_file_path": "src/FooBarManager.cs",
+        "selected_file_content": "public class FooBarManager { public void Run(){ Process(); Persist(); } }",
+        "local_trace": [
+            {
+                "tool": "read_symbol_span",
+                "observation": {
+                    "path": "src/FooBarManager.cs",
+                    "content": "public void Run(){ Process(); Persist(); }",
+                },
+            },
+            {
+                "tool": "find_callers",
+                "observation": {
+                    "items": [
+                        {
+                            "path": "src/AppController.cs",
+                            "line": 22,
+                            "text": "manager.Run(payload);",
+                        }
+                    ]
+                },
+            },
+        ],
+        "workspace_graph": {
+            "target_symbol": "Run",
+            "graph_state": {
+                "chain": [
+                    {
+                        "relation": "anchor",
+                        "symbol": "Run",
+                        "path": "src/FooBarManager.cs",
+                    }
+                ],
+                "frontiers": [],
+            },
+        },
+    }
     result = classify_intent_hybrid(
         policy=_Policy(),
-        message="Explain the caller to sink flow for FooBarManager.Run",
+        message="Summarize FooBarManager.Run",
         model_name="test-model",
         llm_client=None,
         workspace_overlay_present=True,
+        local_workspace_overlay=local_overlay,
     )
 
     assert result["response_type"] == "general"
@@ -114,6 +153,31 @@ def test_usage_task_type_stays_general_with_code_read_contract() -> None:
 
     assert result["response_type"] == "general"
     assert result["question_contract"]["kind"] == "code_read"
+
+
+def test_review_task_type_maps_to_code_review_contract_and_response_type() -> None:
+    class _ReviewPolicy(_Policy):
+        intents = [
+            {"id": "general", "response_type": "general"},
+            {"id": "code_review", "response_type": "code_review"},
+            {"id": "doc_lookup", "response_type": "doc_lookup"},
+        ]
+
+    result = classify_intent_hybrid(
+        policy=_ReviewPolicy(),
+        message="Inspect the current workspace changes.",
+        model_name="test-model",
+        llm_client=None,
+        task_type="review",
+        workspace_overlay_present=True,
+        local_workspace_overlay={
+            "workspace_diff": "Index: src/foo.py\n--- src/foo.py\n+++ src/foo.py\n+print('x')",
+            "workspace_change_paths": ["src/foo.py"],
+        },
+    )
+
+    assert result["response_type"] == "code_review"
+    assert result["question_contract"]["kind"] == "code_review"
 
 
 def test_overlay_profile_keeps_neutral_code_search_order() -> None:
@@ -307,8 +371,24 @@ def test_react_engine_overlay_flow_contract_no_longer_uses_legacy_name(monkeypat
 
 def test_flow_contract_does_not_close_on_enum_only_reads() -> None:
     contract = build_question_contract(
-        message="Explain the caller to sink flow for ImageCombinationType",
+        message="ImageCombinationType",
         workspace_overlay_present=True,
+        local_workspace_overlay={
+            "selected_file_path": "Base/Common/Enums.cs",
+            "selected_file_content": "public enum ImageCombinationType { EOIR = 3, EOSAR = 5 }",
+            "workspace_graph": {
+                "target_symbol": "ImageCombinationType",
+                "graph_state": {
+                    "chain": [
+                        {
+                            "relation": "anchor",
+                            "symbol": "ImageCombinationType",
+                            "path": "Base/Common/Enums.cs",
+                        }
+                    ],
+                },
+            },
+        },
     )
     state = evaluate_question_contract(
         contract,

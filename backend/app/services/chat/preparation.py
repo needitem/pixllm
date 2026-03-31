@@ -14,6 +14,7 @@ from ...services.execution.runs import ExecutionRunTracker, ExecutionRunsService
 from .backends import build_default_chat_backends
 from .http import intent_failure_to_api_error, raise_http_error
 from .intent import classify_intent_hybrid
+from .layered_merge import extract_local_workspace_overlay
 from .planning import build_execution_plan
 from .runtime_profile import resolve_runtime_routing_profile
 from .text import sanitize_user_message
@@ -107,6 +108,7 @@ async def verify_chat_intent_request(payload: IntentVerifyRequest, chat_deps: An
 
     model_name = str(payload.model or config.VLLM_MODEL).strip() or config.VLLM_MODEL
     try:
+        local_overlay = extract_local_workspace_overlay(payload)
         loop = asyncio.get_running_loop()
         intent_resolution = await loop.run_in_executor(
             None,
@@ -119,6 +121,7 @@ async def verify_chat_intent_request(payload: IntentVerifyRequest, chat_deps: An
                 tool_scope=list(getattr(payload, "tool_scope", []) or []),
                 approval_mode=getattr(payload, "approval_mode", ""),
                 workspace_overlay_present=_has_local_workspace_overlay(payload),
+                local_workspace_overlay=local_overlay,
             ),
         )
         intent_error = intent_failure_to_api_error(intent_resolution)
@@ -244,6 +247,7 @@ async def prepare_chat_execution(request: ChatRequest, chat_deps: Any) -> Prepar
             await tracker.record_error("SERVICE_UNAVAILABLE", "orchestration policy unavailable", stage="prepare")
             raise_http_error(503, "SERVICE_UNAVAILABLE", "orchestration policy unavailable", run_id=run["run_id"])
 
+        local_overlay = extract_local_workspace_overlay(req)
         loop = asyncio.get_running_loop()
         intent_resolution = await loop.run_in_executor(
             None,
@@ -256,6 +260,7 @@ async def prepare_chat_execution(request: ChatRequest, chat_deps: Any) -> Prepar
                 tool_scope=list(getattr(req, "tool_scope", []) or []),
                 approval_mode=getattr(req, "approval_mode", ""),
                 workspace_overlay_present=_has_local_workspace_overlay(req),
+                local_workspace_overlay=local_overlay,
             ),
         )
         intent_error = intent_failure_to_api_error(intent_resolution)

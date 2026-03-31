@@ -134,6 +134,11 @@ def extract_local_workspace_overlay(request: Any) -> Dict[str, Any]:
             "selected_file_content": _normalize_str(metadata.get("selected_file_content")),
             "workspace_status": _normalize_str(metadata.get("workspace_status")),
             "workspace_diff": _normalize_str(metadata.get("workspace_diff")),
+            "workspace_change_paths": [
+                _normalize_str(item)
+                for item in list(metadata.get("workspace_change_paths") or [])
+                if _normalize_str(item)
+            ],
             "local_summary": _normalize_str(metadata.get("local_summary")),
             "local_context_text": _normalize_str(metadata.get("local_context_text")),
             "local_error": _normalize_str(metadata.get("local_error")),
@@ -148,6 +153,7 @@ def extract_local_workspace_overlay(request: Any) -> Dict[str, Any]:
         "selected_file_content": "",
         "workspace_status": "",
         "workspace_diff": "",
+        "workspace_change_paths": [],
         "local_summary": "",
         "local_context_text": "",
         "local_error": "",

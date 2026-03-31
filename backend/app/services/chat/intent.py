@@ -15,7 +15,7 @@ import logging
 import re
 from typing import Any, Dict, Iterable, List
 
-from .question_contract import build_question_contract
+from .question_contract import build_overlay_structure_profile, build_question_contract
 
 logger = logging.getLogger(__name__)
 
@@ -189,6 +189,22 @@ def _response_type_for_bucket(
     return candidate if candidate in allowed_response_types else "general"
 
 
+def _response_type_for_contract(question_contract: Dict[str, Any], allowed_response_types: List[str]) -> str:
+    contract_kind = _normalize_str(dict(question_contract or {}).get("kind")).lower()
+    mapping = {
+        "doc_reference": "doc_lookup",
+        "code_change": "code_generate",
+        "code_review": "code_review",
+        "failure_analysis": "troubleshooting",
+        "code_compare": "compare",
+        "code_flow_explanation": "general",
+        "code_read": "general",
+        "general": "general",
+    }
+    candidate = mapping.get(contract_kind, "general")
+    return candidate if candidate in allowed_response_types else "general"
+
+
 def _resolve_intent_for_response_type(policy, response_type: str, allowed_intents: List[str]) -> str:
     resolved = _normalize_str(policy.intent_id_for_response_type(response_type))
     if resolved:
@@ -206,6 +222,7 @@ def classify_intent_hybrid(
     tool_scope: List[str] | None = None,
     approval_mode: str = "",
     workspace_overlay_present: bool = False,
+    local_workspace_overlay: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     """
     Resolve a minimal routing hint for downstream execution.
@@ -216,6 +233,7 @@ def classify_intent_hybrid(
 
     _ = model_name
     _ = llm_client
+    overlay_profile = build_overlay_structure_profile(local_workspace_overlay)
 
     allowed_intents = sorted(
         {
@@ -241,24 +259,26 @@ def classify_intent_hybrid(
         task_type=task_type,
         tool_scope=tool_scope,
         approval_mode=approval_mode,
-        workspace_overlay_present=workspace_overlay_present,
+        workspace_overlay_present=workspace_overlay_present or bool(overlay_profile.get("present")),
     ) or _coarse_bucket_from_message(message)
 
-    response_type = _response_type_for_bucket(
+    initial_response_type = _response_type_for_bucket(
         routing_bucket,
         message,
         allowed_response_types,
         task_type=task_type,
         tool_scope=tool_scope,
-        workspace_overlay_present=workspace_overlay_present,
+        workspace_overlay_present=workspace_overlay_present or bool(overlay_profile.get("present")),
     )
     question_contract = build_question_contract(
         message=message,
         task_type=task_type,
         tool_scope=tool_scope,
-        workspace_overlay_present=workspace_overlay_present,
-        response_type=response_type,
+        workspace_overlay_present=workspace_overlay_present or bool(overlay_profile.get("present")),
+        response_type=initial_response_type,
+        local_workspace_overlay=local_workspace_overlay,
     )
+    response_type = _response_type_for_contract(question_contract, allowed_response_types) or initial_response_type
     intent_id = _resolve_intent_for_response_type(policy, response_type, allowed_intents)
     retrieval_bias = _normalize_str(question_contract.get("retrieval_mode")).lower()
     if retrieval_bias not in {"code", "docs", "hybrid"}:
