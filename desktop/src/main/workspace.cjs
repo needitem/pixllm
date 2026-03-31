@@ -6,8 +6,11 @@ const path = require('node:path');
 const IGNORED_DIRS = new Set([
   '.svn',
   '.git',
+  '.omx',
+  '.tmp',
   '.vs',
   'node_modules',
+  'packages',
   'dist',
   'build',
   'bin',

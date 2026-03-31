@@ -32,9 +32,11 @@ const MAX_LIST_LIMIT = 5000;
 const MAX_ROOT_QUERY_CANDIDATES = 4;
 const MAX_ROOT_PATHS_PER_QUERY = 3;
 const MAX_ROOT_FILE_CANDIDATES = 4;
+const MAX_ROOT_GREPHITS_PER_QUERY = 12;
 const MAX_CORE_FILES = 4;
 const MAX_SUPPORT_FILES = 4;
 const MAX_RELATED_FILES = 8;
+const FLOW_OUTLINE_LIMIT = 320;
 const CALL_KEYWORDS = new Set([
   'if',
   'for',
@@ -55,6 +57,9 @@ const MEMBER_CALL_RE = /\b([A-Za-z_][A-Za-z0-9_]*)\s*(?:\.|::|->)\s*([A-Za-z_][A
 const DIRECT_CALL_RE = /\b([A-Za-z_][A-Za-z0-9_]*)\s*\(/g;
 const CONTROL_SIGNAL_RE = /\b(if|for|foreach|while|switch|catch|try|return|await)\b/g;
 const ASSIGNMENT_SIGNAL_RE = /(?:[A-Za-z_][A-Za-z0-9_]*|\)|\])\s*(?:[+\-*/%]?=|\+\+|--)/g;
+const COMMENT_ONLY_LINE_RE = /^\s*(?:\/\/|#|\/\*|\*|<!--)/;
+const INLINE_BLOCK_COMMENT_RE = /\/\*.*?\*\//g;
+const INLINE_LINE_COMMENT_RE = /\/\/.*$/g;
 const KOREAN_QUERY_NOISE_TOKENS = new Set([
   '\uC124\uBA85',
   '\uC124\uBA85\uD574\uC918',
@@ -72,6 +77,26 @@ const KOREAN_QUERY_NOISE_TOKENS = new Set([
   '\uB300\uD574',
 ]);
 const FLOW_QUESTION_RE = /\b(flow|path|caller|callee|call chain|workflow|pipeline|entry|sink)\b|(\uD750\uB984|\uACFC\uC815|\uD638\uCD9C|\uACBD\uB85C|\uC5B4\uB514|\uC9C4\uC785|\uCD9C\uAD6C)/i;
+const FLOW_META_TERMS = new Set([
+  'flow',
+  'path',
+  'caller',
+  'callee',
+  'workflow',
+  'pipeline',
+  'entry',
+  'sink',
+  'code',
+  'explain',
+  'analysis',
+  'describe',
+  '\uD750\uB984',
+  '\uACFC\uC815',
+  '\uD638\uCD9C',
+  '\uACBD\uB85C',
+  '\uC124\uBA85',
+  '\uBD84\uC11D',
+]);
 
 function pathBasename(value) {
   const normalized = normalizePath(value);
@@ -183,6 +208,7 @@ function questionTermPriority(term) {
   if (/[\uAC00-\uD7A3]/.test(token)) score += 2;
   if (/[A-Z_]/.test(token)) score += 12;
   if (splitSymbolParts(token).length >= 2) score += 8;
+  if (FLOW_META_TERMS.has(token.toLowerCase())) score -= 24;
   return score;
 }
 
@@ -247,6 +273,28 @@ function countMatches(text, regex) {
   return Array.isArray(matches) ? matches.length : 0;
 }
 
+function isCommentOnlyLine(text) {
+  return COMMENT_ONLY_LINE_RE.test(String(text || '').trim());
+}
+
+function stripInlineComments(text) {
+  return String(text || '')
+    .replace(INLINE_BLOCK_COMMENT_RE, ' ')
+    .replace(INLINE_LINE_COMMENT_RE, ' ')
+    .trim();
+}
+
+function countDistinctQuestionTerms(text, questionTerms) {
+  const lowered = String(text || '').toLowerCase();
+  const distinct = new Set();
+  for (const term of Array.isArray(questionTerms) ? questionTerms : []) {
+    const loweredTerm = String(term || '').trim().toLowerCase();
+    if (!loweredTerm) continue;
+    if (lowered.includes(loweredTerm)) distinct.add(loweredTerm);
+  }
+  return distinct.size;
+}
+
 function dedupeBy(items, keySelector) {
   const out = [];
   const seen = new Set();
@@ -261,7 +309,24 @@ function dedupeBy(items, keySelector) {
   return out;
 }
 
-function chooseBestOutlineItems(outlineItems, questionTerms) {
+function outlineLineProximityScore(lineValue, focusLines, kind) {
+  const line = Number(lineValue || 0);
+  const source = (Array.isArray(focusLines) ? focusLines : []).map((item) => Number(item || 0)).filter((item) => item > 0);
+  if (!line || source.length === 0) {
+    return 0;
+  }
+  const minDistance = Math.min(...source.map((item) => Math.abs(item - line)));
+  if (!Number.isFinite(minDistance)) {
+    return 0;
+  }
+  const isExecutableKind = ['method', 'function', 'event'].includes(String(kind || '').trim().toLowerCase());
+  if (minDistance <= 40) return isExecutableKind ? 48 : 16;
+  if (minDistance <= 120) return isExecutableKind ? 32 : 10;
+  if (minDistance <= 240) return isExecutableKind ? 18 : 4;
+  return isExecutableKind ? -8 : -16;
+}
+
+function chooseBestOutlineItems(outlineItems, questionTerms, { focusLines = [], preferFlow = false } = {}) {
   const terms = new Set(Array.isArray(questionTerms) ? questionTerms : []);
   const candidates = (Array.isArray(outlineItems) ? outlineItems : [])
     .filter((item) => ['method', 'function', 'event', 'type'].includes(String(item?.kind || '').trim().toLowerCase()))
@@ -274,10 +339,12 @@ function chooseBestOutlineItems(outlineItems, questionTerms) {
       if (kind === 'function') score += 28;
       if (kind === 'event') score += 24;
       if (kind === 'type') score += 16;
+      score += outlineLineProximityScore(item?.line, focusLines, kind);
       for (const term of terms) {
         if (loweredName.includes(term)) score += 20;
         if (String(item?.text || '').toLowerCase().includes(term)) score += 8;
       }
+      if (preferFlow && kind === 'type' && Array.isArray(focusLines) && focusLines.length > 0) score -= 16;
       if (isLowSignalSymbol(name, { mode: 'anchor' })) score -= 20;
       return { ...item, __score: score };
     })
@@ -548,7 +615,7 @@ function buildAnchorEvidenceMetrics(content, outlineItems) {
   const outlineRows = Array.isArray(outlineItems) ? outlineItems : [];
   const methodCount = outlineRows.filter((item) => ['method', 'function', 'event'].includes(String(item?.kind || '').trim().toLowerCase())).length;
   const typeCount = outlineRows.filter((item) => String(item?.kind || '').trim().toLowerCase() === 'type').length;
-  const declarationOnly = typeCount > 0 && methodCount === 0 && callTokens.length === 0 && controlCount === 0 && assignmentCount === 0;
+  const declarationOnly = typeCount > 0 && methodCount === 0 && controlCount === 0 && callTokens.length <= 1;
   return {
     callTokenCount: callTokens.length,
     callMentionCount,
@@ -560,12 +627,72 @@ function buildAnchorEvidenceMetrics(content, outlineItems) {
   };
 }
 
+function buildQuestionAlignmentMetrics(pathValue, content, outlineItems, questionTerms) {
+  const normalizedPath = normalizePath(pathValue).toLowerCase();
+  const lines = String(content || '').split(/\r?\n/);
+  let codeTermHits = 0;
+  let commentTermHits = 0;
+  let codeDistinctTerms = 0;
+  let commentDistinctTerms = 0;
+  let outlineTermHits = 0;
+  let pathTermHits = 0;
+  const codeDistinct = new Set();
+  const commentDistinct = new Set();
+
+  for (const term of Array.isArray(questionTerms) ? questionTerms : []) {
+    const loweredTerm = String(term || '').trim().toLowerCase();
+    if (!loweredTerm) continue;
+    if (normalizedPath.includes(loweredTerm)) pathTermHits += 1;
+    for (const item of Array.isArray(outlineItems) ? outlineItems : []) {
+      const outlineText = `${String(item?.name || '')} ${String(item?.text || '')}`.toLowerCase();
+      if (outlineText.includes(loweredTerm)) {
+        outlineTermHits += 1;
+        break;
+      }
+    }
+    for (const line of lines) {
+      const rawLine = String(line || '');
+      const loweredLine = rawLine.toLowerCase();
+      if (!loweredLine.includes(loweredTerm)) continue;
+      if (isCommentOnlyLine(rawLine)) {
+        commentTermHits += 1;
+        commentDistinct.add(loweredTerm);
+        continue;
+      }
+      const strippedLine = stripInlineComments(rawLine).toLowerCase();
+      if (strippedLine.includes(loweredTerm)) {
+        codeTermHits += 1;
+        codeDistinct.add(loweredTerm);
+      } else {
+        commentTermHits += 1;
+        commentDistinct.add(loweredTerm);
+      }
+    }
+  }
+
+  codeDistinctTerms = codeDistinct.size;
+  commentDistinctTerms = commentDistinct.size;
+  return {
+    pathTermHits,
+    outlineTermHits,
+    codeTermHits,
+    commentTermHits,
+    codeDistinctTerms,
+    commentDistinctTerms,
+    totalDistinctTerms: new Set([...codeDistinct, ...commentDistinct]).size,
+  };
+}
+
 function scoreAnchorCandidateSeed(candidate, questionTerms) {
   const pathValue = normalizePath(candidate?.path);
   let score = scoreFileQuestionAlignment(pathValue, '', questionTerms);
   const grepHits = Array.isArray(candidate?.grepHits) ? candidate.grepHits : [];
   score += Math.min(20, grepHits.length * 6);
   score += Math.min(30, Math.max(0, ...grepHits.map((item) => Number(item?.score || 0))));
+  const commentOnlyHits = grepHits.filter((item) => Boolean(item?.commentOnly)).length;
+  if (grepHits.length > 0 && commentOnlyHits === grepHits.length) {
+    score -= 28;
+  }
   if (candidate?.selected) {
     score += 8;
   }
@@ -576,11 +703,20 @@ function scoreAnchorCandidateInspection(candidate, questionTerms, { preferFlow =
   const content = String(candidate?.content || '');
   const outlineItems = Array.isArray(candidate?.outlineItems) ? candidate.outlineItems : [];
   const metrics = buildAnchorEvidenceMetrics(content, outlineItems);
-  const outlineCandidates = chooseBestOutlineItems(outlineItems, questionTerms);
+  const alignment = buildQuestionAlignmentMetrics(candidate?.path, content, outlineItems, questionTerms);
+  const focusLines = (Array.isArray(candidate?.grepHits) ? candidate.grepHits : [])
+    .map((item) => Number(item?.line || 0))
+    .filter((item) => item > 0);
+  const outlineCandidates = chooseBestOutlineItems(outlineItems, questionTerms, { focusLines, preferFlow });
   let score = scoreAnchorCandidateSeed(candidate, questionTerms);
   score += scoreFileQuestionAlignment(candidate?.path, content, questionTerms);
-  score += metrics.methodCount * 12;
-  score += metrics.callTokenCount * 8;
+  score += alignment.codeDistinctTerms * 80;
+  score += alignment.outlineTermHits * 18;
+  score += alignment.pathTermHits * 12;
+  score += alignment.codeTermHits * 4;
+  score += alignment.commentDistinctTerms * 6;
+  score += metrics.methodCount * 4;
+  score += metrics.callTokenCount * 6;
   score += metrics.callMentionCount * 2;
   score += metrics.controlCount * 3;
   score += metrics.assignmentCount;
@@ -588,16 +724,30 @@ function scoreAnchorCandidateInspection(candidate, questionTerms, { preferFlow =
     score += 12;
   }
   if (preferFlow) {
-    if (metrics.methodCount > 0 || metrics.callTokenCount > 0 || metrics.controlCount > 0) {
+    if (
+      alignment.codeDistinctTerms > 0
+      || alignment.outlineTermHits > 0
+      || metrics.methodCount > 0
+      || metrics.callTokenCount > 0
+      || metrics.controlCount > 0
+    ) {
       score += 18;
     }
+    if (alignment.codeDistinctTerms === 0 && alignment.outlineTermHits === 0) {
+      score -= 48;
+    }
     if (metrics.declarationOnly) {
-      score -= 18;
+      score -= 36;
+    }
+    const grepHits = Array.isArray(candidate?.grepHits) ? candidate.grepHits : [];
+    if (grepHits.length > 0 && grepHits.every((item) => Boolean(item?.commentOnly)) && alignment.codeDistinctTerms === 0) {
+      score -= 36;
     }
   }
   return {
     score,
     metrics,
+    alignment,
     outlineCandidates,
   };
 }
@@ -625,10 +775,12 @@ function mergeAnchorCandidate(candidates, payload, questionTerms) {
     }
   }
   if (payload?.hit) {
+    const commentOnly = isCommentOnlyLine(payload.hit?.text);
     current.grepHits.push({
       query: String(payload.query || '').trim(),
       line: Number(payload.hit?.line || 0),
       text: String(payload.hit?.text || '').trim(),
+      commentOnly,
       score: scoreGrepAnchorHit(payload.hit, questionTerms, payload.query),
     });
     current.grepHits.sort((left, right) => Number(right.score || 0) - Number(left.score || 0));
@@ -650,7 +802,14 @@ async function collectAnchorCandidates(workspacePath, question, selectedPath, qu
     if (!token) continue;
     const observation = await grepWorkspace(workspacePath, token, MAX_GREP_LIMIT);
     if (!observation?.ok) continue;
-    for (const hit of Array.isArray(observation?.items) ? observation.items.slice(0, MAX_ROOT_PATHS_PER_QUERY) : []) {
+    const rankedHits = (Array.isArray(observation?.items) ? observation.items : [])
+      .map((hit) => ({
+        ...hit,
+        __score: scoreGrepAnchorHit(hit, questionTerms, token),
+      }))
+      .sort((left, right) => Number(right.__score || 0) - Number(left.__score || 0) || String(left.path || '').localeCompare(String(right.path || '')))
+      .slice(0, MAX_ROOT_GREPHITS_PER_QUERY);
+    for (const hit of rankedHits.slice(0, MAX_ROOT_PATHS_PER_QUERY)) {
       mergeAnchorCandidate(candidates, { path: hit?.path, query: token, hit, source: 'grep' }, questionTerms);
     }
   }
@@ -683,7 +842,7 @@ async function inspectAnchorCandidate(workspacePath, candidate, questionTerms, {
   });
   const content = readObservation?.ok ? String(readObservation.content || '') : '';
   const outlineObservation = readObservation?.ok
-    ? await symbolOutlineInWorkspace(workspacePath, candidate.path, { limit: 120 })
+    ? await symbolOutlineInWorkspace(workspacePath, candidate.path, { limit: preferFlow ? FLOW_OUTLINE_LIMIT : 120 })
     : { ok: false, items: [] };
   const outlineItems = Array.isArray(outlineObservation?.items) ? outlineObservation.items : [];
   const evaluation = scoreAnchorCandidateInspection(
@@ -722,7 +881,7 @@ async function resolveRootPath(workspacePath, question, selectedFilePath, trace)
   const questionTerms = normalizeQuestionTerms(question);
   const bestAnchor = await selectRootAnchorCandidate(workspacePath, question, selectedPath, questionTerms);
   if (!bestAnchor?.path) {
-    return selectedPath || '';
+    return { path: selectedPath || '', focusLines: [] };
   }
   if (String(bestAnchor.source || '').trim().toLowerCase() === 'grep' && Array.isArray(bestAnchor.queries) && bestAnchor.queries[0]) {
     const grepObservation = await pushTraceStep(
@@ -736,14 +895,20 @@ async function resolveRootPath(workspacePath, question, selectedFilePath, trace)
       },
     );
     if (!grepObservation?.ok) {
-      return bestAnchor.path;
+      return {
+        path: bestAnchor.path,
+        focusLines: (Array.isArray(bestAnchor.grepHits) ? bestAnchor.grepHits : []).map((item) => Number(item?.line || 0)).filter((item) => item > 0),
+      };
     }
   } else if (String(bestAnchor.source || '').trim().toLowerCase() === 'list_files') {
     await pushTraceStep(trace, workspacePath, 'enumerate workspace files to anchor the local investigation', 'list_files', {
       limit: MAX_LIST_LIMIT,
     });
   }
-  return bestAnchor.path;
+  return {
+    path: bestAnchor.path,
+    focusLines: (Array.isArray(bestAnchor.grepHits) ? bestAnchor.grepHits : []).map((item) => Number(item?.line || 0)).filter((item) => item > 0),
+  };
 }
 
 function scoreGrepAnchorHit(item, questionTerms, queryText) {
@@ -757,6 +922,7 @@ function scoreGrepAnchorHit(item, questionTerms, queryText) {
   if (!pathValue) {
     return 0;
   }
+  const commentOnly = isCommentOnlyLine(text);
   if (rawQuery && loweredText.includes(rawQuery)) score += 24;
   if (rawQuery && loweredPath.includes(rawQuery)) score += 12;
   for (const term of Array.isArray(questionTerms) ? questionTerms : []) {
@@ -765,10 +931,12 @@ function scoreGrepAnchorHit(item, questionTerms, queryText) {
     if (loweredText.includes(loweredTerm)) score += 10;
     if (loweredPath.includes(loweredTerm)) score += 6;
   }
-  if (/\/(?:obj|bin|dist|build|out|node_modules)\//i.test(pathValue)) score -= 30;
+  if (/\/(?:obj|bin|dist|build|out|node_modules|packages|\.tmp)\//i.test(pathValue)) score -= 40;
+  if (commentOnly) score -= 28;
   if (/\b(class|interface|struct|enum|record|namespace|module)\b/i.test(text)) score += 4;
   if (/[A-Za-z_][A-Za-z0-9_]*\s*\(|\.\s*[A-Za-z_][A-Za-z0-9_]*\s*\(|::\s*[A-Za-z_][A-Za-z0-9_]*\s*\(/.test(text)) score += 8;
   if (/\b(if|for|foreach|while|switch|return|await|catch)\b/i.test(text)) score += 6;
+  if (!commentOnly && /\b(case|public|private|protected|internal|new|return)\b/i.test(text)) score += 8;
   return score;
 }
 
@@ -958,7 +1126,10 @@ async function runLocalToolLoop({
   selectedFilePath = '',
 }) {
   const trace = [];
-  const rootPath = await resolveRootPath(workspacePath, question, selectedFilePath, trace);
+  const rootAnchor = await resolveRootPath(workspacePath, question, selectedFilePath, trace);
+  const rootPath = normalizePath(rootAnchor?.path || '');
+  const rootFocusLines = Array.isArray(rootAnchor?.focusLines) ? rootAnchor.focusLines : [];
+  const anchorQuestionTerms = normalizeQuestionTerms(question);
   const questionTerms = anchorTerms(question, rootPath);
   if (!rootPath) {
     return {
@@ -976,6 +1147,7 @@ async function runLocalToolLoop({
   const analysis = {
     selectedPath: normalizePath(selectedFilePath),
     rootPath,
+    rootFocusLines,
     candidateSymbols: [],
     primarySymbol: '',
     primaryPath: rootPath,
@@ -994,10 +1166,13 @@ async function runLocalToolLoop({
 
   const outlineObservation = await pushTraceStep(trace, workspacePath, 'inspect local declarations in the anchor file', 'symbol_outline', {
     path: rootPath,
-    limit: 120,
+    limit: isFlowQuestion(question) ? FLOW_OUTLINE_LIMIT : 120,
   });
   const outlineItems = Array.isArray(outlineObservation?.items) ? outlineObservation.items : [];
-  const rootCandidates = chooseBestOutlineItems(outlineItems, questionTerms);
+  const rootCandidates = chooseBestOutlineItems(outlineItems, anchorQuestionTerms, {
+    focusLines: rootFocusLines,
+    preferFlow: isFlowQuestion(question),
+  });
   analysis.candidateSymbols = rootCandidates.map((item) => String(item?.name || '').trim()).filter(Boolean);
 
   for (const item of rootCandidates) {
@@ -1013,7 +1188,7 @@ async function runLocalToolLoop({
     });
   }
 
-  const primaryWindow = choosePrimaryWindow(trace, rootPath, outlineItems, questionTerms);
+  const primaryWindow = choosePrimaryWindow(trace, rootPath, outlineItems, anchorQuestionTerms);
   if (primaryWindow) {
     analysis.primaryWindow = primaryWindow;
     analysis.primarySymbol = String(primaryWindow.symbol || '').trim();

@@ -1445,16 +1445,10 @@ async def collect_local_overlay_code_explain_bootstrap(
         engine_windows=[],
         question_contract=normalized_contract,
     )
-    engine_result = await _collect_engine_windows(
-        redis=getattr(chat_deps, "redis", None),
-        code_tools=chat_deps.code_tools,
-        session_id=session_id,
-        local_overlay=local_overlay,
-        evidence_pack=initial_pack,
-        max_chars=max_chars,
-        max_line_span=max_line_span,
-        tool_callback=tool_callback,
-    )
+    # The desktop overlay should ground local application flow first.
+    # Server-side bootstrap does not prefetch additional engine reads; the main ReAct
+    # loop can decide later whether an explicit engine/framework symbol warrants that search.
+    engine_result = {"windows": [], "tool_calls": []}
     engine_windows = list(engine_result.get("windows") or [])
     final_pack = _build_evidence_pack(
         question=clean_message,

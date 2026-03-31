@@ -431,3 +431,32 @@ def test_overlay_primary_path_scoring_prefers_focus_over_mismatched_selected_pat
     )
 
     assert ordered[0] == "Base/Common/Enums.cs"
+
+
+def test_overlay_local_read_guard_blocks_client_paths_until_server_discovers_them() -> None:
+    overlay_paths = {
+        "base/common/enums.cs",
+        "dbmanager/table/tb_image.cs",
+    }
+    overlay_prefixes = {"base", "dbmanager", "matr"}
+
+    assert react_engine._should_block_overlay_local_read(
+        "Base/Common/Enums.cs",
+        overlay_local_paths=overlay_paths,
+        overlay_local_prefixes=overlay_prefixes,
+        server_known_paths=set(),
+    ) is True
+
+    assert react_engine._should_block_overlay_local_read(
+        "DBManager/Table/TB_IMAGE.cs",
+        overlay_local_paths=overlay_paths,
+        overlay_local_prefixes=overlay_prefixes,
+        server_known_paths={"dbmanager/table/tb_image.cs"},
+    ) is False
+
+    assert react_engine._should_block_overlay_local_read(
+        "backend/app/services/chat/react/engine.py",
+        overlay_local_paths=overlay_paths,
+        overlay_local_prefixes=overlay_prefixes,
+        server_known_paths=set(),
+    ) is False

@@ -228,7 +228,7 @@ def _build_tool_mode_hint(
         f"Use tools in this order when possible: {tool_priority}.\n"
         f"{repo_hint}\n"
         + (
-            "Treat the attached local workspace overlay as the primary source of truth. Answer from the local workspace evidence first. Use server code tools only to resolve engine or framework symbols that are explicitly referenced by the local workspace evidence. Do not run broad baseline searches for generic keywords.\n"
+            "Treat the attached local workspace overlay as the primary source of truth. Answer from the local workspace evidence first. The client overlay paths are evidence labels, not server-readable repository paths. Never pass a client overlay path directly to server read tools unless that exact path was returned by a server tool result in this run. Use server code tools only to resolve engine or framework symbols that are explicitly referenced by the local workspace evidence. Do not run broad baseline searches for generic local-domain keywords.\n"
             if workspace_overlay_present
             else ""
         )
@@ -395,6 +395,52 @@ def _normalize_engine_read_path(code_tools, path_value: str) -> str:
     return str(relativize_code_path(code_tools, str(path_value or "").strip()) or "").strip().replace("\\", "/")
 
 
+def _normalize_overlay_path_set(paths: List[Any]) -> set[str]:
+    normalized = set()
+    for item in list(paths or []):
+        path = str(item or "").strip().replace("\\", "/")
+        if path:
+            normalized.add(path.lower())
+    return normalized
+
+
+def _overlay_local_prefixes(local_overlay: Dict[str, Any]) -> set[str]:
+    prefixes = set()
+    workspace_graph = extract_workspace_graph(local_overlay)
+    for path in [
+        *list(collect_grounded_overlay_paths(local_overlay) or []),
+        str(local_overlay.get("selected_file_path") or "").strip(),
+        str(workspace_graph.get("focus_file") or "").strip(),
+        *list(workspace_graph.get("core_files") or []),
+        *list(workspace_graph.get("supporting_files") or []),
+    ]:
+        normalized = str(path or "").strip().replace("\\", "/").strip("/")
+        if not normalized:
+            continue
+        prefixes.add(normalized.split("/", 1)[0].lower())
+    return prefixes
+
+
+def _should_block_overlay_local_read(
+    requested_path: str,
+    *,
+    overlay_local_paths: set[str],
+    overlay_local_prefixes: set[str],
+    server_known_paths: set[str],
+) -> bool:
+    normalized = str(requested_path or "").strip().replace("\\", "/").lower()
+    if not normalized:
+        return False
+    if normalized in server_known_paths:
+        return False
+    if normalized in overlay_local_paths:
+        return True
+    prefix = normalized.strip("/").split("/", 1)[0] if normalized.strip("/") else ""
+    if prefix and prefix in overlay_local_prefixes:
+        return True
+    return False
+
+
 def _extract_code_like_mentions(text: str) -> List[str]:
     matches = re.findall(
         r"\b(?:[A-Z][A-Za-z0-9_]*_[A-Za-z0-9_]+|[A-Z][A-Za-z0-9_]*[a-z][A-Z][A-Za-z0-9_]*)\b",
@@ -482,6 +528,18 @@ async def run_react_chat_generation(
         workspace_graph,
         grounded_overlay_paths,
     )
+    overlay_local_paths = _normalize_overlay_path_set(
+        [
+            *list(grounded_overlay_paths or []),
+            *[
+                str(item.get("path") or "").strip()
+                for item in list(grounded_overlay_windows or [])
+                if isinstance(item, dict)
+            ],
+        ]
+    )
+    overlay_local_prefixes = _overlay_local_prefixes(local_overlay)
+    server_known_paths: set[str] = set()
     local_overlay_context = _build_local_overlay_context(
         local_overlay_items,
         grounding_report=workspace_grounding_report,
@@ -662,6 +720,7 @@ async def run_react_chat_generation(
                 continue
             seen_paths.add(lowered)
             unique_paths.append(path_value)
+            server_known_paths.add(lowered.replace("\\", "/"))
         return {
             "query": res.get("query", query_text),
             "match_count": len(matches),
@@ -704,6 +763,10 @@ async def run_react_chat_generation(
             path_filter=(path_filter or None),
         )
         matches = list(res.get("matches", []) or [])
+        for row in matches:
+            path_value = str(dict(row or {}).get("path") or "").strip().replace("\\", "/").lower()
+            if path_value:
+                server_known_paths.add(path_value)
         accumulator.add_code_matches(matches)
         return {
             "symbol": symbol_text,
@@ -719,6 +782,17 @@ async def run_react_chat_generation(
     ) -> Dict[str, Any]:
         await _emit_progress(progress_callback, phase="retrieve", message=_tool_progress_message("read", {}), tool="read")
         requested_path = str(path or "").strip()
+        if workspace_overlay_present and _should_block_overlay_local_read(
+            requested_path,
+            overlay_local_paths=overlay_local_paths,
+            overlay_local_prefixes=overlay_local_prefixes,
+            server_known_paths=server_known_paths,
+        ):
+            return {
+                "path": requested_path.replace("\\", "/"),
+                "found": False,
+                "reason": "client_overlay_path_not_readable_on_server",
+            }
         normalized_requested_path = _normalize_engine_read_path(chat_deps.code_tools, requested_path)
         res = read_code_lines(
             chat_deps.code_tools,
@@ -729,6 +803,7 @@ async def run_react_chat_generation(
             max_chars=max_chars,
         )
         if bool(res.get("found")):
+            server_known_paths.add(str(res.get("path") or requested_path).strip().replace("\\", "/").lower())
             accumulator.add_code_window(
                 {
                     "path": res.get("path"),
