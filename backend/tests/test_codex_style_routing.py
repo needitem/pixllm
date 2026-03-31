@@ -458,3 +458,52 @@ def test_overlay_local_read_guard_blocks_client_paths_until_server_discovers_the
         overlay_local_prefixes=overlay_prefixes,
         server_known_paths=set(),
     ) is False
+
+
+def test_flow_structural_issues_become_advisory_once_axes_are_grounded() -> None:
+    issues = react_engine._relax_retrieval_issues(
+        [
+            "open_frontier",
+            "open_contract_frontier",
+            "uncovered_graph_nodes",
+            "thin_graph_coverage",
+        ],
+        contract_kind="code_flow_explanation",
+        contract_state={
+            "missing_axes": [],
+        },
+        graph_gate={
+            "report": {
+                "focus_grounded": True,
+                "grounded_graph_path_count": 1,
+            }
+        },
+        direct_read_count=3,
+    )
+
+    assert issues == []
+
+
+def test_flow_structural_issues_still_block_when_axes_are_missing() -> None:
+    issues = react_engine._relax_retrieval_issues(
+        [
+            "open_frontier",
+            "open_contract_frontier",
+            "uncovered_graph_nodes",
+            "thin_graph_coverage",
+        ],
+        contract_kind="code_flow_explanation",
+        contract_state={
+            "missing_axes": ["entry_or_caller"],
+        },
+        graph_gate={
+            "report": {
+                "focus_grounded": True,
+                "grounded_graph_path_count": 1,
+            }
+        },
+        direct_read_count=3,
+    )
+
+    assert "open_frontier" in issues
+    assert "open_contract_frontier" in issues

@@ -464,6 +464,51 @@ def _extract_code_like_mentions(text: str) -> List[str]:
     return ordered
 
 
+def _should_relax_flow_structural_issues(
+    *,
+    contract_kind: str,
+    contract_state: Dict[str, Any] | None,
+    graph_gate: Dict[str, Any] | None,
+    direct_read_count: int,
+) -> bool:
+    if str(contract_kind or "").strip().lower() != "code_flow_explanation":
+        return False
+    if int(direct_read_count or 0) <= 0:
+        return False
+    normalized_contract_state = dict(contract_state or {})
+    if list(normalized_contract_state.get("missing_axes") or []):
+        return False
+    report = dict(dict(graph_gate or {}).get("report") or {})
+    focus_grounded = bool(report.get("focus_grounded"))
+    grounded_graph_path_count = int(report.get("grounded_graph_path_count") or 0)
+    return focus_grounded or grounded_graph_path_count > 0
+
+
+def _relax_retrieval_issues(
+    issues: List[str],
+    *,
+    contract_kind: str,
+    contract_state: Dict[str, Any] | None,
+    graph_gate: Dict[str, Any] | None,
+    direct_read_count: int,
+) -> List[str]:
+    ordered = [str(item or "").strip() for item in list(issues or []) if str(item or "").strip()]
+    if not _should_relax_flow_structural_issues(
+        contract_kind=contract_kind,
+        contract_state=contract_state,
+        graph_gate=graph_gate,
+        direct_read_count=direct_read_count,
+    ):
+        return ordered
+    relaxed = {
+        "open_frontier",
+        "open_contract_frontier",
+        "uncovered_graph_nodes",
+        "thin_graph_coverage",
+    }
+    return [item for item in ordered if item not in relaxed]
+
+
 class _EvidenceAccumulator:
     def __init__(self):
         self.doc_search_rows: List[Dict[str, Any]] = []
@@ -1238,6 +1283,13 @@ async def run_react_chat_generation(
         elif not bool(evidence_gate.get("passed")) and search_only_count > 0:
             issues.append("thin_evidence")
         issues.extend(list(contract_state.get("issues") or []))
+        issues = _relax_retrieval_issues(
+            issues,
+            contract_kind=contract_kind,
+            contract_state=contract_state,
+            graph_gate=graph_gate,
+            direct_read_count=direct_read_count,
+        )
 
         frontier = None
         frontiers = list(graph_gate.get("frontiers") or [])
