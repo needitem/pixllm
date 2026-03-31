@@ -88,6 +88,36 @@ def _overlay_grounded_reads(local_overlay: Dict[str, Any] | None) -> List[Dict[s
             }
         )
 
+    def _read_priority(item: Dict[str, str]) -> tuple[int, int, int, int, str]:
+        symbol = str(item.get("symbol") or "").strip()
+        source = str(item.get("source") or "").strip().lower()
+        line_range = str(item.get("line_range") or "").strip()
+        text = str(item.get("text") or "")
+        score = 0
+        if symbol:
+            score += 40
+        if target_symbol and symbol.lower() == target_symbol.lower():
+            score += 20
+        if source == "read_symbol_span":
+            score += 16
+        elif source == "symbol_neighborhood":
+            score += 12
+        elif source == "read_file":
+            score += 8
+        if source != "selected_file":
+            score += 10
+        if line_range and line_range != "1-1":
+            score += 6
+        non_empty_lines = len([raw for raw in text.splitlines() if raw.strip()])
+        score += min(non_empty_lines, 8)
+        return (
+            -score,
+            0 if source != "selected_file" else 1,
+            0 if symbol else 1,
+            -(non_empty_lines),
+            str(item.get("path") or "").lower(),
+        )
+
     if selected_path and selected_content:
         _append(
             path=selected_path,
@@ -123,7 +153,7 @@ def _overlay_grounded_reads(local_overlay: Dict[str, Any] | None) -> List[Dict[s
                 text=str(item.get("content") or "").strip(),
                 source="grounded_window",
             )
-    return reads
+    return sorted(reads, key=_read_priority)
 
 
 def _overlay_symbols(local_overlay: Dict[str, Any] | None, reads: List[Dict[str, str]] | None = None) -> List[str]:

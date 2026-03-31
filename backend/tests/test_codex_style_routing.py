@@ -981,6 +981,39 @@ def test_overlay_read_renderer_produces_contract_shape() -> None:
     assert "`build_question_contract`" in answer
 
 
+def test_overlay_grounded_reads_prefers_symbol_spans_over_selected_file_blob() -> None:
+    reads = chat_results._overlay_grounded_reads(
+        {
+            "present": True,
+            "selected_file_path": "MATR/ViewModels/UserControls/ImageMatching/Vm_ImageMatching_Heterogeneous.cs",
+            "selected_file_content": "using System;\nusing System.Collections.Generic;\n\nnamespace MATR.ViewModels { }",
+            "workspace_graph": {"target_symbol": "SelectMatchingData"},
+            "local_trace": [
+                {
+                    "tool": "read_symbol_span",
+                    "symbol": "SelectMatchingData",
+                    "observation": {
+                        "path": "MATR/ViewModels/UserControls/ImageMatching/Vm_ImageMatching_Heterogeneous.cs",
+                        "lineRange": "299-335",
+                        "content": (
+                            "public void SelectMatchingData()\n"
+                            "{\n"
+                            "    HandleInitialState();\n"
+                            "    LoadTargetImage();\n"
+                            "    LoadReferenceImage();\n"
+                            "}\n"
+                        ),
+                    },
+                }
+            ],
+        }
+    )
+
+    assert reads[0]["symbol"] == "SelectMatchingData"
+    assert reads[0]["source"] == "read_symbol_span"
+    assert reads[1]["source"] == "selected_file"
+
+
 def test_overlay_compare_renderer_produces_contract_shape() -> None:
     answer = chat_results._render_overlay_contract_answer(
         "code_compare",
