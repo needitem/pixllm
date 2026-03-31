@@ -86,6 +86,8 @@ def _default_answer_style_for_response_type(response_type: str) -> str:
         return "reference"
     if rt == "compare":
         return "comparison"
+    if rt in {"code_review", "design_review"}:
+        return "review"
     if rt in {"bug_fix", "troubleshooting"}:
         return "troubleshooting"
     return "explanation" if rt in {"code_explain", "code_generate", "refactor", "api_lookup"} else "default"
@@ -93,7 +95,7 @@ def _default_answer_style_for_response_type(response_type: str) -> str:
 
 def _default_answer_style_for_contract(question_contract: Dict[str, Any], response_type: str) -> str:
     contract_hint = _normalize_str(dict(question_contract or {}).get("answer_style_hint")).lower()
-    if contract_hint in {"tutorial", "reference", "explanation", "troubleshooting", "comparison"}:
+    if contract_hint in {"tutorial", "reference", "explanation", "troubleshooting", "comparison", "review"}:
         return contract_hint
     return _default_answer_style_for_response_type(response_type)
 

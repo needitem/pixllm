@@ -97,6 +97,77 @@ def _render_overlay_review_answer(question: str, local_overlay: Dict[str, Any] |
     return "\n".join(lines).strip()
 
 
+def _source_paths(sources: List[Dict[str, Any]] | None) -> List[str]:
+    seen = set()
+    ordered: List[str] = []
+    for item in list(sources or []):
+        if not isinstance(item, dict):
+            continue
+        path = str(
+            item.get("file_path")
+            or item.get("path")
+            or item.get("source_path")
+            or item.get("source")
+            or ""
+        ).strip()
+        if not path:
+            continue
+        normalized = path.replace("\\", "/")
+        lowered = normalized.lower()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        ordered.append(normalized)
+    return ordered
+
+
+def _overlay_review_evidence_present(local_overlay: Dict[str, Any] | None) -> bool:
+    overlay = dict(local_overlay or {})
+    return bool(
+        _overlay_changed_paths(overlay)
+        or str(overlay.get("workspace_diff") or "").strip()
+        or str(overlay.get("selected_file_path") or "").strip()
+    )
+
+
+def _sources_align_with_overlay(local_overlay: Dict[str, Any] | None, sources: List[Dict[str, Any]] | None) -> bool:
+    overlay = dict(local_overlay or {})
+    allowed = {
+        path.replace("\\", "/").lower()
+        for path in [
+            *(_overlay_changed_paths(overlay) or []),
+            str(overlay.get("selected_file_path") or "").strip(),
+        ]
+        if str(path).strip()
+    }
+    source_paths = _source_paths(sources)
+    if not source_paths:
+        return True
+    if not allowed:
+        return False
+    return all(path.lower() in allowed for path in source_paths)
+
+
+def _should_render_overlay_review_fallback(
+    *,
+    question_contract: Dict[str, Any] | None,
+    local_overlay: Dict[str, Any] | None,
+    results: List[Dict[str, Any]] | None,
+    sources: List[Dict[str, Any]] | None,
+) -> bool:
+    normalized_contract = normalize_question_contract(question_contract)
+    if str(normalized_contract.get("kind") or "").strip().lower() != "code_review":
+        return False
+    overlay = dict(local_overlay or {})
+    if not bool(overlay.get("present")):
+        return False
+    if not _overlay_review_evidence_present(overlay):
+        return False
+    if list(results or []):
+        return False
+    return _sources_align_with_overlay(overlay, sources)
+
+
 def _should_render_workspace_graph_answer(
     *,
     question_contract: Dict[str, Any] | None,
@@ -560,11 +631,11 @@ async def finalize_react_payload(
         )
         if rendered_answer:
             answer = rendered_answer
-    elif (
-        str(normalized_question_contract.get("kind") or "").strip().lower() == "code_review"
-        and bool(local_overlay.get("present"))
-        and not results
-        and not sources
+    elif _should_render_overlay_review_fallback(
+        question_contract=normalized_question_contract,
+        local_overlay=local_overlay,
+        results=results,
+        sources=sources,
     ):
         rendered_answer = _render_overlay_review_answer(prepared.clean_message, local_overlay)
         if rendered_answer:

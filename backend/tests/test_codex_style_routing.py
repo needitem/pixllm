@@ -178,6 +178,7 @@ def test_review_task_type_maps_to_code_review_contract_and_response_type() -> No
 
     assert result["response_type"] == "code_review"
     assert result["question_contract"]["kind"] == "code_review"
+    assert result["answer_style"] == "review"
 
 
 def test_overlay_profile_keeps_neutral_code_search_order() -> None:
@@ -773,6 +774,52 @@ def test_overlay_review_renderer_uses_grounded_diff_without_inaccessible_claims(
     assert "확정 가능한 결함을 확인하지 못했습니다" in answer
     assert "tree" not in answer.lower()
     assert "inaccessible" not in answer.lower()
+
+
+def test_overlay_review_fallback_accepts_overlay_only_sources() -> None:
+    assert chat_results._should_render_overlay_review_fallback(
+        question_contract={"kind": "code_review"},
+        local_overlay={
+            "present": True,
+            "selected_file_path": "backend/app/services/chat/question_contract.py",
+            "workspace_diff": (
+                "Index: backend/app/services/chat/question_contract.py\n"
+                "--- backend/app/services/chat/question_contract.py\n"
+                "+++ backend/app/services/chat/question_contract.py\n"
+                "+def build_overlay_structure_profile(local_workspace_overlay=None):\n"
+                "+    return {}"
+            ),
+            "workspace_change_paths": ["backend/app/services/chat/question_contract.py"],
+        },
+        results=[],
+        sources=[
+            {
+                "file_path": "backend/app/services/chat/question_contract.py",
+                "preview_text": "def build_overlay_structure_profile(local_workspace_overlay=None): pass",
+                "score": 0.9,
+            }
+        ],
+    ) is True
+
+
+def test_overlay_review_fallback_rejects_non_overlay_sources() -> None:
+    assert chat_results._should_render_overlay_review_fallback(
+        question_contract={"kind": "code_review"},
+        local_overlay={
+            "present": True,
+            "selected_file_path": "backend/app/services/chat/question_contract.py",
+            "workspace_diff": "Index: backend/app/services/chat/question_contract.py",
+            "workspace_change_paths": ["backend/app/services/chat/question_contract.py"],
+        },
+        results=[],
+        sources=[
+            {
+                "file_path": "backend/app/services/chat/results.py",
+                "preview_text": "async def finalize_react_payload(...):",
+                "score": 0.9,
+            }
+        ],
+    ) is False
 
 
 def test_render_workspace_graph_answer_uses_anchor_span_and_downstream_calls() -> None:
