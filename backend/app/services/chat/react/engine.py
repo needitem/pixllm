@@ -71,6 +71,14 @@ def _timeout_value(value: int) -> Optional[float]:
     return float(timeout) if timeout > 0 else None
 
 
+def _resolve_react_loop_timeout_sec(configured_timeout: int, contract_budget: Dict[str, Any]) -> int:
+    configured = max(0, int(configured_timeout or 0))
+    budget_timeout = max(0, int(dict(contract_budget or {}).get("max_duration_sec") or 0))
+    if budget_timeout > 0:
+        return max(configured, budget_timeout) if configured > 0 else budget_timeout
+    return configured
+
+
 async def _run_with_stage_timeout(awaitable, *, stage: str, timeout_sec: Optional[float]):
     if not timeout_sec:
         return await awaitable
@@ -866,10 +874,9 @@ async def run_react_chat_generation(
         int(contract_budget.get("max_tool_calls") or 0),
         12,
     )
-    react_loop_timeout_sec = max(
+    react_loop_timeout_sec = _resolve_react_loop_timeout_sec(
         int(rag_config.react_timeout_sec() or 0),
-        int(contract_budget.get("max_duration_sec") or 0),
-        120,
+        contract_budget,
     )
     use_native = (
         chat_deps.vllm_client is not None

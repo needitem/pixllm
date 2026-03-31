@@ -39,7 +39,7 @@ react:
   max_tool_calls: 8
   # Overall ReAct loop timeout in seconds. Set to 0 to disable.
   # Override: CHAT_REACT_TIMEOUT_SEC
-  timeout_sec: 60
+  timeout_sec: 0
   # Stage-specific time budgets used by streaming and long-running generation paths.
   # Overrides: CHAT_REACT_PREPARE_TIMEOUT_SEC, CHAT_REACT_RETRIEVE_TIMEOUT_SEC,
   # CHAT_REACT_ANSWER_TIMEOUT_SEC

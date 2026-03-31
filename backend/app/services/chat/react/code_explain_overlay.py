@@ -519,6 +519,7 @@ def _score_primary_paths(
     graph = extract_workspace_graph(local_overlay)
     selected_path = _normalize_path(local_overlay.get("selected_file_path"))
     focus_path = _normalize_path(graph.get("focus_file"))
+    selected_matches_focus = bool(selected_path and focus_path and selected_path.lower() == focus_path.lower())
     core_files = {_normalize_path(item) for item in list(graph.get("core_files") or []) if _normalize_path(item)}
     supporting_files = {_normalize_path(item) for item in list(graph.get("supporting_files") or []) if _normalize_path(item)}
     candidate_paths = {_normalize_path(item.get("path")) for item in list(read_evidence or []) if _normalize_path(item.get("path"))}
@@ -526,7 +527,7 @@ def _score_primary_paths(
 
     for path in candidate_paths:
         if path == selected_path:
-            scores[path] += 120.0
+            scores[path] += 120.0 if selected_matches_focus else 12.0
         if path == focus_path:
             scores[path] += 90.0
         if path in core_files:

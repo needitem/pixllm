@@ -397,3 +397,37 @@ def test_overlay_bootstrap_extracts_flow_candidates_from_support_reads() -> None
         item.get("tool") == "find_symbol" and item.get("symbol") == "RunConvergence"
         for item in pack["next_search_candidates"]
     )
+
+
+def test_react_loop_timeout_can_be_disabled() -> None:
+    assert react_engine._resolve_react_loop_timeout_sec(0, {}) == 0
+    assert react_engine._resolve_react_loop_timeout_sec(0, {"max_duration_sec": 180}) == 180
+    assert react_engine._resolve_react_loop_timeout_sec(60, {}) == 60
+
+
+def test_overlay_primary_path_scoring_prefers_focus_over_mismatched_selected_path() -> None:
+    ordered = code_explain_overlay._score_primary_paths(
+        {
+            "selected_file_path": "MATR/ViewModels/UserControls/TargetDetectionRecognition/Vm_TargetDetectionRecognition_ModelParamManagement.cs",
+            "workspace_graph": {
+                "focus_file": "Base/Common/Enums.cs",
+                "core_files": ["Base/Common/Enums.cs"],
+                "supporting_files": [],
+            },
+        },
+        read_evidence=[
+            {
+                "path": "MATR/ViewModels/UserControls/TargetDetectionRecognition/Vm_TargetDetectionRecognition_ModelParamManagement.cs",
+                "tool": "selected_file",
+                "symbol": "",
+            },
+            {
+                "path": "Base/Common/Enums.cs",
+                "tool": "read_symbol_span",
+                "symbol": "ConvergenceMethodType",
+            },
+        ],
+        trace_relations=[],
+    )
+
+    assert ordered[0] == "Base/Common/Enums.cs"

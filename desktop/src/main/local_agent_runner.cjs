@@ -29,6 +29,9 @@ const MAX_ROOT_SYMBOLS = 4;
 const MAX_SUPPORT_SYMBOLS = 4;
 const MAX_GREP_LIMIT = 30;
 const MAX_LIST_LIMIT = 5000;
+const MAX_ROOT_QUERY_CANDIDATES = 4;
+const MAX_ROOT_PATHS_PER_QUERY = 3;
+const MAX_ROOT_FILE_CANDIDATES = 4;
 const MAX_CORE_FILES = 4;
 const MAX_SUPPORT_FILES = 4;
 const MAX_RELATED_FILES = 8;
@@ -68,6 +71,7 @@ const KOREAN_QUERY_NOISE_TOKENS = new Set([
   '\uAD00\uB828',
   '\uB300\uD574',
 ]);
+const FLOW_QUESTION_RE = /\b(flow|path|caller|callee|call chain|workflow|pipeline|entry|sink)\b|(\uD750\uB984|\uACFC\uC815|\uD638\uCD9C|\uACBD\uB85C|\uC5B4\uB514|\uC9C4\uC785|\uCD9C\uAD6C)/i;
 
 function pathBasename(value) {
   const normalized = normalizePath(value);
@@ -164,6 +168,22 @@ function expandQuestionTermVariants(terms = []) {
   return Array.from(weights.entries())
     .sort((a, b) => Number(b[1] || 0) - Number(a[1] || 0) || String(a[0] || '').localeCompare(String(b[0] || '')))
     .map(([token]) => token);
+}
+
+function isFlowQuestion(question) {
+  return FLOW_QUESTION_RE.test(String(question || '').trim());
+}
+
+function questionTermPriority(term) {
+  const token = String(term || '').trim();
+  if (!token) {
+    return -100;
+  }
+  let score = token.length;
+  if (/[\uAC00-\uD7A3]/.test(token)) score += 2;
+  if (/[A-Z_]/.test(token)) score += 12;
+  if (splitSymbolParts(token).length >= 2) score += 8;
+  return score;
 }
 
 function normalizeQuestionTerms(question) {
@@ -379,6 +399,25 @@ function anchorTerms(question, pathValue) {
   ]);
 }
 
+function scoreFileQuestionAlignment(pathValue, content, questionTerms) {
+  const normalizedPath = normalizePath(pathValue).toLowerCase();
+  const stem = pathStem(pathValue).toLowerCase();
+  const loweredContent = String(content || '').toLowerCase();
+  let score = 0;
+
+  for (const term of Array.isArray(questionTerms) ? questionTerms : []) {
+    const loweredTerm = String(term || '').trim().toLowerCase();
+    if (!loweredTerm) continue;
+    if (stem.includes(loweredTerm)) score += 18;
+    else if (normalizedPath.includes(loweredTerm)) score += 10;
+    if (loweredContent.includes(loweredTerm)) score += /[\uac00-\ud7a3]/i.test(loweredTerm) ? 2 : 3;
+    const matchCount = loweredContent.split(loweredTerm).length - 1;
+    if (matchCount >= 2) score += 3;
+  }
+
+  return score;
+}
+
 function hasReadSymbol(trace, pathValue, symbol) {
   const normalizedPath = normalizePath(pathValue).toLowerCase();
   const normalizedSymbol = String(symbol || '').trim().toLowerCase();
@@ -500,55 +539,211 @@ async function pushTraceStep(trace, workspacePath, thought, action, input) {
   return observation;
 }
 
-async function resolveRootPath(workspacePath, question, selectedFilePath, trace) {
-  const selectedPath = normalizePath(selectedFilePath);
+function buildAnchorEvidenceMetrics(content, outlineItems) {
+  const text = String(content || '');
+  const callTokens = extractCallTokens(text, { mode: 'anchor' });
+  const callMentionCount = callTokens.reduce((sum, item) => sum + Number(item.count || 0), 0);
+  const controlCount = countMatches(text, CONTROL_SIGNAL_RE);
+  const assignmentCount = countMatches(text, ASSIGNMENT_SIGNAL_RE);
+  const outlineRows = Array.isArray(outlineItems) ? outlineItems : [];
+  const methodCount = outlineRows.filter((item) => ['method', 'function', 'event'].includes(String(item?.kind || '').trim().toLowerCase())).length;
+  const typeCount = outlineRows.filter((item) => String(item?.kind || '').trim().toLowerCase() === 'type').length;
+  const declarationOnly = typeCount > 0 && methodCount === 0 && callTokens.length === 0 && controlCount === 0 && assignmentCount === 0;
+  return {
+    callTokenCount: callTokens.length,
+    callMentionCount,
+    controlCount,
+    assignmentCount,
+    methodCount,
+    typeCount,
+    declarationOnly,
+  };
+}
+
+function scoreAnchorCandidateSeed(candidate, questionTerms) {
+  const pathValue = normalizePath(candidate?.path);
+  let score = scoreFileQuestionAlignment(pathValue, '', questionTerms);
+  const grepHits = Array.isArray(candidate?.grepHits) ? candidate.grepHits : [];
+  score += Math.min(20, grepHits.length * 6);
+  score += Math.min(30, Math.max(0, ...grepHits.map((item) => Number(item?.score || 0))));
+  if (candidate?.selected) {
+    score += 8;
+  }
+  return score;
+}
+
+function scoreAnchorCandidateInspection(candidate, questionTerms, { preferFlow = false } = {}) {
+  const content = String(candidate?.content || '');
+  const outlineItems = Array.isArray(candidate?.outlineItems) ? candidate.outlineItems : [];
+  const metrics = buildAnchorEvidenceMetrics(content, outlineItems);
+  const outlineCandidates = chooseBestOutlineItems(outlineItems, questionTerms);
+  let score = scoreAnchorCandidateSeed(candidate, questionTerms);
+  score += scoreFileQuestionAlignment(candidate?.path, content, questionTerms);
+  score += metrics.methodCount * 12;
+  score += metrics.callTokenCount * 8;
+  score += metrics.callMentionCount * 2;
+  score += metrics.controlCount * 3;
+  score += metrics.assignmentCount;
+  if (outlineCandidates[0]) {
+    score += 12;
+  }
+  if (preferFlow) {
+    if (metrics.methodCount > 0 || metrics.callTokenCount > 0 || metrics.controlCount > 0) {
+      score += 18;
+    }
+    if (metrics.declarationOnly) {
+      score -= 18;
+    }
+  }
+  return {
+    score,
+    metrics,
+    outlineCandidates,
+  };
+}
+
+function mergeAnchorCandidate(candidates, payload, questionTerms) {
+  const pathValue = normalizePath(payload?.path);
+  if (!pathValue) {
+    return;
+  }
+  const key = pathValue.toLowerCase();
+  const current = candidates.get(key) || {
+    path: pathValue,
+    selected: false,
+    grepHits: [],
+    queries: [],
+    source: '',
+  };
+  if (payload?.selected) {
+    current.selected = true;
+  }
+  if (payload?.query) {
+    const queryText = String(payload.query || '').trim();
+    if (queryText && !current.queries.includes(queryText)) {
+      current.queries.push(queryText);
+    }
+  }
+  if (payload?.hit) {
+    current.grepHits.push({
+      query: String(payload.query || '').trim(),
+      line: Number(payload.hit?.line || 0),
+      text: String(payload.hit?.text || '').trim(),
+      score: scoreGrepAnchorHit(payload.hit, questionTerms, payload.query),
+    });
+    current.grepHits.sort((left, right) => Number(right.score || 0) - Number(left.score || 0));
+    current.grepHits = current.grepHits.slice(0, MAX_ROOT_PATHS_PER_QUERY);
+  }
+  current.source = current.grepHits.length > 0 ? 'grep' : (current.selected ? 'selected' : (payload?.source || current.source || 'candidate'));
+  candidates.set(key, current);
+}
+
+async function collectAnchorCandidates(workspacePath, question, selectedPath, questionTerms) {
+  const candidates = new Map();
   if (selectedPath) {
-    return selectedPath;
+    mergeAnchorCandidate(candidates, { path: selectedPath, selected: true, source: 'selected' }, questionTerms);
   }
 
-  const questionTerms = normalizeQuestionTerms(question);
-  const listResult = await pushTraceStep(trace, workspacePath, 'enumerate workspace files to anchor the local investigation', 'list_files', {
-    limit: MAX_LIST_LIMIT,
-  });
-  const items = Array.isArray(listResult?.items) ? listResult.items : [];
-  if (questionTerms.length > 0) {
-    const scored = items
-      .map((item) => {
-        const pathValue = normalizePath(item?.path);
-        const lowered = pathValue.toLowerCase();
-        let score = 0;
-        for (const term of questionTerms) {
-          const loweredTerm = String(term || '').trim().toLowerCase();
-          if (!loweredTerm) continue;
-          if (lowered.includes(loweredTerm)) score += 16;
-          if (pathStem(pathValue).toLowerCase().includes(loweredTerm)) score += 12;
-        }
-        return { path: pathValue, score };
-      })
-      .sort((a, b) => Number(b.score || 0) - Number(a.score || 0) || String(a.path || '').localeCompare(String(b.path || '')));
-    if (scored[0] && scored[0].score > 0) {
-      return scored[0].path;
+  const anchorQueries = buildAnchorQueries(question, questionTerms).slice(0, MAX_ROOT_QUERY_CANDIDATES);
+  for (const queryText of anchorQueries) {
+    const token = String(queryText || '').trim();
+    if (!token) continue;
+    const observation = await grepWorkspace(workspacePath, token, MAX_GREP_LIMIT);
+    if (!observation?.ok) continue;
+    for (const hit of Array.isArray(observation?.items) ? observation.items.slice(0, MAX_ROOT_PATHS_PER_QUERY) : []) {
+      mergeAnchorCandidate(candidates, { path: hit?.path, query: token, hit, source: 'grep' }, questionTerms);
     }
   }
 
-  const anchorQueries = buildAnchorQueries(question, questionTerms);
-  for (const queryText of anchorQueries) {
+  if (candidates.size === 0) {
+    const fileList = await listWorkspaceFiles(workspacePath, { limit: MAX_LIST_LIMIT });
+    const ranked = (Array.isArray(fileList?.items) ? fileList.items : [])
+      .map((item) => ({
+        path: normalizePath(item?.path),
+        score: scoreFileQuestionAlignment(item?.path, '', questionTerms),
+      }))
+      .filter((item) => item.path && Number(item.score || 0) > 0)
+      .sort((left, right) => Number(right.score || 0) - Number(left.score || 0) || String(left.path || '').localeCompare(String(right.path || '')))
+      .slice(0, 2);
+    for (const item of ranked) {
+      mergeAnchorCandidate(candidates, { path: item.path, source: 'list_files' }, questionTerms);
+    }
+  }
+
+  return Array.from(candidates.values())
+    .sort((left, right) => scoreAnchorCandidateSeed(right, questionTerms) - scoreAnchorCandidateSeed(left, questionTerms))
+    .slice(0, MAX_ROOT_FILE_CANDIDATES);
+}
+
+async function inspectAnchorCandidate(workspacePath, candidate, questionTerms, { preferFlow = false } = {}) {
+  const readObservation = await readWorkspaceFile(workspacePath, candidate.path, {
+    maxChars: Math.min(FILE_READ_CHAR_LIMIT, 6000),
+    startLine: 1,
+    endLine: 400,
+  });
+  const content = readObservation?.ok ? String(readObservation.content || '') : '';
+  const outlineObservation = readObservation?.ok
+    ? await symbolOutlineInWorkspace(workspacePath, candidate.path, { limit: 120 })
+    : { ok: false, items: [] };
+  const outlineItems = Array.isArray(outlineObservation?.items) ? outlineObservation.items : [];
+  const evaluation = scoreAnchorCandidateInspection(
+    {
+      ...candidate,
+      content,
+      outlineItems,
+    },
+    questionTerms,
+    { preferFlow },
+  );
+  return {
+    ...candidate,
+    readObservation,
+    content,
+    outlineItems,
+    evaluation,
+  };
+}
+
+async function selectRootAnchorCandidate(workspacePath, question, selectedPath, questionTerms) {
+  const preferFlow = isFlowQuestion(question);
+  const candidates = await collectAnchorCandidates(workspacePath, question, selectedPath, questionTerms);
+  let best = null;
+  for (const candidate of candidates) {
+    const inspected = await inspectAnchorCandidate(workspacePath, candidate, questionTerms, { preferFlow });
+    if (!best || Number(inspected?.evaluation?.score || 0) > Number(best?.evaluation?.score || 0)) {
+      best = inspected;
+    }
+  }
+  return best;
+}
+
+async function resolveRootPath(workspacePath, question, selectedFilePath, trace) {
+  const selectedPath = normalizePath(selectedFilePath);
+  const questionTerms = normalizeQuestionTerms(question);
+  const bestAnchor = await selectRootAnchorCandidate(workspacePath, question, selectedPath, questionTerms);
+  if (!bestAnchor?.path) {
+    return selectedPath || '';
+  }
+  if (String(bestAnchor.source || '').trim().toLowerCase() === 'grep' && Array.isArray(bestAnchor.queries) && bestAnchor.queries[0]) {
     const grepObservation = await pushTraceStep(
       trace,
       workspacePath,
-      `search workspace text to find a local anchor for ${queryText}`,
+      `search workspace text to find a local anchor for ${bestAnchor.queries[0]}`,
       'grep',
       {
-        query: queryText,
+        query: bestAnchor.queries[0],
         limit: MAX_GREP_LIMIT,
       },
     );
-    const bestHit = pickBestGrepAnchor(grepObservation?.items, questionTerms, queryText);
-    if (bestHit && Number(bestHit.score || 0) > 0) {
-      return bestHit.path;
+    if (!grepObservation?.ok) {
+      return bestAnchor.path;
     }
+  } else if (String(bestAnchor.source || '').trim().toLowerCase() === 'list_files') {
+    await pushTraceStep(trace, workspacePath, 'enumerate workspace files to anchor the local investigation', 'list_files', {
+      limit: MAX_LIST_LIMIT,
+    });
   }
-  return '';
+  return bestAnchor.path;
 }
 
 function scoreGrepAnchorHit(item, questionTerms, queryText) {
@@ -572,33 +767,17 @@ function scoreGrepAnchorHit(item, questionTerms, queryText) {
   }
   if (/\/(?:obj|bin|dist|build|out|node_modules)\//i.test(pathValue)) score -= 30;
   if (/\b(class|interface|struct|enum|record|namespace|module)\b/i.test(text)) score += 4;
+  if (/[A-Za-z_][A-Za-z0-9_]*\s*\(|\.\s*[A-Za-z_][A-Za-z0-9_]*\s*\(|::\s*[A-Za-z_][A-Za-z0-9_]*\s*\(/.test(text)) score += 8;
+  if (/\b(if|for|foreach|while|switch|return|await|catch)\b/i.test(text)) score += 6;
   return score;
-}
-
-function pickBestGrepAnchor(items, questionTerms, queryText) {
-  const bestByPath = new Map();
-  for (const item of Array.isArray(items) ? items : []) {
-    const pathValue = normalizePath(item?.path);
-    if (!pathValue) continue;
-    const candidate = {
-      path: pathValue,
-      score: scoreGrepAnchorHit(item, questionTerms, queryText),
-      line: Number(item?.line || 0),
-      text: String(item?.text || '').trim(),
-    };
-    const current = bestByPath.get(pathValue.toLowerCase());
-    if (!current || Number(candidate.score || 0) > Number(current.score || 0)) {
-      bestByPath.set(pathValue.toLowerCase(), candidate);
-    }
-  }
-  return Array.from(bestByPath.values())
-    .sort((a, b) => Number(b.score || 0) - Number(a.score || 0) || String(a.path || '').localeCompare(String(b.path || '')))[0] || null;
 }
 
 function buildAnchorQueries(question, questionTerms) {
   const rawQuestion = String(question || '').trim();
   const queries = [];
-  for (const term of Array.isArray(questionTerms) ? questionTerms : []) {
+  const orderedTerms = uniq(Array.isArray(questionTerms) ? questionTerms : [])
+    .sort((left, right) => questionTermPriority(right) - questionTermPriority(left) || String(left || '').localeCompare(String(right || '')));
+  for (const term of orderedTerms) {
     const token = String(term || '').trim();
     if (!token) continue;
     queries.push(token);
@@ -618,7 +797,9 @@ function summarizeTraceTargets(trace) {
 
 function buildWorkspaceGraph(question, trace, analysis) {
   const selectedPath = normalizePath(analysis.selectedPath || analysis.rootPath || '');
-  const primaryPath = normalizePath(analysis.primaryPath || selectedPath);
+  const rootPath = normalizePath(analysis.rootPath || selectedPath);
+  const primaryPath = normalizePath(analysis.primaryPath || rootPath || selectedPath);
+  const selectedMatchesPrimary = Boolean(selectedPath) && selectedPath.toLowerCase() === primaryPath.toLowerCase();
   const readFiles = readObservationsFromTrace(trace);
   const relatedFiles = uniq([
     primaryPath,
@@ -627,7 +808,7 @@ function buildWorkspaceGraph(question, trace, analysis) {
     ...readFiles.map((item) => item.path),
   ]).slice(0, MAX_RELATED_FILES);
   const coreFiles = uniq([
-    selectedPath,
+    selectedMatchesPrimary ? selectedPath : '',
     primaryPath,
     analysis.callerOwner?.path || '',
   ]).filter(Boolean).slice(0, MAX_CORE_FILES);
@@ -735,7 +916,8 @@ function buildWorkspaceGraph(question, trace, analysis) {
   const contextText = JSON.stringify(
     {
       question,
-      root_path: selectedPath,
+      root_path: rootPath,
+      selected_path: selectedPath,
       primary_path: primaryPath,
       primary_symbol: analysis.primarySymbol || '',
       candidate_symbols: analysis.candidateSymbols || [],
@@ -803,7 +985,7 @@ async function runLocalToolLoop({
     summary: '',
   };
 
-  await pushTraceStep(trace, workspacePath, 'read the selected file as the primary local anchor', 'read_file', {
+  await pushTraceStep(trace, workspacePath, 'read the chosen local anchor file', 'read_file', {
     path: rootPath,
     maxChars: FILE_READ_CHAR_LIMIT,
     startLine: 1,
@@ -1036,5 +1218,6 @@ module.exports = {
     choosePrimaryWindow,
     chooseSupportSymbols,
     buildWorkspaceGraph,
+    scoreFileQuestionAlignment,
   },
 };
