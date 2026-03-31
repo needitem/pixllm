@@ -32,9 +32,9 @@ const MAX_LIST_LIMIT = 5000;
 const MAX_ROOT_QUERY_CANDIDATES = 4;
 const MAX_ROOT_PATHS_PER_QUERY = 3;
 const MAX_ROOT_FILE_CANDIDATES = 6;
+const MAX_ROOT_FILE_INSPECTIONS = 3;
 const MAX_ROOT_GREPHITS_PER_QUERY = 12;
 const MAX_ROOT_GREP_SCAN_LIMIT = 80;
-const MAX_ROOT_EXPANSION_QUERIES = 8;
 const MAX_CORE_FILES = 4;
 const MAX_SUPPORT_FILES = 4;
 const MAX_RELATED_FILES = 8;
@@ -103,14 +103,25 @@ const FLOW_META_TERMS = new Set([
   '\uC124\uBA85',
   '\uBD84\uC11D',
 ]);
-const GENERIC_UI_IDENTIFIER_TERMS = new Set([
+const BROAD_ANCHOR_TERMS = new Set([
+  'image',
+  'images',
+  'video',
+  'file',
+  'files',
+  'data',
+  'result',
+  'results',
   'view',
-  'display',
-  'window',
-  'dialog',
-  'control',
-  'page',
   'screen',
+  'ui',
+  '\uC601\uC0C1',
+  '\uC774\uBBF8\uC9C0',
+  '\uD654\uBA74',
+  '\uD30C\uC77C',
+  '\uB370\uC774\uD130',
+  '\uACB0\uACFC',
+  '\uC815\uBCF4',
 ]);
 
 function pathBasename(value) {
@@ -224,7 +235,14 @@ function questionTermPriority(term) {
   if (/[A-Z_]/.test(token)) score += 12;
   if (splitSymbolParts(token).length >= 2) score += 8;
   if (FLOW_META_TERMS.has(token.toLowerCase())) score -= 24;
+  if (BROAD_ANCHOR_TERMS.has(token.toLowerCase())) score -= 10;
   return score;
+}
+
+function isBroadAnchorTerm(term) {
+  const token = String(term || '').trim().toLowerCase();
+  if (!token) return true;
+  return FLOW_META_TERMS.has(token) || BROAD_ANCHOR_TERMS.has(token);
 }
 
 function normalizeQuestionTerms(question) {
@@ -335,90 +353,26 @@ function pathFlowBias(pathValue, { preferFlow = false } = {}) {
 }
 
 function buildCandidateReadWindow(candidate, { preferFlow = false } = {}) {
-  const focusLines = (Array.isArray(candidate?.grepHits) ? candidate.grepHits : [])
-    .map((item) => Number(item?.line || 0))
-    .filter((item) => item > 0)
-    .sort((left, right) => left - right);
-  if (focusLines.length === 0) {
+  const rankedHits = (Array.isArray(candidate?.grepHits) ? candidate.grepHits : [])
+    .map((item) => ({
+      ...item,
+      __line: Number(item?.line || 0),
+      __score: Number(item?.score || 0),
+    }))
+    .filter((item) => item.__line > 0)
+    .sort((left, right) => Number(right.__score || 0) - Number(left.__score || 0) || Number(left.__line || 0) - Number(right.__line || 0));
+  if (rankedHits.length === 0) {
     return {
       startLine: 1,
       endLine: preferFlow ? 800 : 400,
     };
   }
-  const center = focusLines[0];
+  const center = rankedHits[0].__line;
   const radius = preferFlow ? 120 : 80;
   return {
     startLine: Math.max(1, center - radius),
     endLine: Math.max(center + radius, center + 40),
   };
-}
-
-function trimPathStemPrefixes(stem) {
-  return String(stem || '')
-    .replace(/\.(?:xaml|xml|json|yaml|yml|md|txt)$/i, '')
-    .replace(/^(?:Win|UC|Vm|VM|Dlg|Page|View|Window|UserControl)[_-]?/, '');
-}
-
-function deriveAnchorExpansionQueriesFromHits(hits, questionTerms) {
-  const queries = [];
-  const questionSet = new Set((Array.isArray(questionTerms) ? questionTerms : []).map((item) => String(item || '').trim().toLowerCase()).filter(Boolean));
-
-  for (const hit of Array.isArray(hits) ? hits : []) {
-    const stem = trimPathStemPrefixes(pathStem(hit?.path));
-    if (!stem) continue;
-    const stemParts = splitSymbolParts(stem).filter((item) => String(item || '').trim().length >= 4);
-    const structuredStem = stem.includes('_') || stemParts.length >= 2;
-    const loweredStem = stem.toLowerCase();
-    if (structuredStem && !questionSet.has(loweredStem) && identifierStructureScore(stem) >= 4) {
-      queries.push(stem);
-    }
-    for (let index = 0; index < stemParts.length; index += 1) {
-      const part = String(stemParts[index] || '').trim();
-      if (!part || FLOW_META_TERMS.has(part.toLowerCase())) continue;
-      if (
-        structuredStem
-        && part.length >= 9
-        && !questionSet.has(part.toLowerCase())
-        && !GENERIC_UI_IDENTIFIER_TERMS.has(part.toLowerCase())
-      ) {
-        queries.push(part);
-      }
-      const nextPart = String(stemParts[index + 1] || '').trim();
-      if (!nextPart) continue;
-      const combined = `${part}${nextPart}`;
-      if (combined.length >= 8 && identifierStructureScore(combined) >= 4) {
-        queries.push(combined);
-      }
-    }
-  }
-
-  return uniq(queries)
-    .filter((item) => !questionSet.has(String(item || '').trim().toLowerCase()))
-    .sort((left, right) => {
-      const leftParts = splitSymbolParts(left);
-      const rightParts = splitSymbolParts(right);
-      const priority = (token, parts) => {
-        const lastPart = String(parts[parts.length - 1] || '').trim().toLowerCase();
-        let score = identifierStructureScore(token) * 10 + Math.min(40, String(token || '').length);
-        if (parts.length >= 2) score += parts.length * 8;
-        if (GENERIC_UI_IDENTIFIER_TERMS.has(lastPart)) score -= 28;
-        return score;
-      };
-      return priority(right, rightParts) - priority(left, leftParts) || String(left || '').localeCompare(String(right || ''));
-    })
-    .slice(0, MAX_ROOT_EXPANSION_QUERIES);
-}
-
-function countStructuredQueries(queries = []) {
-  let count = 0;
-  for (const query of Array.isArray(queries) ? queries : []) {
-    const token = String(query || '').trim();
-    if (!token) continue;
-    if (identifierStructureScore(token) >= 4 || splitSymbolParts(token).length >= 2) {
-      count += 1;
-    }
-  }
-  return count;
 }
 
 function dedupeBy(items, keySelector) {
@@ -837,23 +791,21 @@ function scoreAnchorCandidateInspection(candidate, questionTerms, { preferFlow =
   const outlineCandidates = chooseBestOutlineItems(outlineItems, questionTerms, { focusLines, preferFlow });
   let score = scoreAnchorCandidateSeed(candidate, questionTerms);
   score += scoreFileQuestionAlignment(candidate?.path, content, questionTerms);
-  score += alignment.codeDistinctTerms * 80;
-  score += alignment.outlineTermHits * 18;
-  score += alignment.pathTermHits * 12;
-  score += Math.min(20, alignment.codeTermHits * 4);
-  score += Math.min(12, alignment.commentDistinctTerms * 6);
-  score += Math.min(56, metrics.methodCount * 4);
-  score += Math.min(36, metrics.callTokenCount * 6);
-  score += Math.min(48, metrics.callMentionCount * 2);
-  score += Math.min(18, metrics.controlCount * 3);
-  score += Math.min(16, metrics.assignmentCount);
+  score += alignment.codeDistinctTerms * 18;
+  score += alignment.outlineTermHits * 8;
+  score += alignment.pathTermHits * 6;
+  score += Math.min(12, alignment.codeTermHits * 2);
+  score += Math.min(6, alignment.commentDistinctTerms * 3);
+  score += Math.min(16, metrics.methodCount * 2);
+  score += Math.min(12, metrics.callTokenCount * 3);
+  score += Math.min(16, metrics.callMentionCount);
+  score += Math.min(10, metrics.controlCount * 2);
+  score += Math.min(8, metrics.assignmentCount / 2);
   score += pathFlowBias(candidate?.path, { preferFlow });
   if (outlineCandidates[0]) {
-    score += 12;
+    score += 6;
   }
   if (preferFlow) {
-    const structuredQueryCount = countStructuredQueries(candidate?.queries);
-    score += Math.min(54, structuredQueryCount * 18);
     if (
       alignment.codeDistinctTerms > 0
       || alignment.outlineTermHits > 0
@@ -861,20 +813,17 @@ function scoreAnchorCandidateInspection(candidate, questionTerms, { preferFlow =
       || metrics.callTokenCount > 0
       || metrics.controlCount > 0
     ) {
-      score += 18;
+      score += 8;
     }
     if (alignment.codeDistinctTerms === 0 && alignment.outlineTermHits === 0) {
-      score -= 180;
-    }
-    if (structuredQueryCount === 0 && alignment.codeDistinctTerms === 0 && alignment.outlineTermHits === 0) {
-      score -= 48;
+      score -= 28;
     }
     if (metrics.declarationOnly) {
-      score -= 48;
+      score -= 18;
     }
     const grepHits = Array.isArray(candidate?.grepHits) ? candidate.grepHits : [];
     if (grepHits.length > 0 && grepHits.every((item) => Boolean(item?.commentOnly)) && alignment.codeDistinctTerms === 0) {
-      score -= 48;
+      score -= 18;
     }
   }
   return {
@@ -925,7 +874,7 @@ function mergeAnchorCandidate(candidates, payload) {
 async function collectAnchorCandidates(workspacePath, question, selectedPath, questionTerms) {
   const candidates = new Map();
   const preferFlow = isFlowQuestion(question);
-  const seedHits = [];
+  const specificQuestionTerms = (Array.isArray(questionTerms) ? questionTerms : []).filter((item) => !isBroadAnchorTerm(item));
   if (selectedPath) {
     mergeAnchorCandidate(candidates, { path: selectedPath, selected: true, source: 'selected' });
   }
@@ -946,7 +895,6 @@ async function collectAnchorCandidates(workspacePath, question, selectedPath, qu
       .slice(0, MAX_ROOT_GREPHITS_PER_QUERY);
     const uniqueHits = dedupeBy(rankedHits, (item) => item?.path).slice(0, MAX_ROOT_PATHS_PER_QUERY);
     for (const hit of uniqueHits) {
-      seedHits.push(hit);
       mergeAnchorCandidate(candidates, {
         path: hit?.path,
         query: token,
@@ -955,35 +903,6 @@ async function collectAnchorCandidates(workspacePath, question, selectedPath, qu
         hitScore: hit?.__score,
         commentOnly: hit?.__commentOnly,
       });
-    }
-  }
-
-  if (preferFlow) {
-    const expansionQueries = deriveAnchorExpansionQueriesFromHits(seedHits, questionTerms);
-    for (const queryText of expansionQueries) {
-      const token = String(queryText || '').trim();
-      if (!token) continue;
-      const observation = await grepWorkspace(workspacePath, token, MAX_ROOT_GREP_SCAN_LIMIT);
-      if (!observation?.ok) continue;
-      const rankedHits = (Array.isArray(observation?.items) ? observation.items : [])
-        .map((hit) => ({
-          ...hit,
-          __score: scoreGrepAnchorHit(hit, questionTerms, token, { preferFlow: true }),
-          __commentOnly: isCommentOnlyLine(hit?.text),
-        }))
-        .sort((left, right) => Number(right.__score || 0) - Number(left.__score || 0) || String(left.path || '').localeCompare(String(right.path || '')))
-        .slice(0, MAX_ROOT_GREPHITS_PER_QUERY);
-      const uniqueHits = dedupeBy(rankedHits, (item) => item?.path).slice(0, MAX_ROOT_PATHS_PER_QUERY);
-      for (const hit of uniqueHits) {
-        mergeAnchorCandidate(candidates, {
-          path: hit?.path,
-          query: token,
-          hit,
-          source: 'grep',
-          hitScore: hit?.__score,
-          commentOnly: hit?.__commentOnly,
-        });
-      }
     }
   }
 
@@ -1002,7 +921,16 @@ async function collectAnchorCandidates(workspacePath, question, selectedPath, qu
     }
   }
 
-  return Array.from(candidates.values())
+  const candidateList = Array.from(candidates.values())
+    .filter((candidate) => {
+      if (specificQuestionTerms.length === 0) {
+        return true;
+      }
+      const candidateQueries = new Set((Array.isArray(candidate?.queries) ? candidate.queries : []).map((item) => String(item || '').trim().toLowerCase()).filter(Boolean));
+      return specificQuestionTerms.some((term) => candidateQueries.has(String(term || '').trim().toLowerCase()));
+    });
+
+  return (candidateList.length > 0 ? candidateList : Array.from(candidates.values()))
     .sort((left, right) => scoreAnchorCandidateSeed(right, questionTerms) - scoreAnchorCandidateSeed(left, questionTerms))
     .slice(0, MAX_ROOT_FILE_CANDIDATES);
 }
@@ -1037,17 +965,65 @@ async function inspectAnchorCandidate(workspacePath, candidate, questionTerms, {
   };
 }
 
+function buildObservedAnchorDecision(inspected, { preferFlow = false } = {}) {
+  const alignment = inspected?.evaluation?.alignment && typeof inspected.evaluation.alignment === 'object'
+    ? inspected.evaluation.alignment
+    : {};
+  const metrics = inspected?.evaluation?.metrics && typeof inspected.evaluation.metrics === 'object'
+    ? inspected.evaluation.metrics
+    : {};
+  const grepHits = Array.isArray(inspected?.grepHits) ? inspected.grepHits : [];
+  const nonCommentHits = grepHits.filter((item) => !Boolean(item?.commentOnly));
+  const declarationOnly = Boolean(metrics.declarationOnly);
+  const distinctCoverage = Number(alignment.codeDistinctTerms || 0) + Number(alignment.outlineTermHits || 0);
+  const softQuestionCoverage = distinctCoverage + Number(alignment.commentDistinctTerms || 0);
+  const executableFlow = Number(metrics.methodCount || 0) + Number(metrics.callTokenCount || 0) + Number(metrics.controlCount || 0);
+  const directQuestionCode = Number(alignment.codeDistinctTerms || 0) > 0;
+  const nearbyExecutable = Array.isArray(inspected?.evaluation?.outlineCandidates) && inspected.evaluation.outlineCandidates.length > 0;
+  return {
+    inspected,
+    tuple: [
+      preferFlow ? (executableFlow > 0 ? 1 : 0) : 0,
+      preferFlow ? (declarationOnly ? 0 : 1) : 0,
+      preferFlow ? (softQuestionCoverage > 0 ? 1 : 0) : 0,
+      directQuestionCode ? 1 : 0,
+      nearbyExecutable ? 1 : 0,
+      Math.min(4, softQuestionCoverage),
+      Math.min(4, nonCommentHits.length),
+      Math.min(6, executableFlow),
+      Number(inspected?.evaluation?.score || 0),
+    ],
+  };
+}
+
+function compareDecisionTuples(left, right) {
+  const leftTuple = Array.isArray(left?.tuple) ? left.tuple : [];
+  const rightTuple = Array.isArray(right?.tuple) ? right.tuple : [];
+  const width = Math.max(leftTuple.length, rightTuple.length);
+  for (let index = 0; index < width; index += 1) {
+    const delta = Number(rightTuple[index] || 0) - Number(leftTuple[index] || 0);
+    if (delta !== 0) {
+      return delta;
+    }
+  }
+  return String(left?.inspected?.path || '').localeCompare(String(right?.inspected?.path || ''));
+}
+
 async function selectRootAnchorCandidate(workspacePath, question, selectedPath, questionTerms) {
   const preferFlow = isFlowQuestion(question);
   const candidates = await collectAnchorCandidates(workspacePath, question, selectedPath, questionTerms);
-  let best = null;
-  for (const candidate of candidates) {
+  const inspectedCandidates = [];
+  for (const candidate of candidates.slice(0, MAX_ROOT_FILE_INSPECTIONS)) {
     const inspected = await inspectAnchorCandidate(workspacePath, candidate, questionTerms, { preferFlow });
-    if (!best || Number(inspected?.evaluation?.score || 0) > Number(best?.evaluation?.score || 0)) {
-      best = inspected;
-    }
+    inspectedCandidates.push(inspected);
   }
-  return best;
+  if (inspectedCandidates.length === 0) {
+    return null;
+  }
+  const ranked = inspectedCandidates
+    .map((item) => buildObservedAnchorDecision(item, { preferFlow }))
+    .sort(compareDecisionTuples);
+  return ranked[0]?.inspected || null;
 }
 
 async function resolveRootPath(workspacePath, question, selectedFilePath, trace) {

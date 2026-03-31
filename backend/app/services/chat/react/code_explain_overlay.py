@@ -527,13 +527,13 @@ def _score_primary_paths(
 
     for path in candidate_paths:
         if path == selected_path:
-            scores[path] += 120.0 if selected_matches_focus else 12.0
+            scores[path] += 10.0 if selected_matches_focus else 2.0
         if path == focus_path:
-            scores[path] += 90.0
-        if path in core_files:
-            scores[path] += 36.0
-        if path in supporting_files:
             scores[path] += 12.0
+        if path in core_files:
+            scores[path] += 6.0
+        if path in supporting_files:
+            scores[path] += 3.0
         scores[path] += 2.0 * max(
             _shared_prefix_depth(path, selected_path),
             _shared_prefix_depth(path, focus_path),
@@ -545,22 +545,22 @@ def _score_primary_paths(
             continue
         tool_name = str(item.get("tool") or "").strip().lower()
         scores[path] += {
-            "read_symbol_span": 48.0,
-            "symbol_neighborhood": 28.0,
-            "selected_file": 24.0,
-            "read_file": 14.0,
-        }.get(tool_name, 10.0)
+            "read_symbol_span": 14.0,
+            "symbol_neighborhood": 8.0,
+            "selected_file": 6.0,
+            "read_file": 4.0,
+        }.get(tool_name, 2.0)
         if str(item.get("symbol") or "").strip():
-            scores[path] += 8.0
+            scores[path] += 2.0
 
     for item in list(trace_relations or []):
         path = _normalize_path(item.get("path"))
         if not path or path not in scores:
             continue
         tool_name = str(item.get("tool") or "").strip().lower()
-        scores[path] += 8.0 if tool_name in {"find_callers", "find_references"} else 4.0
+        scores[path] += 3.0 if tool_name in {"find_callers", "find_references"} else 1.0
         if str(item.get("anchor_symbol") or "").strip():
-            scores[path] += 2.0
+            scores[path] += 1.0
 
     ordered = sorted(
         candidate_paths,
@@ -585,9 +585,9 @@ def _sort_reads(
     return sorted(
         list(reads or []),
         key=lambda item: (
+            _READ_TOOL_PRIORITY.get(str(item.get("tool") or "").strip().lower(), 9),
             0 if _normalize_path(item.get("path")).lower() in primary_order else 1,
             primary_order.get(_normalize_path(item.get("path")).lower(), 99),
-            _READ_TOOL_PRIORITY.get(str(item.get("tool") or "").strip().lower(), 9),
             *_path_priority(
                 _normalize_path(item.get("path")),
                 focus_path=focus_path,
