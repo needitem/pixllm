@@ -49,6 +49,10 @@ ProgressCallback = Optional[Callable[[Dict[str, Any]], Awaitable[None] | None]]
 TokenCallback = Optional[Callable[[str], Awaitable[None] | None]]
 SourcesCallback = Optional[Callable[[List[Dict[str, Any]]], Awaitable[None] | None]]
 ToolCallback = Optional[Callable[[str, Dict[str, Any], str], Awaitable[None] | None]]
+_GENERIC_ANSWER_SYMBOL_TERMS = {
+    "viewmodel",
+    "viewmodelbase",
+}
 
 
 class StageTimeoutError(RuntimeError):
@@ -462,6 +466,34 @@ def _extract_code_like_mentions(text: str) -> List[str]:
         seen.add(lowered)
         ordered.append(normalized)
     return ordered
+
+
+def _strip_fenced_code_blocks(text: str) -> str:
+    stripped = re.sub(
+        r"```[a-zA-Z0-9_-]*\n.*?```",
+        "",
+        str(text or ""),
+        flags=re.DOTALL,
+    )
+    stripped = re.sub(r"\n{3,}", "\n\n", stripped)
+    return stripped.strip()
+
+
+def _filter_unresolved_answer_symbols(symbols: List[str], grounded_tokens: set[str]) -> List[str]:
+    filtered: List[str] = []
+    seen = set()
+    for raw in list(symbols or []):
+        token = str(raw or "").strip()
+        lowered = token.lower()
+        if not token or lowered in seen:
+            continue
+        seen.add(lowered)
+        if lowered in grounded_tokens:
+            continue
+        if lowered in _GENERIC_ANSWER_SYMBOL_TERMS:
+            continue
+        filtered.append(token)
+    return filtered
 
 
 def _should_relax_flow_structural_issues(
@@ -1450,8 +1482,18 @@ async def run_react_chat_generation(
             session_id,
             extra_allowed_paths=list(state.get("grounded_paths") or _current_grounded_paths()),
         )
-        provenance = build_provenance_report(guarded_answer, current_results, current_sources)
-        unsupported_claims = detect_unsupported_claims(guarded_answer, current_results)
+        sanitized_answer = guarded_answer
+        provenance = build_provenance_report(sanitized_answer, current_results, current_sources)
+        if (
+            int(provenance.get("code_block_count") or 0) > 0
+            and not bool(provenance.get("all_code_blocks_grounded", True))
+            and int(provenance.get("grounded_code_block_count") or 0) == 0
+        ):
+            prose_only_answer = _strip_fenced_code_blocks(sanitized_answer)
+            if prose_only_answer:
+                sanitized_answer = prose_only_answer
+                provenance = build_provenance_report(sanitized_answer, current_results, current_sources)
+        unsupported_claims = detect_unsupported_claims(sanitized_answer, current_results)
         evidence_fragments: List[str] = []
         for item in current_results:
             payload = dict(item.get("payload", {}) or {})
@@ -1475,11 +1517,10 @@ async def run_react_chat_generation(
             token.lower()
             for token in _extract_code_like_mentions(" ".join(evidence_fragments))
         }
-        unresolved_symbols = [
-            token
-            for token in _extract_code_like_mentions(guarded_answer)
-            if token.lower() not in grounded_tokens
-        ]
+        unresolved_symbols = _filter_unresolved_answer_symbols(
+            _extract_code_like_mentions(sanitized_answer),
+            grounded_tokens,
+        )
 
         issues: List[str] = []
         if not bool(guard_meta.get("passed", True)):
@@ -1498,7 +1539,7 @@ async def run_react_chat_generation(
             issues.append("unsupported_claims")
 
         if not issues:
-            return {"ok": True, "answer": guarded_answer}
+            return {"ok": True, "answer": sanitized_answer}
 
         feedback_lines = [
             "The drafted answer still contains claims that are not grounded in retrieved evidence.",
@@ -1523,7 +1564,7 @@ async def run_react_chat_generation(
         return {
             "ok": False,
             "feedback": "\n".join(feedback_lines),
-            "answer": guarded_answer,
+            "answer": sanitized_answer,
         }
 
     await _emit_progress(progress_callback, phase="retrieve", message="Starting evidence collection...")

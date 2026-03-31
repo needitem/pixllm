@@ -507,3 +507,28 @@ def test_flow_structural_issues_still_block_when_axes_are_missing() -> None:
 
     assert "open_frontier" in issues
     assert "open_contract_frontier" in issues
+
+
+def test_filter_unresolved_answer_symbols_ignores_generic_viewmodel_term() -> None:
+    unresolved = react_engine._filter_unresolved_answer_symbols(
+        ["ViewModel", "GenerateGroundTruth"],
+        {"generategroundtruth"},
+    )
+
+    assert unresolved == []
+
+
+def test_strip_fenced_code_blocks_removes_unproven_block() -> None:
+    answer = (
+        "핵심 흐름은 GenerateGroundTruth 호출입니다.\n\n"
+        "```csharp\n"
+        "var result = GenerateGroundTruth();\n"
+        "```\n\n"
+        "이후 결과를 갱신합니다."
+    )
+
+    stripped = react_engine._strip_fenced_code_blocks(answer)
+
+    assert "```" not in stripped
+    assert "GenerateGroundTruth 호출" in stripped
+    assert "이후 결과를 갱신합니다." in stripped
