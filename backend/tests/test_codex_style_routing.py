@@ -953,6 +953,217 @@ def test_tool_evidence_to_results_preserves_overlay_source_kind() -> None:
     assert rows[0]["payload"]["source_kind"] == "local_overlay"
 
 
+def test_overlay_read_renderer_produces_contract_shape() -> None:
+    answer = chat_results._render_overlay_contract_answer(
+        "code_read",
+        "build_question_contract를 설명해줘.",
+        {
+            "present": True,
+            "selected_file_path": "backend/app/services/chat/question_contract.py",
+            "selected_file_content": "def build_question_contract(*, message: str):\n    return {}",
+            "workspace_graph": {"target_symbol": "build_question_contract"},
+            "local_trace": [
+                {
+                    "tool": "read_symbol_span",
+                    "symbol": "build_question_contract",
+                    "observation": {
+                        "path": "backend/app/services/chat/question_contract.py",
+                        "lineRange": "10-20",
+                        "content": "def build_question_contract(*, message: str):\n    return {}",
+                    },
+                }
+            ],
+        },
+    )
+
+    assert answer.startswith("## Code Read")
+    assert "### Grounded Evidence" in answer
+    assert "`build_question_contract`" in answer
+
+
+def test_overlay_compare_renderer_produces_contract_shape() -> None:
+    answer = chat_results._render_overlay_contract_answer(
+        "code_compare",
+        "두 함수를 비교해줘.",
+        {
+            "present": True,
+            "selected_file_path": "backend/app/services/chat/question_contract.py",
+            "selected_file_content": "def build_question_contract(...): pass\n\ndef normalize_question_contract(...): pass",
+            "local_trace": [
+                {
+                    "tool": "read_symbol_span",
+                    "symbol": "build_question_contract",
+                    "observation": {
+                        "path": "backend/app/services/chat/question_contract.py",
+                        "lineRange": "10-20",
+                        "content": "def build_question_contract(*, message: str):\n    return {}",
+                    },
+                },
+                {
+                    "tool": "read_symbol_span",
+                    "symbol": "normalize_question_contract",
+                    "observation": {
+                        "path": "backend/app/services/chat/question_contract.py",
+                        "lineRange": "30-45",
+                        "content": "def normalize_question_contract(contract):\n    return contract",
+                    },
+                },
+            ],
+        },
+    )
+
+    assert answer.startswith("## Code Comparison")
+    assert "### Compared Items" in answer
+    assert "`build_question_contract`" in answer
+    assert "`normalize_question_contract`" in answer
+
+
+def test_overlay_failure_renderer_produces_contract_shape() -> None:
+    answer = chat_results._render_overlay_contract_answer(
+        "failure_analysis",
+        "원인 분석해줘.",
+        {
+            "present": True,
+            "selected_file_path": "backend/app/services/chat/results.py",
+            "selected_file_content": "def _should_force_overlay_review_answer(...):\n    return False",
+            "local_trace": [
+                {
+                    "tool": "read_symbol_span",
+                    "symbol": "_should_force_overlay_review_answer",
+                    "observation": {
+                        "path": "backend/app/services/chat/results.py",
+                        "lineRange": "120-170",
+                        "content": "def _should_force_overlay_review_answer(...):\n    if not overlay:\n        return False",
+                    },
+                }
+            ],
+        },
+    )
+
+    assert answer.startswith("## Failure Analysis")
+    assert "### Grounded Facts" in answer
+    assert "### Grounded Control Points" in answer
+
+
+def test_overlay_read_force_fallback_on_overlay_only_generic_answer() -> None:
+    assert chat_results._should_force_overlay_contract_answer(
+        question_contract={"kind": "code_read"},
+        local_overlay={
+            "present": True,
+            "selected_file_path": "backend/app/services/chat/question_contract.py",
+            "selected_file_content": "def build_question_contract(*, message: str):\n    return {}",
+            "workspace_graph": {"target_symbol": "build_question_contract"},
+        },
+        results=[
+            {
+                "payload": {
+                    "file_path": "backend/app/services/chat/question_contract.py",
+                    "source_file": "backend/app/services/chat/question_contract.py",
+                    "source_kind": "local_overlay",
+                    "text": "def build_question_contract(*, message: str):\n    return {}",
+                }
+            }
+        ],
+        sources=[
+            {
+                "file_path": "backend/app/services/chat/question_contract.py",
+                "preview_text": "def build_question_contract(*, message: str):",
+                "score": 0.9,
+            }
+        ],
+        answer="## Workspace Overlay 설명",
+    ) is True
+
+
+def test_overlay_compare_force_fallback_on_overlay_only_generic_answer() -> None:
+    assert chat_results._should_force_overlay_contract_answer(
+        question_contract={"kind": "code_compare"},
+        local_overlay={
+            "present": True,
+            "selected_file_path": "backend/app/services/chat/question_contract.py",
+            "selected_file_content": "def build_question_contract(...): pass\n\ndef normalize_question_contract(...): pass",
+            "local_trace": [
+                {
+                    "tool": "read_symbol_span",
+                    "symbol": "build_question_contract",
+                    "observation": {
+                        "path": "backend/app/services/chat/question_contract.py",
+                        "lineRange": "10-20",
+                        "content": "def build_question_contract(*, message: str):\n    return {}",
+                    },
+                },
+                {
+                    "tool": "read_symbol_span",
+                    "symbol": "normalize_question_contract",
+                    "observation": {
+                        "path": "backend/app/services/chat/question_contract.py",
+                        "lineRange": "30-45",
+                        "content": "def normalize_question_contract(contract):\n    return contract",
+                    },
+                },
+            ],
+        },
+        results=[
+            {
+                "payload": {
+                    "file_path": "backend/app/services/chat/question_contract.py",
+                    "source_file": "backend/app/services/chat/question_contract.py",
+                    "source_kind": "local_overlay",
+                    "text": "def build_question_contract(*, message: str):\n    return {}",
+                }
+            }
+        ],
+        sources=[
+            {
+                "file_path": "backend/app/services/chat/question_contract.py",
+                "preview_text": "def build_question_contract(*, message: str):",
+                "score": 0.9,
+            }
+        ],
+        answer="## 답변",
+    ) is True
+
+
+def test_overlay_failure_force_fallback_on_overlay_only_generic_answer() -> None:
+    assert chat_results._should_force_overlay_contract_answer(
+        question_contract={"kind": "failure_analysis"},
+        local_overlay={
+            "present": True,
+            "selected_file_path": "backend/app/services/chat/results.py",
+            "selected_file_content": "def _should_force_overlay_review_answer(...):\n    return False",
+            "local_trace": [
+                {
+                    "tool": "read_symbol_span",
+                    "symbol": "_should_force_overlay_review_answer",
+                    "observation": {
+                        "path": "backend/app/services/chat/results.py",
+                        "lineRange": "120-170",
+                        "content": "def _should_force_overlay_review_answer(...):\n    if not overlay:\n        return False",
+                    },
+                }
+            ],
+        },
+        results=[
+            {
+                "payload": {
+                    "file_path": "backend/app/services/chat/results.py",
+                    "source_file": "backend/app/services/chat/results.py",
+                    "source_kind": "local_overlay",
+                    "text": "def _should_force_overlay_review_answer(...):\n    if not overlay:\n        return False",
+                }
+            }
+        ],
+        sources=[
+            {
+                "file_path": "backend/app/services/chat/results.py",
+                "preview_text": "def _should_force_overlay_review_answer(...):",
+                "score": 0.9,
+            }
+        ],
+        answer="## 답변",
+    ) is True
+
+
 def test_render_workspace_graph_answer_uses_anchor_span_and_downstream_calls() -> None:
     graph = {
         "focus_file": "MATR/ViewModels/UserControls/ImageMatching/Vm_ImageMatching_Heterogeneous.cs",

@@ -17,6 +17,7 @@ from .runtime_profile import build_react_routing_payload
 from .workspace_graph import (
     build_workspace_grounding_report,
     collect_grounded_overlay_paths,
+    collect_grounded_overlay_windows,
     extract_workspace_graph,
     render_workspace_graph_answer,
     workspace_graph_has_content,
@@ -52,6 +53,208 @@ def _overlay_changed_paths(local_overlay: Dict[str, Any] | None) -> List[str]:
         seen.add(lowered)
         ordered.append(item)
     return ordered
+
+
+def _overlay_grounded_reads(local_overlay: Dict[str, Any] | None) -> List[Dict[str, str]]:
+    overlay = dict(local_overlay or {})
+    workspace_graph = extract_workspace_graph(overlay)
+    target_symbol = str(workspace_graph.get("target_symbol") or "").strip()
+    selected_path = str(overlay.get("selected_file_path") or "").strip()
+    selected_content = str(overlay.get("selected_file_content") or "").strip()
+    reads: List[Dict[str, str]] = []
+    seen = set()
+
+    def _append(*, path: str, line_range: str = "", symbol: str = "", text: str = "", source: str = "") -> None:
+        normalized_path = str(path or "").strip()
+        normalized_text = str(text or "").strip()
+        normalized_range = str(line_range or "").strip()
+        normalized_symbol = str(symbol or "").strip()
+        key = (
+            normalized_path.lower(),
+            normalized_range.lower(),
+            normalized_symbol.lower(),
+            source.lower(),
+        )
+        if not normalized_path or not normalized_text or key in seen:
+            return
+        seen.add(key)
+        reads.append(
+            {
+                "path": normalized_path,
+                "line_range": normalized_range,
+                "symbol": normalized_symbol,
+                "text": normalized_text,
+                "source": str(source or "").strip(),
+            }
+        )
+
+    if selected_path and selected_content:
+        _append(
+            path=selected_path,
+            symbol=target_symbol,
+            text=selected_content,
+            source="selected_file",
+        )
+
+    for step in list(overlay.get("local_trace") or []):
+        if not isinstance(step, dict):
+            continue
+        tool_name = str(step.get("tool") or "").strip().lower()
+        if tool_name not in {"read_file", "read_symbol_span", "symbol_neighborhood"}:
+            continue
+        observation = step.get("observation")
+        if not isinstance(observation, dict):
+            continue
+        _append(
+            path=str(observation.get("path") or "").strip(),
+            line_range=str(observation.get("lineRange") or observation.get("line_range") or "").strip(),
+            symbol=str(step.get("symbol") or observation.get("symbol") or "").strip(),
+            text=str(observation.get("content") or "").strip(),
+            source=tool_name,
+        )
+
+    if not reads:
+        for item in list(collect_grounded_overlay_windows(overlay) or []):
+            if not isinstance(item, dict):
+                continue
+            _append(
+                path=str(item.get("path") or "").strip(),
+                line_range=str(item.get("line_range") or "").strip(),
+                text=str(item.get("content") or "").strip(),
+                source="grounded_window",
+            )
+    return reads
+
+
+def _overlay_symbols(local_overlay: Dict[str, Any] | None, reads: List[Dict[str, str]] | None = None) -> List[str]:
+    overlay = dict(local_overlay or {})
+    workspace_graph = extract_workspace_graph(overlay)
+    symbols: List[str] = []
+    target_symbol = str(workspace_graph.get("target_symbol") or "").strip()
+    if target_symbol:
+        symbols.append(target_symbol)
+    for item in list(reads or _overlay_grounded_reads(overlay)):
+        symbol = str(dict(item or {}).get("symbol") or "").strip()
+        if symbol:
+            symbols.append(symbol)
+    seen = set()
+    ordered: List[str] = []
+    for symbol in symbols:
+        lowered = symbol.lower()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        ordered.append(symbol)
+    return ordered
+
+
+def _snippet_line(text: str) -> str:
+    for raw_line in str(text or "").splitlines():
+        line = " ".join(raw_line.strip().split())
+        if line:
+            return line[:160]
+    return ""
+
+
+def _render_overlay_read_answer(question: str, local_overlay: Dict[str, Any] | None) -> str:
+    _ = question
+    overlay = dict(local_overlay or {})
+    reads = _overlay_grounded_reads(overlay)
+    if not reads:
+        return ""
+    symbols = _overlay_symbols(overlay, reads)
+    primary = reads[0]
+    lines = ["## Code Read", "", "Grounded summary built from local overlay reads.", ""]
+    lines.append("### Focus")
+    lines.append(f"- File: `{primary['path']}`")
+    if symbols:
+        lines.append("- Symbols: " + ", ".join(f"`{symbol}`" for symbol in symbols[:4]))
+    lines.append("")
+    lines.append("### Grounded Evidence")
+    for item in reads[:3]:
+        label = f"`{item['symbol']}`" if item.get("symbol") else "`read`"
+        location = f" @ {item['line_range']}" if item.get("line_range") else ""
+        lines.append(f"- {label} in `{item['path']}`{location}")
+        snippet = _snippet_line(item.get("text") or "")
+        if snippet:
+            lines.append(f"- snippet: `{snippet}`")
+    lines.append("")
+    lines.append("### Limits")
+    lines.append("- This summary is grounded in local overlay reads and may omit behavior outside the inspected spans.")
+    lines.append("- No additional server direct reads were required for this fallback rendering path.")
+    return "\n".join(lines).strip()
+
+
+def _render_overlay_compare_answer(question: str, local_overlay: Dict[str, Any] | None) -> str:
+    _ = question
+    overlay = dict(local_overlay or {})
+    reads = _overlay_grounded_reads(overlay)
+    symbols = _overlay_symbols(overlay, reads)
+    compare_items: List[Dict[str, str]] = []
+    seen = set()
+    ordered_reads = sorted(
+        list(reads),
+        key=lambda item: (0 if str(item.get("symbol") or "").strip() else 1, 0 if str(item.get("source") or "") != "selected_file" else 1),
+    )
+    for item in ordered_reads:
+        label = str(item.get("symbol") or item.get("path") or "").strip()
+        lowered = label.lower()
+        if not label or lowered in seen:
+            continue
+        seen.add(lowered)
+        compare_items.append(item)
+        if len(compare_items) >= 2:
+            break
+    if len(compare_items) < 2:
+        return ""
+
+    left, right = compare_items[0], compare_items[1]
+    lines = ["## Code Comparison", "", "Grounded comparison built from local overlay reads.", ""]
+    lines.append("### Compared Items")
+    for prefix, item in (("A", left), ("B", right)):
+        label = str(item.get("symbol") or item.get("path") or "").strip()
+        location = f" @ {item['line_range']}" if item.get("line_range") else ""
+        lines.append(f"- {prefix}: `{label}` in `{item['path']}`{location}")
+    lines.append("")
+    lines.append("### Grounded Evidence")
+    lines.append(f"- A snippet: `{_snippet_line(left.get('text') or '')}`")
+    lines.append(f"- B snippet: `{_snippet_line(right.get('text') or '')}`")
+    if len(symbols) > 2:
+        lines.append("- Additional grounded symbols: " + ", ".join(f"`{symbol}`" for symbol in symbols[2:6]))
+    lines.append("")
+    lines.append("### Limits")
+    lines.append("- This comparison is constrained to the directly inspected overlay spans.")
+    lines.append("- Semantic differences outside these grounded reads are intentionally omitted.")
+    return "\n".join(lines).strip()
+
+
+def _render_overlay_failure_analysis_answer(question: str, local_overlay: Dict[str, Any] | None) -> str:
+    _ = question
+    overlay = dict(local_overlay or {})
+    reads = _overlay_grounded_reads(overlay)
+    if not reads:
+        return ""
+    symbols = _overlay_symbols(overlay, reads)
+    lines = ["## Failure Analysis", "", "Grounded failure analysis built from local overlay reads.", ""]
+    lines.append("### Grounded Facts")
+    for item in reads[:3]:
+        label = f"`{item['symbol']}`" if item.get("symbol") else "`read`"
+        location = f" @ {item['line_range']}" if item.get("line_range") else ""
+        lines.append(f"- {label} in `{item['path']}`{location}")
+        snippet = _snippet_line(item.get("text") or "")
+        if snippet:
+            lines.append(f"- snippet: `{snippet}`")
+    lines.append("")
+    lines.append("### Grounded Control Points")
+    if symbols:
+        lines.append("- Symbols in scope: " + ", ".join(f"`{symbol}`" for symbol in symbols[:5]))
+    else:
+        lines.append(f"- Focus file: `{reads[0]['path']}`")
+    lines.append("")
+    lines.append("### Limits")
+    lines.append("- This analysis used overlay-grounded code reads only.")
+    lines.append("- No runtime traces or additional server direct reads were available to confirm a root cause.")
+    return "\n".join(lines).strip()
 
 
 def _render_overlay_review_answer(question: str, local_overlay: Dict[str, Any] | None) -> str:
@@ -130,6 +333,18 @@ def _overlay_review_evidence_present(local_overlay: Dict[str, Any] | None) -> bo
     )
 
 
+def _overlay_contract_evidence_present(kind: str, local_overlay: Dict[str, Any] | None) -> bool:
+    overlay = dict(local_overlay or {})
+    reads = _overlay_grounded_reads(overlay)
+    if kind == "code_review":
+        return _overlay_review_evidence_present(overlay)
+    if kind == "code_compare":
+        return len(reads) >= 2 or len(_overlay_symbols(overlay, reads)) >= 2
+    if kind in {"code_read", "failure_analysis"}:
+        return bool(reads)
+    return False
+
+
 def _result_source_kind_counts(results: List[Dict[str, Any]] | None) -> Dict[str, int]:
     counts: Dict[str, int] = {}
     for item in list(results or []):
@@ -164,6 +379,24 @@ def _answer_matches_review_contract(answer: str) -> bool:
         "### findings",
         "### limits",
     )
+    return any(marker in text for marker in markers)
+
+
+def _answer_matches_contract(answer: str, kind: str) -> bool:
+    token = str(kind or "").strip().lower()
+    if token == "code_review":
+        return _answer_matches_review_contract(answer)
+    text = str(answer or "").strip().lower()
+    if not text:
+        return False
+    marker_map = {
+        "code_read": ("## code read", "### grounded evidence", "### limits"),
+        "code_compare": ("## code comparison", "### compared items", "### grounded evidence"),
+        "failure_analysis": ("## failure analysis", "### grounded facts", "### grounded control points"),
+    }
+    markers = marker_map.get(token)
+    if not markers:
+        return False
     return any(marker in text for marker in markers)
 
 
@@ -257,6 +490,49 @@ def _should_force_overlay_review_answer(
     ):
         return False
     return not _answer_matches_review_contract(answer)
+
+
+def _render_overlay_contract_answer(kind: str, question: str, local_overlay: Dict[str, Any] | None) -> str:
+    token = str(kind or "").strip().lower()
+    if token == "code_review":
+        return _render_overlay_review_answer(question, local_overlay)
+    if token == "code_read":
+        return _render_overlay_read_answer(question, local_overlay)
+    if token == "code_compare":
+        return _render_overlay_compare_answer(question, local_overlay)
+    if token == "failure_analysis":
+        return _render_overlay_failure_analysis_answer(question, local_overlay)
+    return ""
+
+
+def _should_force_overlay_contract_answer(
+    *,
+    question_contract: Dict[str, Any] | None,
+    local_overlay: Dict[str, Any] | None,
+    results: List[Dict[str, Any]] | None,
+    sources: List[Dict[str, Any]] | None,
+    answer: str = "",
+) -> bool:
+    normalized_contract = normalize_question_contract(question_contract)
+    kind = str(normalized_contract.get("kind") or "").strip().lower()
+    overlay = dict(local_overlay or {})
+    if not bool(overlay.get("present")):
+        return False
+    if kind == "code_review":
+        return _should_force_overlay_review_answer(
+            question_contract=normalized_contract,
+            local_overlay=overlay,
+            results=results,
+            sources=sources,
+            answer=answer,
+        )
+    if kind not in {"code_read", "code_compare", "failure_analysis"}:
+        return False
+    if not _overlay_contract_evidence_present(kind, overlay):
+        return False
+    if _overlay_review_has_server_direct_reads(results):
+        return False
+    return not _answer_matches_contract(answer, kind)
 
 
 def _should_render_workspace_graph_answer(
@@ -722,14 +998,18 @@ async def finalize_react_payload(
         )
         if rendered_answer:
             answer = rendered_answer
-    elif _should_force_overlay_review_answer(
+    elif _should_force_overlay_contract_answer(
         question_contract=normalized_question_contract,
         local_overlay=local_overlay,
         results=results,
         sources=sources,
         answer=answer,
     ):
-        rendered_answer = _render_overlay_review_answer(prepared.clean_message, local_overlay)
+        rendered_answer = _render_overlay_contract_answer(
+            str(normalized_question_contract.get("kind") or ""),
+            prepared.clean_message,
+            local_overlay,
+        )
         if rendered_answer:
             answer = rendered_answer
 
