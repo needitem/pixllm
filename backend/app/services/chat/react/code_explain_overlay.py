@@ -523,49 +523,57 @@ def _score_primary_paths(
     core_files = {_normalize_path(item) for item in list(graph.get("core_files") or []) if _normalize_path(item)}
     supporting_files = {_normalize_path(item) for item in list(graph.get("supporting_files") or []) if _normalize_path(item)}
     candidate_paths = {_normalize_path(item.get("path")) for item in list(read_evidence or []) if _normalize_path(item.get("path"))}
-    scores: Dict[str, float] = {path: 0.0 for path in candidate_paths}
-
-    for path in candidate_paths:
-        if path == selected_path:
-            scores[path] += 10.0 if selected_matches_focus else 2.0
-        if path == focus_path:
-            scores[path] += 12.0
-        if path in core_files:
-            scores[path] += 6.0
-        if path in supporting_files:
-            scores[path] += 3.0
-        scores[path] += 2.0 * max(
-            _shared_prefix_depth(path, selected_path),
-            _shared_prefix_depth(path, focus_path),
-        )
+    read_tool_strength: Dict[str, int] = {path: 0 for path in candidate_paths}
+    read_symbol_hits: Dict[str, int] = {path: 0 for path in candidate_paths}
+    relation_strength: Dict[str, int] = {path: 0 for path in candidate_paths}
+    relation_hits: Dict[str, int] = {path: 0 for path in candidate_paths}
 
     for item in list(read_evidence or []):
         path = _normalize_path(item.get("path"))
-        if not path or path not in scores:
+        if not path or path not in read_tool_strength:
             continue
         tool_name = str(item.get("tool") or "").strip().lower()
-        scores[path] += {
-            "read_symbol_span": 14.0,
-            "symbol_neighborhood": 8.0,
-            "selected_file": 6.0,
-            "read_file": 4.0,
-        }.get(tool_name, 2.0)
+        read_tool_strength[path] = max(
+            read_tool_strength[path],
+            {
+                "read_symbol_span": 4,
+                "symbol_neighborhood": 3,
+                "selected_file": 2,
+                "read_file": 1,
+            }.get(tool_name, 1),
+        )
         if str(item.get("symbol") or "").strip():
-            scores[path] += 2.0
+            read_symbol_hits[path] += 1
 
     for item in list(trace_relations or []):
         path = _normalize_path(item.get("path"))
-        if not path or path not in scores:
+        if not path or path not in relation_strength:
             continue
         tool_name = str(item.get("tool") or "").strip().lower()
-        scores[path] += 3.0 if tool_name in {"find_callers", "find_references"} else 1.0
-        if str(item.get("anchor_symbol") or "").strip():
-            scores[path] += 1.0
+        relation_strength[path] = max(
+            relation_strength[path],
+            2 if tool_name in {"find_callers", "find_references"} else 1,
+        )
+        relation_hits[path] += 1
 
     ordered = sorted(
         candidate_paths,
         key=lambda path: (
-            -scores.get(path, 0.0),
+            -(1 if path == focus_path else 0),
+            -(1 if path in core_files else 0),
+            -(1 if path == selected_path and selected_matches_focus else 0),
+            -read_tool_strength.get(path, 0),
+            -min(3, read_symbol_hits.get(path, 0)),
+            -relation_strength.get(path, 0),
+            -min(3, relation_hits.get(path, 0)),
+            -(1 if path in supporting_files else 0),
+            -min(
+                3,
+                max(
+                    _shared_prefix_depth(path, selected_path),
+                    _shared_prefix_depth(path, focus_path),
+                ),
+            ),
             *_path_priority(path, focus_path=focus_path, selected_path=selected_path),
         ),
     )
