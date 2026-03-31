@@ -548,7 +548,7 @@
         local_summary: localToolSummary || '',
         local_context_text: localToolContext || '',
         local_error: localToolError || '',
-        local_trace: localToolTrace.slice(0, 12),
+        local_trace: localToolTrace,
         workspace_graph: localWorkspaceGraph,
         question: prompt
       }

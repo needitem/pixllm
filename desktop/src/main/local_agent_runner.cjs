@@ -10,6 +10,7 @@ const {
   listFilesFromTrace,
   readWindowsFromTrace,
   readObservationsFromTrace,
+  symbolOutlinesFromTrace,
 } = require('./local_agent_trace.cjs');
 const {
   grepWorkspace,
@@ -26,9 +27,12 @@ const {
 const LOCAL_TRACE_READ_CHAR_LIMIT = 16000;
 const FILE_READ_CHAR_LIMIT = 24000;
 const DEFAULT_FILE_READ_END_LINE = 2400;
-const MAX_TRACE_STEPS = 24;
+const MAX_TRACE_STEPS = 40;
 const MAX_ROOT_SYMBOLS = 4;
 const MAX_SUPPORT_SYMBOLS = 4;
+const MAX_FRONTIER_DEPTH = 2;
+const MAX_FRONTIER_EXPANSIONS = 8;
+const MAX_FRONTIER_QUEUE_SIZE = 12;
 const MAX_GREP_LIMIT = 30;
 const MAX_LIST_LIMIT = 5000;
 const MAX_ROOT_QUERY_CANDIDATES = 4;
@@ -261,6 +265,19 @@ function isBroadAnchorTerm(term) {
   return FLOW_META_TERMS.has(token) || BROAD_ANCHOR_TERMS.has(token);
 }
 
+function hasSpecificQuestionTerms(questionTerms = []) {
+  for (const term of Array.isArray(questionTerms) ? questionTerms : []) {
+    const raw = String(term || '').trim();
+    const lowered = raw.toLowerCase();
+    if (!lowered || isBroadAnchorTerm(lowered)) continue;
+    if (/[\uAC00-\uD7A3]/.test(raw) && raw.length >= 4) return true;
+    if (splitSymbolParts(raw).length >= 2) return true;
+    if (/[A-Z_]/.test(raw)) return true;
+    if (lowered.length >= 5) return true;
+  }
+  return false;
+}
+
 function normalizeQuestionTerms(question) {
   const nativeTerms = extractNativeQuestionTerms(question);
   const asciiTerms = extractAsciiQuestionTerms(question);
@@ -422,25 +439,125 @@ function outlineLineProximityScore(lineValue, focusLines, kind) {
   return isExecutableKind ? -8 : -16;
 }
 
+function outlineDirectTermHits(item, questionTerms) {
+  const loweredName = String(item?.name || '').trim().toLowerCase();
+  const loweredText = String(item?.text || '').trim().toLowerCase();
+  let hits = 0;
+  for (const term of Array.isArray(questionTerms) ? questionTerms : []) {
+    const loweredTerm = String(term || '').trim().toLowerCase();
+    if (!loweredTerm) continue;
+    if (loweredName.includes(loweredTerm) || loweredText.includes(loweredTerm)) hits += 1;
+  }
+  return hits;
+}
+
+function outlineVisibilityScore(text, kind, { preferFlow = false, directTermHits = 0 } = {}) {
+  const lowered = String(text || '').trim().toLowerCase();
+  const loweredKind = String(kind || '').trim().toLowerCase();
+  const isExecutableKind = ['method', 'function', 'event'].includes(loweredKind);
+  if (/\bpublic\b/.test(lowered)) {
+    return isExecutableKind
+      ? (preferFlow ? 28 : 14)
+      : 8;
+  }
+  if (/\bprotected\b/.test(lowered) || /\binternal\b/.test(lowered)) {
+    return isExecutableKind
+      ? (preferFlow ? 12 : 6)
+      : 4;
+  }
+  if (/\bprivate\b/.test(lowered)) {
+    return isExecutableKind
+      ? (preferFlow && directTermHits === 0 ? -18 : -8)
+      : -4;
+  }
+  return 0;
+}
+
+function outlineTopLevelFlowScore(lineValue, kind, { preferFlow = false, focusLines = [] } = {}) {
+  if (!preferFlow || (Array.isArray(focusLines) && focusLines.length > 0)) {
+    return 0;
+  }
+  const line = Number(lineValue || 0);
+  if (!line) {
+    return 0;
+  }
+  const loweredKind = String(kind || '').trim().toLowerCase();
+  const isExecutableKind = ['method', 'function', 'event'].includes(loweredKind);
+  if (isExecutableKind) {
+    if (line <= 400) return 34;
+    if (line <= 900) return 24;
+    if (line <= 1600) return 12;
+    if (line <= 2400) return 0;
+    return -18;
+  }
+  if (loweredKind === 'type') {
+    return line <= 160 ? 6 : -6;
+  }
+  return 0;
+}
+
+function outlineEntrySignalScore(name, { preferFlow = false } = {}) {
+  if (!preferFlow) {
+    return 0;
+  }
+  const firstPart = splitSymbolParts(name)[0];
+  const lowered = String(firstPart || '').trim().toLowerCase();
+  if (!lowered) {
+    return 0;
+  }
+  if (['select', 'load', 'handle', 'init', 'initialize', 'perform', 'start', 'open', 'update', 'refresh'].includes(lowered)) {
+    return 22;
+  }
+  if (['generate', 'create', 'build', 'apply'].includes(lowered)) {
+    return 8;
+  }
+  return 0;
+}
+
+function outlineHandlerPenalty(name, { preferFlow = false, focusLines = [] } = {}) {
+  if (!preferFlow || (Array.isArray(focusLines) && focusLines.length > 0)) {
+    return 0;
+  }
+  const token = String(name || '').trim();
+  if (!token) {
+    return 0;
+  }
+  if (/(?:^On[A-Z]|Click|Clicked|Render|Renders|Changed|Changing|Mouse|Key|Drag|Drop|Preview|Selection|Loaded|Closing|Opened|Ortho)/.test(token)) {
+    return -26;
+  }
+  return 0;
+}
+
+function outlineCommentPenalty(text) {
+  return /^\s*(?:\/\/|\/\*)/.test(String(text || '').trim()) ? -48 : 0;
+}
+
 function chooseBestOutlineItems(outlineItems, questionTerms, { focusLines = [], preferFlow = false } = {}) {
   const terms = new Set(Array.isArray(questionTerms) ? questionTerms : []);
+  const effectiveFocusLines = preferFlow && !hasSpecificQuestionTerms(questionTerms) ? [] : focusLines;
   const candidates = (Array.isArray(outlineItems) ? outlineItems : [])
     .filter((item) => ['method', 'function', 'event', 'type'].includes(String(item?.kind || '').trim().toLowerCase()))
     .map((item) => {
       const name = String(item?.name || '').trim();
       const kind = String(item?.kind || '').trim().toLowerCase();
       const loweredName = name.toLowerCase();
+      const directTermHits = outlineDirectTermHits(item, questionTerms);
       let score = signalScore(name, { mode: 'anchor' });
       if (kind === 'method') score += 30;
       if (kind === 'function') score += 28;
       if (kind === 'event') score += 24;
       if (kind === 'type') score += 16;
-      score += outlineLineProximityScore(item?.line, focusLines, kind);
+      score += outlineLineProximityScore(item?.line, effectiveFocusLines, kind);
+      score += outlineVisibilityScore(item?.text, kind, { preferFlow, directTermHits });
+      score += outlineTopLevelFlowScore(item?.line, kind, { preferFlow, focusLines: effectiveFocusLines });
+      score += outlineEntrySignalScore(name, { preferFlow });
+      score += outlineHandlerPenalty(name, { preferFlow, focusLines: effectiveFocusLines });
+      score += outlineCommentPenalty(item?.text);
       for (const term of terms) {
         if (loweredName.includes(term)) score += 20;
         if (String(item?.text || '').toLowerCase().includes(term)) score += 8;
       }
-      if (preferFlow && kind === 'type' && Array.isArray(focusLines) && focusLines.length > 0) score -= 16;
+      if (preferFlow && kind === 'type' && Array.isArray(effectiveFocusLines) && effectiveFocusLines.length > 0) score -= 16;
       if (isLowSignalSymbol(name, { mode: 'anchor' })) score -= 20;
       return { ...item, __score: score };
     })
@@ -503,16 +620,59 @@ function scoreReadWindow(window, outlineNames, questionTerms, selectedPath) {
   return score;
 }
 
-function choosePrimaryWindow(trace, selectedPath, outlineItems, questionTerms) {
+function choosePrimaryWindow(trace, selectedPath, outlineItems, questionTerms, { focusLines = [], preferFlow = false } = {}) {
   const outlineNames = (Array.isArray(outlineItems) ? outlineItems : []).map((item) => String(item?.name || '').trim()).filter(Boolean);
+  const effectiveFocusLines = preferFlow && !hasSpecificQuestionTerms(questionTerms) ? [] : focusLines;
+  const rankedOutlineItems = chooseBestOutlineItems(outlineItems, questionTerms, {
+    focusLines: effectiveFocusLines,
+    preferFlow,
+  });
+  if (preferFlow && !hasSpecificQuestionTerms(questionTerms)) {
+    for (const candidate of rankedOutlineItems) {
+      const candidateSymbol = String(candidate?.name || '').trim().toLowerCase();
+      if (!candidateSymbol) continue;
+      const matchedWindow = readWindowsFromTrace(trace).find((item) => {
+        return normalizePath(item.path).toLowerCase() === normalizePath(selectedPath).toLowerCase()
+          && String(item.symbol || '').trim().toLowerCase() === candidateSymbol;
+      });
+      if (matchedWindow) {
+        return matchedWindow;
+      }
+    }
+  }
+  const outlineMetaByName = new Map();
+  for (const item of Array.isArray(outlineItems) ? outlineItems : []) {
+    const name = String(item?.name || '').trim();
+    if (!name) continue;
+    const key = name.toLowerCase();
+    const current = outlineMetaByName.get(key);
+    if (!current || Number(item?.line || 0) < Number(current?.line || 0)) {
+      outlineMetaByName.set(key, item);
+    }
+  }
   const windows = readWindowsFromTrace(trace)
     .filter((item) => String(item?.symbol || '').trim())
     .filter((item) => !isLowSignalSymbol(item?.symbol, { mode: 'anchor' }))
     .map((item) => ({
       ...item,
-      __score: scoreReadWindow(item, outlineNames, questionTerms, selectedPath),
+      __score: (() => {
+        let score = scoreReadWindow(item, outlineNames, questionTerms, selectedPath);
+        const outlineMeta = outlineMetaByName.get(String(item?.symbol || '').trim().toLowerCase()) || null;
+        if (outlineMeta) {
+          const kind = String(outlineMeta?.kind || '').trim().toLowerCase();
+          const directTermHits = outlineDirectTermHits(outlineMeta, questionTerms);
+          score += outlineVisibilityScore(outlineMeta?.text, kind, { preferFlow, directTermHits });
+          score += outlineTopLevelFlowScore(outlineMeta?.line, kind, { preferFlow, focusLines: effectiveFocusLines });
+          score += outlineEntrySignalScore(outlineMeta?.name, { preferFlow });
+          score += outlineHandlerPenalty(outlineMeta?.name, { preferFlow, focusLines: effectiveFocusLines });
+          score += outlineCommentPenalty(outlineMeta?.text);
+          const proximityScore = outlineLineProximityScore(outlineMeta?.line, effectiveFocusLines, kind);
+          score += directTermHits > 0 ? proximityScore : Math.trunc(proximityScore / 2);
+        }
+        return score;
+      })(),
     }))
-    .sort((a, b) => Number(b.__score || 0) - Number(a.__score || 0) || String(a.path || '').localeCompare(String(b.path || '')));
+    .sort((a, b) => Number(b.__score || 0) - Number(a.__score || 0) || Number(a.startLine || 0) - Number(b.startLine || 0) || String(a.path || '').localeCompare(String(b.path || '')));
   return windows[0] || null;
 }
 
@@ -654,6 +814,366 @@ function hasReadPath(trace, pathValue) {
     return false;
   }
   return readWindowsFromTrace(trace).some((item) => normalizePath(item.path).toLowerCase() === normalizedPath);
+}
+
+function findReadWindow(trace, pathValue, symbol = '') {
+  const normalizedPath = normalizePath(pathValue).toLowerCase();
+  const normalizedSymbol = String(symbol || '').trim().toLowerCase();
+  return readWindowsFromTrace(trace).find((item) => {
+    if (normalizePath(item.path).toLowerCase() !== normalizedPath) {
+      return false;
+    }
+    if (!normalizedSymbol) {
+      return true;
+    }
+    return String(item.symbol || '').trim().toLowerCase() === normalizedSymbol;
+  }) || null;
+}
+
+function relationPriority(relation) {
+  const token = String(relation || '').trim().toLowerCase();
+  if (token === 'anchor') return 4;
+  if (token === 'caller_owner') return 3;
+  if (token === 'related_owner') return 2;
+  if (token === 'callee_definition') return 1;
+  return 0;
+}
+
+function recordFlowNode(nodes, node) {
+  if (!node?.path || !node?.symbol) {
+    return;
+  }
+  const normalizedPath = normalizePath(node.path);
+  const normalizedSymbol = String(node.symbol || '').trim();
+  if (!normalizedPath || !normalizedSymbol) {
+    return;
+  }
+  const key = `${normalizedPath}::${normalizedSymbol}`.toLowerCase();
+  const existingIndex = (Array.isArray(nodes) ? nodes : []).findIndex((item) => {
+    return `${normalizePath(item?.path)}::${String(item?.symbol || '').trim()}`.toLowerCase() === key;
+  });
+  const merged = {
+    path: normalizedPath,
+    symbol: normalizedSymbol,
+    line: Number(node.line || 0),
+    relation: String(node.relation || '').trim(),
+    baseSymbol: String(node.baseSymbol || '').trim(),
+    depth: Number(node.depth || 0),
+    covered: node.covered !== false,
+    discovered: node.discovered !== false,
+    searchCompleted: node.searchCompleted !== false,
+    reason: String(node.reason || '').trim(),
+  };
+  if (existingIndex < 0) {
+    nodes.push(merged);
+    return;
+  }
+  const current = nodes[existingIndex] || {};
+  nodes[existingIndex] = {
+    ...current,
+    ...merged,
+    relation: relationPriority(merged.relation) >= relationPriority(current.relation) ? merged.relation : current.relation,
+    baseSymbol: merged.baseSymbol || current.baseSymbol || '',
+    line: Number(merged.line || current.line || 0),
+    depth: Math.min(
+      Number.isFinite(Number(current.depth)) ? Number(current.depth) : Number(merged.depth || 0),
+      Number(merged.depth || 0),
+    ),
+    covered: current.covered !== false || merged.covered !== false,
+    discovered: current.discovered !== false || merged.discovered !== false,
+    searchCompleted: current.searchCompleted !== false || merged.searchCompleted !== false,
+    reason: merged.reason || current.reason || '',
+  };
+}
+
+function recordOpenFrontier(frontiers, node) {
+  if (!node?.symbol) {
+    return;
+  }
+  const normalizedPath = normalizePath(node.path || '');
+  const normalizedSymbol = String(node.symbol || '').trim();
+  if (!normalizedSymbol) {
+    return;
+  }
+  const key = `${normalizedPath}::${normalizedSymbol}`.toLowerCase();
+  if ((Array.isArray(frontiers) ? frontiers : []).some((item) => {
+    return `${normalizePath(item?.path || '')}::${String(item?.symbol || '').trim()}`.toLowerCase() === key;
+  })) {
+    return;
+  }
+  frontiers.push({
+    path: normalizedPath,
+    symbol: normalizedSymbol,
+    line: Number(node.line || 0),
+    relation: String(node.relation || '').trim(),
+    baseSymbol: String(node.baseSymbol || '').trim(),
+    depth: Number(node.depth || 0),
+    covered: false,
+    discovered: true,
+    searchCompleted: false,
+    reason: String(node.reason || '').trim(),
+  });
+}
+
+function enqueueFrontierNode(queue, queuedKeys, frontiers, node) {
+  if (!node?.path || !node?.symbol) {
+    return false;
+  }
+  const normalizedPath = normalizePath(node.path);
+  const normalizedSymbol = String(node.symbol || '').trim();
+  if (!normalizedPath || !normalizedSymbol) {
+    return false;
+  }
+  const key = `${normalizedPath}::${normalizedSymbol}`.toLowerCase();
+  if (queuedKeys.has(key)) {
+    return false;
+  }
+  if ((Array.isArray(queue) ? queue : []).length >= MAX_FRONTIER_QUEUE_SIZE) {
+    recordOpenFrontier(frontiers, { ...node, reason: node.reason || 'queue_limit' });
+    return false;
+  }
+  queuedKeys.add(key);
+  queue.push({
+    ...node,
+    path: normalizedPath,
+    symbol: normalizedSymbol,
+  });
+  return true;
+}
+
+function getOutlineItemsForPath(trace, pathValue) {
+  const normalizedPath = normalizePath(pathValue).toLowerCase();
+  const outlines = symbolOutlinesFromTrace(trace)
+    .filter((item) => normalizePath(item.path).toLowerCase() === normalizedPath)
+    .sort((left, right) => {
+      const leftCount = Array.isArray(left?.items) ? left.items.length : 0;
+      const rightCount = Array.isArray(right?.items) ? right.items.length : 0;
+      return rightCount - leftCount;
+    });
+  return Array.isArray(outlines[0]?.items) ? outlines[0].items : [];
+}
+
+async function ensureOutlineItems(trace, workspacePath, pathValue, { preferFlow = false } = {}) {
+  const existing = getOutlineItemsForPath(trace, pathValue);
+  if (existing.length > 0) {
+    return existing;
+  }
+  const outlineObservation = await pushTraceStep(
+    trace,
+    workspacePath,
+    `inspect local declarations in ${pathBasename(pathValue)}`,
+    'symbol_outline',
+    {
+      path: pathValue,
+      limit: preferFlow ? FLOW_OUTLINE_LIMIT : 120,
+    },
+  );
+  return Array.isArray(outlineObservation?.items) ? outlineObservation.items : [];
+}
+
+function shouldFollowDefinition(pathValue, {
+  rootPath,
+  currentPath,
+  questionTerms = [],
+  symbol = '',
+  preferFlow = false,
+} = {}) {
+  const normalizedPath = normalizePath(pathValue);
+  if (!normalizedPath) {
+    return false;
+  }
+  const rootPrefix = sharedPrefixDepth(normalizedPath, rootPath);
+  const currentPrefix = sharedPrefixDepth(normalizedPath, currentPath);
+  const questionAligned = (Array.isArray(questionTerms) ? questionTerms : []).some((term) => {
+    return String(symbol || '').toLowerCase().includes(String(term || '').toLowerCase());
+  });
+  const nearestPrefix = Math.max(rootPrefix, currentPrefix);
+  let score = 0;
+  score += pathFlowBias(normalizedPath, { preferFlow });
+  score += rootPrefix * 6;
+  score += currentPrefix * 6;
+  score += Math.min(18, scoreFileQuestionAlignment(normalizedPath, '', questionTerms));
+  if (pathDirname(normalizedPath).toLowerCase() === pathDirname(currentPath).toLowerCase()) score += 12;
+  if (pathExtname(normalizedPath) === pathExtname(currentPath)) score += 4;
+  if (questionAligned) score += 8;
+  if (nearestPrefix === 0) {
+    return questionAligned && score >= (preferFlow ? 28 : 20);
+  }
+  if (preferFlow && nearestPrefix < 2 && !questionAligned) {
+    return score >= 24;
+  }
+  return score >= (preferFlow ? 16 : 10);
+}
+
+async function resolveSupportSymbolRead(trace, workspacePath, symbol, {
+  rootPath,
+  currentPath,
+  currentSymbol,
+  outlineItems = [],
+  questionTerms = [],
+  preferFlow = false,
+  relation = 'callee_definition',
+  depth = 1,
+} = {}) {
+  const normalizedSymbol = String(symbol || '').trim();
+  if (!normalizedSymbol) {
+    return { node: null, frontier: null };
+  }
+  const localOutlineMatch = (Array.isArray(outlineItems) ? outlineItems : []).find((item) => {
+    return String(item?.name || '').trim().toLowerCase() === normalizedSymbol.toLowerCase();
+  });
+  if (localOutlineMatch) {
+    if (!hasReadSymbol(trace, currentPath, normalizedSymbol)) {
+      await pushTraceStep(trace, workspacePath, `read the local support symbol span for ${normalizedSymbol}`, 'read_symbol_span', {
+        path: currentPath,
+        symbol: normalizedSymbol,
+        lineHint: Number(localOutlineMatch.line || 0),
+        maxChars: LOCAL_TRACE_READ_CHAR_LIMIT,
+      });
+    }
+    const localWindow = findReadWindow(trace, currentPath, normalizedSymbol);
+    if (localWindow) {
+      return {
+        node: {
+          path: normalizePath(localWindow.path || currentPath),
+          symbol: normalizedSymbol,
+          line: Number(localWindow.startLine || localOutlineMatch.line || 0),
+          relation,
+          baseSymbol: currentSymbol,
+          depth,
+        },
+        frontier: null,
+      };
+    }
+  }
+
+  const definitionObservation = await pushTraceStep(trace, workspacePath, `resolve the support symbol definition for ${normalizedSymbol}`, 'find_symbol', {
+    symbol: normalizedSymbol,
+    limit: 12,
+  });
+  const bestDefinition = pickBestDefinition(definitionObservation?.items, currentPath || rootPath);
+  if (!bestDefinition || !bestDefinition.path) {
+    return {
+      node: null,
+      frontier: {
+        path: '',
+        symbol: normalizedSymbol,
+        relation,
+        baseSymbol: currentSymbol,
+        depth,
+        reason: 'definition_not_found',
+      },
+    };
+  }
+  if (!shouldFollowDefinition(bestDefinition.path, {
+    rootPath,
+    currentPath,
+    questionTerms,
+    symbol: normalizedSymbol,
+    preferFlow,
+  })) {
+    return {
+      node: null,
+      frontier: {
+        path: normalizePath(bestDefinition.path),
+        symbol: normalizedSymbol,
+        relation,
+        baseSymbol: currentSymbol,
+        depth,
+        line: Number(bestDefinition.line || 0),
+        reason: 'definition_low_relevance',
+      },
+    };
+  }
+  if (!hasReadSymbol(trace, bestDefinition.path, normalizedSymbol)) {
+    await pushTraceStep(trace, workspacePath, `read the support symbol span for ${normalizedSymbol}`, 'read_symbol_span', {
+      path: bestDefinition.path,
+      symbol: normalizedSymbol,
+      lineHint: Number(bestDefinition.line || 0),
+      maxChars: LOCAL_TRACE_READ_CHAR_LIMIT,
+    });
+  }
+  const supportWindow = findReadWindow(trace, bestDefinition.path, normalizedSymbol);
+  if (!supportWindow) {
+    return {
+      node: null,
+      frontier: {
+        path: normalizePath(bestDefinition.path),
+        symbol: normalizedSymbol,
+        relation,
+        baseSymbol: currentSymbol,
+        depth,
+        line: Number(bestDefinition.line || 0),
+        reason: 'definition_read_failed',
+      },
+    };
+  }
+  return {
+    node: {
+      path: normalizePath(supportWindow.path || bestDefinition.path),
+      symbol: normalizedSymbol,
+      line: Number(supportWindow.startLine || bestDefinition.line || 0),
+      relation,
+      baseSymbol: currentSymbol,
+      depth,
+    },
+    frontier: null,
+  };
+}
+
+async function expandFlowFrontierNode(trace, workspacePath, node, {
+  rootPath,
+  questionTerms,
+  preferFlow = false,
+} = {}) {
+  const currentWindow = findReadWindow(trace, node.path, node.symbol);
+  if (!currentWindow?.content) {
+    return { children: [], frontiers: [] };
+  }
+  const outlineItems = await ensureOutlineItems(trace, workspacePath, node.path, { preferFlow });
+  const nextSymbols = chooseSupportSymbols(
+    currentWindow,
+    [],
+    outlineItems,
+    questionTerms,
+    [node.symbol, node.baseSymbol || ''],
+  );
+  const children = [];
+  const frontiers = [];
+
+  for (const symbol of nextSymbols) {
+    if (!symbol) continue;
+    if (node.depth >= MAX_FRONTIER_DEPTH) {
+      frontiers.push({
+        path: node.path,
+        symbol,
+        relation: 'callee_definition',
+        baseSymbol: node.symbol,
+        depth: node.depth + 1,
+        reason: 'depth_limit',
+      });
+      continue;
+    }
+    const resolved = await resolveSupportSymbolRead(trace, workspacePath, symbol, {
+      rootPath,
+      currentPath: node.path,
+      currentSymbol: node.symbol,
+      outlineItems,
+      questionTerms,
+      preferFlow,
+      relation: 'callee_definition',
+      depth: node.depth + 1,
+    });
+    if (resolved.node) {
+      children.push(resolved.node);
+      continue;
+    }
+    if (resolved.frontier) {
+      frontiers.push(resolved.frontier);
+    }
+  }
+
+  return { children, frontiers };
 }
 
 function scoreRelatedFileCandidate(pathValue, {
@@ -1028,13 +1548,13 @@ function buildSeedCandidateDecision(candidate, questionTerms, { preferFlow = fal
   return {
     candidate,
     tuple: [
+      candidate?.selected ? 1 : 0,
       queryMatches > 0 ? 1 : 0,
       nonCommentHits.length > 0 ? 1 : 0,
       preferFlow ? (executableHitCount > 0 ? 1 : 0) : 0,
       alignmentBucket,
       bucketSignal(nonCommentHits.length, [1, 2, 4]),
       bucketSignal(pathFlowBias(pathValue, { preferFlow }), [1, 4]),
-      candidate?.selected ? 1 : 0,
       grepStrength,
     ],
   };
@@ -1204,9 +1724,11 @@ function buildObservedAnchorDecision(inspected, { preferFlow = false } = {}) {
   const executableFlow = Number(metrics.methodCount || 0) + Number(metrics.callTokenCount || 0) + Number(metrics.controlCount || 0);
   const directQuestionCode = Number(alignment.codeDistinctTerms || 0) > 0;
   const nearbyExecutable = Array.isArray(inspected?.evaluation?.outlineCandidates) && inspected.evaluation.outlineCandidates.length > 0;
+  const selectedExecutable = inspected?.selected && (executableFlow > 0 || nearbyExecutable);
   return {
     inspected,
     tuple: [
+      selectedExecutable ? 1 : 0,
       preferFlow ? (executableFlow > 0 ? 1 : 0) : 0,
       preferFlow ? (declarationOnly ? 0 : 1) : 0,
       preferFlow ? (softQuestionCoverage > 0 ? 1 : 0) : 0,
@@ -1349,6 +1871,14 @@ function buildWorkspaceGraph(question, trace, analysis) {
   const rootPath = normalizePath(analysis.rootPath || selectedPath);
   const primaryPath = normalizePath(analysis.primaryPath || rootPath || selectedPath);
   const selectedMatchesPrimary = Boolean(selectedPath) && selectedPath.toLowerCase() === primaryPath.toLowerCase();
+  const flowNodes = dedupeBy(
+    Array.isArray(analysis.flowNodes) ? analysis.flowNodes : [],
+    (item) => `${normalizePath(item?.path)}::${String(item?.symbol || '').trim()}`,
+  );
+  const openFrontier = dedupeBy(
+    Array.isArray(analysis.openFrontier) ? analysis.openFrontier : [],
+    (item) => `${normalizePath(item?.path || '')}::${String(item?.symbol || '').trim()}`,
+  );
   const relatedOwners = dedupeBy(
     Array.isArray(analysis.relatedOwners) ? analysis.relatedOwners : [],
     (item) => `${normalizePath(item?.path)}::${String(item?.symbol || '').trim()}`,
@@ -1356,6 +1886,7 @@ function buildWorkspaceGraph(question, trace, analysis) {
   const readFiles = readObservationsFromTrace(trace);
   const relatedFiles = uniq([
     primaryPath,
+    ...flowNodes.map((item) => item.path),
     ...relatedOwners.map((item) => item.path),
     analysis.callerOwner?.path || '',
     ...(analysis.supportReads || []).map((item) => item.path),
@@ -1410,76 +1941,105 @@ function buildWorkspaceGraph(question, trace, analysis) {
     };
   });
 
-  const chain = [];
-  if (analysis.primarySymbol) {
-    chain.push({
-      relation: 'anchor',
-      symbol: analysis.primarySymbol,
-      path: primaryPath,
-      line: Number(analysis.primaryWindow?.startLine || 0),
-      covered: true,
-      discovered: true,
-      search_completed: true,
-      base_symbol: '',
-    });
-  }
-  if (analysis.callerOwner?.symbol) {
-    chain.push({
-      relation: 'caller_owner',
-      symbol: analysis.callerOwner.symbol,
-      path: analysis.callerOwner.path,
-      line: Number(analysis.callerOwner.line || 0),
-      covered: true,
-      discovered: true,
-      search_completed: true,
-      base_symbol: analysis.primarySymbol,
-    });
-  }
-  for (const owner of relatedOwners) {
-    if (!owner?.symbol || !owner?.path) continue;
-    if (
-      analysis.callerOwner
-      && normalizePath(owner.path).toLowerCase() === normalizePath(analysis.callerOwner.path).toLowerCase()
-      && String(owner.symbol || '').trim().toLowerCase() === String(analysis.callerOwner.symbol || '').trim().toLowerCase()
-    ) {
-      continue;
+  const chain = flowNodes.length > 0
+    ? flowNodes.map((item) => ({
+      relation: String(item.relation || '').trim() || 'support',
+      symbol: String(item.symbol || '').trim(),
+      path: normalizePath(item.path),
+      line: Number(item.line || 0),
+      covered: item.covered !== false,
+      discovered: item.discovered !== false,
+      search_completed: item.searchCompleted !== false,
+      base_symbol: String(item.baseSymbol || '').trim(),
+    }))
+    : [];
+  if (chain.length === 0) {
+    if (analysis.primarySymbol) {
+      chain.push({
+        relation: 'anchor',
+        symbol: analysis.primarySymbol,
+        path: primaryPath,
+        line: Number(analysis.primaryWindow?.startLine || 0),
+        covered: true,
+        discovered: true,
+        search_completed: true,
+        base_symbol: '',
+      });
     }
-    chain.push({
-      relation: 'related_owner',
-      symbol: owner.symbol,
-      path: owner.path,
-      line: Number(owner.line || 0),
-      covered: true,
-      discovered: true,
-      search_completed: true,
-      base_symbol: analysis.primarySymbol,
-    });
+    if (analysis.callerOwner?.symbol) {
+      chain.push({
+        relation: 'caller_owner',
+        symbol: analysis.callerOwner.symbol,
+        path: analysis.callerOwner.path,
+        line: Number(analysis.callerOwner.line || 0),
+        covered: true,
+        discovered: true,
+        search_completed: true,
+        base_symbol: analysis.primarySymbol,
+      });
+    }
+    for (const owner of relatedOwners) {
+      if (!owner?.symbol || !owner?.path) continue;
+      if (
+        analysis.callerOwner
+        && normalizePath(owner.path).toLowerCase() === normalizePath(analysis.callerOwner.path).toLowerCase()
+        && String(owner.symbol || '').trim().toLowerCase() === String(analysis.callerOwner.symbol || '').trim().toLowerCase()
+      ) {
+        continue;
+      }
+      chain.push({
+        relation: 'related_owner',
+        symbol: owner.symbol,
+        path: owner.path,
+        line: Number(owner.line || 0),
+        covered: true,
+        discovered: true,
+        search_completed: true,
+        base_symbol: analysis.primarySymbol,
+      });
+    }
+    for (const support of analysis.supportReads || []) {
+      chain.push({
+        relation: 'callee_definition',
+        symbol: support.symbol,
+        path: support.path,
+        line: Number(support.startLine || 0),
+        covered: true,
+        discovered: true,
+        search_completed: true,
+        base_symbol: analysis.primarySymbol,
+      });
+    }
   }
-  for (const support of analysis.supportReads || []) {
-    chain.push({
-      relation: 'callee_definition',
-      symbol: support.symbol,
-      path: support.path,
-      line: Number(support.startLine || 0),
-      covered: true,
-      discovered: true,
-      search_completed: true,
-      base_symbol: analysis.primarySymbol,
-    });
-  }
+  const frontierNodes = openFrontier.map((item) => ({
+    relation: String(item.relation || '').trim() || 'frontier',
+    symbol: String(item.symbol || '').trim(),
+    path: normalizePath(item.path || ''),
+    line: Number(item.line || 0),
+    covered: false,
+    discovered: true,
+    search_completed: false,
+    base_symbol: String(item.baseSymbol || '').trim(),
+    reason: String(item.reason || '').trim(),
+  }));
+  const discoveredCount = chain.length + frontierNodes.length;
+  const coveredCount = chain.filter((item) => item.covered !== false).length;
+  const graphClosed = analysis.graphClosed === true
+    ? frontierNodes.length === 0
+    : !Boolean(frontierNodes.length);
 
   const graphState = {
     anchor_symbol: analysis.primarySymbol || '',
     focus_symbol: analysis.callerOwner?.symbol || analysis.primarySymbol || '',
     focus_path: primaryPath,
     chain,
-    frontiers: [],
-    frontier: {},
-    closed: true,
-    coverage_ratio: chain.length > 0 ? 1.0 : 0.0,
-    covered_count: chain.length,
-    discovered_count: chain.length,
-    open_frontier_count: 0,
+    frontiers: frontierNodes,
+    frontier: frontierNodes[0] || {},
+    closed: graphClosed,
+    coverage_ratio: discoveredCount > 0 ? (coveredCount / discoveredCount) : 0.0,
+    covered_count: coveredCount,
+    discovered_count: discoveredCount,
+    open_frontier_count: frontierNodes.length,
   };
 
   const summary = analysis.summary
@@ -1499,6 +2059,12 @@ function buildWorkspaceGraph(question, trace, analysis) {
       caller_owner: analysis.callerOwner || null,
       support_symbols: (analysis.supportReads || []).map((item) => item.symbol),
       related_files: relatedFiles,
+      open_frontier: frontierNodes.map((item) => ({
+        path: item.path,
+        symbol: item.symbol,
+        relation: item.relation,
+        reason: item.reason,
+      })),
       trace_targets: summarizeTraceTargets(trace),
       trace_length: trace.length,
     },
@@ -1520,6 +2086,7 @@ function buildWorkspaceGraph(question, trace, analysis) {
       supporting_files: supportFiles,
       local_summary: summary,
       target_symbol: analysis.primarySymbol || '',
+      graph_closed: graphClosed,
       graph_state: graphState,
       nodes,
       edges,
@@ -1539,6 +2106,7 @@ async function runLocalToolLoop({
   const anchorQuestionTerms = normalizeQuestionTerms(question);
   const questionTerms = anchorTerms(question, rootPath);
   const preferFlow = isFlowQuestion(question);
+  const hasSpecificFlowTerms = hasSpecificQuestionTerms(anchorQuestionTerms);
   if (!rootPath) {
     return {
       trace,
@@ -1572,6 +2140,9 @@ async function runLocalToolLoop({
     callerOwner: null,
     relatedOwners: [],
     supportReads: [],
+    flowNodes: [],
+    openFrontier: [],
+    graphClosed: false,
     summary: '',
   };
 
@@ -1606,7 +2177,10 @@ async function runLocalToolLoop({
     });
   }
 
-  const primaryWindow = choosePrimaryWindow(trace, rootPath, outlineItems, anchorQuestionTerms);
+  const primaryWindow = choosePrimaryWindow(trace, rootPath, outlineItems, anchorQuestionTerms, {
+    focusLines: rootFocusLines,
+    preferFlow,
+  });
   if (primaryWindow) {
     analysis.primaryWindow = primaryWindow;
     analysis.primarySymbol = String(primaryWindow.symbol || '').trim();
@@ -1660,84 +2234,92 @@ async function runLocalToolLoop({
     })
     .filter(Boolean);
   const callerWindow = callerWindows[0] || null;
-  const priorPrimaryWindow = analysis.primaryWindow;
   if (
     callerWindow
     && normalizePath(callerWindow.path).toLowerCase() === normalizePath(analysis.primaryPath).toLowerCase()
+    && (!preferFlow || hasSpecificFlowTerms)
     && signalScore(analysis.callerOwner?.symbol || '', { mode: 'anchor' }) >= signalScore(analysis.primarySymbol || '', { mode: 'anchor' }) - 8
   ) {
     analysis.primarySymbol = String(analysis.callerOwner?.symbol || analysis.primarySymbol || '').trim();
     analysis.primaryPath = normalizePath(callerWindow.path || analysis.primaryPath);
     analysis.primaryWindow = callerWindow;
   }
-  const supportSymbols = chooseSupportSymbols(
-    analysis.primaryWindow,
-    [...callerWindows, priorPrimaryWindow].filter(Boolean),
-    outlineItems,
-    questionTerms,
-    [analysis.primarySymbol, analysis.callerOwner?.symbol || ''],
-  );
+  const frontierQueue = [];
+  const queuedKeys = new Set();
+  const expandedKeys = new Set();
 
-  for (const symbol of supportSymbols) {
-    if (!symbol) continue;
-    if (hasReadSymbol(trace, rootPath, symbol)) {
-      const existing = readWindowsFromTrace(trace).find((item) => {
-        return normalizePath(item.path).toLowerCase() === normalizePath(rootPath).toLowerCase()
-          && String(item.symbol || '').trim().toLowerCase() === symbol.toLowerCase();
-      });
-      if (existing) {
-        analysis.supportReads.push(existing);
-      }
-      continue;
-    }
+  if (analysis.primaryWindow && analysis.primarySymbol) {
+    const anchorNode = {
+      path: normalizePath(analysis.primaryWindow.path || analysis.primaryPath || rootPath),
+      symbol: analysis.primarySymbol,
+      line: Number(analysis.primaryWindow.startLine || 0),
+      relation: 'anchor',
+      baseSymbol: '',
+      depth: 0,
+    };
+    recordFlowNode(analysis.flowNodes, anchorNode);
+    enqueueFrontierNode(frontierQueue, queuedKeys, analysis.openFrontier, anchorNode);
+  }
 
-    const localOutlineMatch = outlineItems.find((item) => String(item?.name || '').trim().toLowerCase() === symbol.toLowerCase());
-    if (localOutlineMatch) {
-      const localSupport = await pushTraceStep(trace, workspacePath, `read the local support symbol span for ${symbol}`, 'read_symbol_span', {
-        path: rootPath,
-        symbol,
-        lineHint: Number(localOutlineMatch.line || 0),
-        maxChars: LOCAL_TRACE_READ_CHAR_LIMIT,
-      });
-      if (localSupport?.ok) {
-        analysis.supportReads.push({
-          path: normalizePath(localSupport.path || rootPath),
-          symbol,
-          startLine: Number(String(localSupport.lineRange || '').split('-')[0] || 0),
-        });
-      }
-      continue;
-    }
-
-    const definitionObservation = await pushTraceStep(trace, workspacePath, `resolve the support symbol definition for ${symbol}`, 'find_symbol', {
-      symbol,
-      limit: 12,
-    });
-    const bestDefinition = pickBestDefinition(definitionObservation?.items, rootPath);
-    if (!bestDefinition || hasReadSymbol(trace, bestDefinition.path, symbol)) {
-      continue;
-    }
-    const definitionPrefixDepth = sharedPrefixDepth(bestDefinition.path, rootPath);
-    const questionAligned = questionTerms.some((term) => symbol.toLowerCase().includes(String(term || '').toLowerCase()));
-    if (definitionPrefixDepth < 1 && !questionAligned) {
-      continue;
-    }
-    const supportSpan = await pushTraceStep(trace, workspacePath, `read the support symbol span for ${symbol}`, 'read_symbol_span', {
-      path: bestDefinition.path,
-      symbol,
-      lineHint: Number(bestDefinition.line || 0),
-      maxChars: LOCAL_TRACE_READ_CHAR_LIMIT,
-    });
-    if (supportSpan?.ok) {
-      analysis.supportReads.push({
-        path: normalizePath(supportSpan.path || bestDefinition.path),
-        symbol,
-        startLine: Number(String(supportSpan.lineRange || '').split('-')[0] || bestDefinition.line || 0),
-      });
+  for (const owner of analysis.relatedOwners) {
+    if (!owner?.path || !owner?.symbol) continue;
+    const relation = (
+      analysis.callerOwner
+      && normalizePath(owner.path).toLowerCase() === normalizePath(analysis.callerOwner.path).toLowerCase()
+      && String(owner.symbol || '').trim().toLowerCase() === String(analysis.callerOwner.symbol || '').trim().toLowerCase()
+    ) ? 'caller_owner' : 'related_owner';
+    const ownerNode = {
+      path: normalizePath(owner.path),
+      symbol: String(owner.symbol || '').trim(),
+      line: Number(owner.line || 0),
+      relation,
+      baseSymbol: analysis.primarySymbol,
+      depth: 0,
+    };
+    recordFlowNode(analysis.flowNodes, ownerNode);
+    if (findReadWindow(trace, ownerNode.path, ownerNode.symbol)) {
+      enqueueFrontierNode(frontierQueue, queuedKeys, analysis.openFrontier, ownerNode);
     }
   }
 
+  let expansionCount = 0;
+  while (frontierQueue.length > 0 && expansionCount < MAX_FRONTIER_EXPANSIONS) {
+    const node = frontierQueue.shift();
+    const nodeKey = `${normalizePath(node?.path)}::${String(node?.symbol || '').trim()}`.toLowerCase();
+    if (!node?.path || !node?.symbol || expandedKeys.has(nodeKey)) {
+      continue;
+    }
+    expandedKeys.add(nodeKey);
+    expansionCount += 1;
+    const expansion = await expandFlowFrontierNode(trace, workspacePath, node, {
+      rootPath: analysis.primaryPath || rootPath,
+      questionTerms,
+      preferFlow,
+    });
+    for (const child of expansion.children || []) {
+      recordFlowNode(analysis.flowNodes, child);
+      analysis.supportReads.push({
+        path: normalizePath(child.path),
+        symbol: String(child.symbol || '').trim(),
+        startLine: Number(child.line || 0),
+      });
+      enqueueFrontierNode(frontierQueue, queuedKeys, analysis.openFrontier, child);
+    }
+    for (const frontierNode of expansion.frontiers || []) {
+      recordOpenFrontier(analysis.openFrontier, frontierNode);
+    }
+  }
+
+  while (frontierQueue.length > 0) {
+    const node = frontierQueue.shift();
+    recordOpenFrontier(analysis.openFrontier, {
+      ...node,
+      reason: 'expansion_budget_exhausted',
+    });
+  }
+
   analysis.supportReads = dedupeBy(analysis.supportReads, (item) => `${item.path}::${item.symbol}`);
+  analysis.graphClosed = analysis.openFrontier.length === 0;
 
   for (const candidate of chooseBroadReadCandidates(
     Array.isArray(inventory?.items) ? inventory.items : [],
@@ -1762,7 +2344,7 @@ async function runLocalToolLoop({
   }
 
   analysis.summary = analysis.primarySymbol
-    ? `Collected local flow evidence around ${analysis.primarySymbol}${analysis.callerOwner?.symbol ? ` with caller ${analysis.callerOwner.symbol}` : ''}.`
+    ? `Collected local flow evidence around ${analysis.primarySymbol}${analysis.callerOwner?.symbol ? ` with caller ${analysis.callerOwner.symbol}` : ''}${analysis.openFrontier.length > 0 ? ` and ${analysis.openFrontier.length} open frontier nodes` : ''}.`
     : `Collected local file evidence from ${analysis.primaryPath}.`;
 
   const summaryBundle = buildWorkspaceGraph(question, trace, analysis);
@@ -1783,9 +2365,13 @@ module.exports = {
   runLocalToolLoop,
   __test: {
     signalScore,
+    buildObservedAnchorDecision,
+    compareDecisionTuples,
     chooseBestOutlineItems,
     choosePrimaryWindow,
     chooseSupportSymbols,
+    shouldFollowDefinition,
+    resolveSupportSymbolRead,
     rankRelatedOwnerHits,
     chooseBroadReadCandidates,
     buildBroadReadInput,
