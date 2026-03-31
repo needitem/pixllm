@@ -3,6 +3,11 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 
+_DIRECT_READ_TOOLS = {"read_file", "read_symbol_span", "symbol_neighborhood"}
+_TRACE_EVIDENCE_TOOLS = _DIRECT_READ_TOOLS | {"grep", "find_symbol", "find_references", "find_callers"}
+_OVERLAY_TRACE_CHAR_BUDGET = 7200
+
+
 def _normalize_str(value: Any) -> str:
     return str(value or "").strip()
 
@@ -32,10 +37,10 @@ def _trace_step_text(step: Dict[str, Any]) -> str:
     observation = step.get("observation") if isinstance(step, dict) else {}
     if not isinstance(observation, dict):
         return thought
-    if tool_name in {"read_file", "read_symbol_span"}:
+    if tool_name in _DIRECT_READ_TOOLS:
         content = _normalize_str(observation.get("content"))
         return "\n".join(part for part in [thought, content[:1200]] if part).strip()
-    if tool_name in {"grep", "find_symbol", "find_references", "find_callers"}:
+    if tool_name in _TRACE_EVIDENCE_TOOLS:
         lines = []
         for item in list(observation.get("items") or [])[:3]:
             if not isinstance(item, dict):
@@ -48,6 +53,63 @@ def _trace_step_text(step: Dict[str, Any]) -> str:
                 lines.append(f"{prefix}: {text}")
         return "\n".join(part for part in [thought, *lines] if part).strip()[:1200]
     return ""
+
+
+def _select_overlay_trace_steps(trace_steps: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    candidates: List[Dict[str, Any]] = []
+    for index, step in enumerate(list(trace_steps or [])):
+        tool_name = _normalize_str(step.get("tool") or "tool").lower()
+        if tool_name not in _TRACE_EVIDENCE_TOOLS:
+            continue
+        text_value = _trace_step_text(step)
+        if not text_value:
+            continue
+        candidates.append(
+            {
+                "index": index,
+                "step": step,
+                "tool": tool_name,
+                "text": text_value,
+                "is_direct_read": tool_name in _DIRECT_READ_TOOLS,
+            }
+        )
+
+    if not candidates:
+        return []
+
+    selected: List[Dict[str, Any]] = []
+    selected_indexes = set()
+    used_chars = 0
+
+    def _maybe_take(rows: List[Dict[str, Any]]) -> bool:
+        nonlocal used_chars
+        exhausted = False
+        for row in rows:
+            if row["index"] in selected_indexes:
+                continue
+            segment_chars = len(str(row.get("text") or ""))
+            if selected and used_chars + segment_chars > _OVERLAY_TRACE_CHAR_BUDGET:
+                exhausted = True
+                continue
+            selected.append(row)
+            selected_indexes.add(row["index"])
+            used_chars += segment_chars
+            if used_chars >= _OVERLAY_TRACE_CHAR_BUDGET:
+                exhausted = True
+                break
+        return exhausted
+
+    direct_reads = [row for row in candidates if bool(row.get("is_direct_read"))]
+    supporting_reads = [row for row in candidates if not bool(row.get("is_direct_read"))]
+
+    exhausted = _maybe_take(direct_reads)
+    if not exhausted:
+        _maybe_take(list(reversed(supporting_reads)))
+
+    if not selected:
+        selected = [direct_reads[0] if direct_reads else candidates[-1]]
+
+    return [row["step"] for row in sorted(selected, key=lambda item: item["index"])]
 
 
 def _attachment_field(item: Any, key: str) -> Any:
@@ -177,12 +239,10 @@ def build_local_overlay_evidence(local_overlay: Dict[str, Any]) -> List[Dict[str
             }
         )
 
-    trace_steps = list(local_overlay.get("local_trace") or [])
-    recent_steps = trace_steps[-12:]
-    start_round = max(0, len(trace_steps) - len(recent_steps))
-    for offset, step in enumerate(recent_steps):
-        tool_name = _normalize_str(step.get("tool") or "tool")
-        if tool_name not in {"read_file", "read_symbol_span", "symbol_neighborhood", "grep", "find_symbol", "find_references", "find_callers"}:
+    trace_steps = _select_overlay_trace_steps(list(local_overlay.get("local_trace") or []))
+    for offset, step in enumerate(trace_steps):
+        tool_name = _normalize_str(step.get("tool") or "tool").lower()
+        if tool_name not in _TRACE_EVIDENCE_TOOLS:
             continue
         path_value = _trace_step_path(step, selected_path or local_overlay.get("workspace_path") or "workspace")
         text_value = _trace_step_text(step)
@@ -195,7 +255,7 @@ def build_local_overlay_evidence(local_overlay: Dict[str, Any]) -> List[Dict[str
                 "path": path_value,
                 "tool": tool_name,
                 "text": text_value,
-                "round": int(step.get("round") or start_round + offset + 1),
+                "round": int(step.get("round") or offset + 1),
             }
         )
 

@@ -42,6 +42,8 @@ elif not hasattr(sys.modules["openai"], "OpenAI"):
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.services.chat.intent import classify_intent_hybrid
+from app.services.chat import results as chat_results
+from app.services.chat.layered_merge import build_local_overlay_evidence
 from app.services.chat.planning import infer_expected_artifacts
 from app.services.chat.question_contract import build_question_contract, evaluate_question_contract
 from app.services.chat.react import code_explain_overlay
@@ -556,6 +558,101 @@ def test_local_overlay_context_prioritizes_grounded_local_reads() -> None:
     assert "grounded_local_read" in context
     assert "GenerateGroundTruth" in context
     assert "Do not say the local workspace is inaccessible" in context
+
+
+def test_local_overlay_context_uses_budget_instead_of_fixed_grounded_read_count() -> None:
+    context = react_engine._build_local_overlay_context(
+        [
+            {
+                "kind": "local_tool_step",
+                "tool": "read_symbol_span",
+                "path": f"MATR/ViewModels/UserControls/ImageMatching/File{i}.cs",
+                "text": f"void Step{i}() {{ Confirm{i}(); }}",
+                "round": i,
+            }
+            for i in range(1, 7)
+        ]
+    )
+
+    assert context.count("grounded_local_read") >= 6
+    assert "Confirm6" in context
+
+
+def test_overlay_trace_selection_keeps_grounded_reads_outside_recent_window() -> None:
+    local_overlay = {
+        "present": True,
+        "selected_file_path": "MATR/ViewModels/UserControls/ImageMatching/Vm_ImageMatching_Heterogeneous.cs",
+        "local_trace": [
+            {
+                "tool": "read_symbol_span",
+                "round": 1,
+                "observation": {
+                    "path": "MATR/ViewModels/UserControls/ImageMatching/Vm_ImageMatching_Heterogeneous.cs",
+                    "content": "void GenerateGroundTruth() { GenerateGeneralGroundTruth(); }",
+                    "lineRange": "1200-1240",
+                },
+            },
+            *[
+                {
+                    "tool": "grep",
+                    "round": idx + 2,
+                    "observation": {
+                        "items": [
+                            {
+                                "path": f"MATR/Other/File{idx}.cs",
+                                "line": idx + 10,
+                                "text": f"match {idx}",
+                            }
+                        ]
+                    },
+                }
+                for idx in range(14)
+            ],
+            {
+                "tool": "symbol_neighborhood",
+                "round": 20,
+                "observation": {
+                    "path": "MATR/ViewModels/UserControls/ImageMatching/Vm_ImageMatching_Heterogeneous.cs",
+                    "content": "private void LoadReferenceImage() { RefreshPreview(); }",
+                    "lineRange": "340-380",
+                },
+            },
+        ],
+    }
+
+    evidence = build_local_overlay_evidence(local_overlay)
+    local_steps = [item for item in evidence if item.get("kind") == "local_tool_step"]
+
+    assert any(
+        item.get("tool") == "read_symbol_span"
+        and "GenerateGroundTruth" in str(item.get("text") or "")
+        for item in local_steps
+    )
+    assert any(
+        item.get("tool") == "symbol_neighborhood"
+        and "LoadReferenceImage" in str(item.get("text") or "")
+        for item in local_steps
+    )
+
+
+def test_workspace_graph_render_gate_uses_flow_contract_not_response_type(monkeypatch) -> None:
+    monkeypatch.setattr(chat_results, "workspace_graph_has_content", lambda graph: True)
+    monkeypatch.setattr(
+        chat_results,
+        "workspace_graph_is_ready_for_answer",
+        lambda graph, grounded_paths: {"passed": True},
+    )
+
+    assert chat_results._should_render_workspace_graph_answer(
+        question_contract={"kind": "code_flow_explanation"},
+        workspace_graph={"focus_file": "MATR/ViewModels/UserControls/ImageMatching/Vm_ImageMatching_Heterogeneous.cs"},
+        grounded_overlay_paths=["MATR/ViewModels/UserControls/ImageMatching/Vm_ImageMatching_Heterogeneous.cs"],
+    ) is True
+    assert chat_results._should_render_workspace_graph_answer(
+        question_contract={"kind": "code_read"},
+        workspace_graph={"focus_file": "MATR/ViewModels/UserControls/ImageMatching/Vm_ImageMatching_Heterogeneous.cs"},
+        grounded_overlay_paths=["MATR/ViewModels/UserControls/ImageMatching/Vm_ImageMatching_Heterogeneous.cs"],
+    ) is False
 
 
 def test_tool_mode_hint_tells_model_to_use_client_grounded_overlay_reads() -> None:

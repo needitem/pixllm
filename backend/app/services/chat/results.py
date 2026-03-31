@@ -11,6 +11,7 @@ from .grounding import enforce_source_whitelist
 from .http import raise_http_error
 from .layered_merge import build_layer_manifest, build_local_overlay_evidence, extract_local_workspace_overlay
 from .preparation import PreparedChatExecution, record_prepared_error
+from .question_contract import normalize_question_contract
 from .react.engine import StageTimeoutError
 from .runtime_profile import build_react_routing_payload
 from .workspace_graph import (
@@ -29,6 +30,23 @@ logger = logging.getLogger(__name__)
 StatusCallback = Optional[Callable[[Dict[str, Any]], Awaitable[None] | None]]
 TokenCallback = Optional[Callable[[str], Awaitable[None] | None]]
 SourcesCallback = Optional[Callable[[List[Dict[str, Any]]], Awaitable[None] | None]]
+
+
+def _should_render_workspace_graph_answer(
+    *,
+    question_contract: Dict[str, Any] | None,
+    workspace_graph: Dict[str, Any],
+    grounded_overlay_paths: List[str],
+) -> bool:
+    normalized_contract = normalize_question_contract(question_contract)
+    contract_kind = str(normalized_contract.get("kind") or "").strip().lower()
+    if contract_kind != "code_flow_explanation":
+        return False
+    if not workspace_graph_has_content(workspace_graph):
+        return False
+    return bool(
+        workspace_graph_is_ready_for_answer(workspace_graph, grounded_overlay_paths).get("passed")
+    )
 
 
 async def maybe_await_callback(callback, *args, **kwargs) -> None:
@@ -443,6 +461,14 @@ async def finalize_react_payload(
     local_overlay_evidence = build_local_overlay_evidence(local_overlay)
     workspace_graph = extract_workspace_graph(local_overlay)
     grounded_overlay_paths = collect_grounded_overlay_paths(local_overlay)
+    normalized_question_contract = normalize_question_contract(
+        dict(prepared.intent_resolution.get("question_contract") or {}),
+        response_type=prepared.resolved.response_type,
+        message=prepared.clean_message,
+        task_type=getattr(prepared.req, "task_type", ""),
+        tool_scope=list(getattr(prepared.req, "tool_scope", []) or []),
+        workspace_overlay_present=bool(local_overlay.get("present")),
+    )
     workspace_grounding_report = build_workspace_grounding_report(
         workspace_graph,
         grounded_overlay_paths,
@@ -455,11 +481,10 @@ async def finalize_react_payload(
         local_overlay=local_overlay,
     )
 
-    if (
-        prepared.execution_plan.get("task_family") == "workspace_overlay"
-        and workspace_graph_has_content(workspace_graph)
-        and workspace_graph_is_ready_for_answer(workspace_graph, grounded_overlay_paths).get("passed")
-        and prepared.resolved.response_type == "code_explain"
+    if _should_render_workspace_graph_answer(
+        question_contract=normalized_question_contract,
+        workspace_graph=workspace_graph,
+        grounded_overlay_paths=grounded_overlay_paths,
     ):
         rendered_answer = render_workspace_graph_answer(
             prepared.clean_message,

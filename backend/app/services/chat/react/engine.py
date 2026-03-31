@@ -313,8 +313,8 @@ def _build_local_overlay_context(
             int(item.get("round") or 0),
         ),
     )
-    grounded_read_count = 0
-    supporting_count = 0
+    context_char_budget = 5200
+    used_chars = sum(len(part) for part in parts)
     for item in ordered_items:
         kind = str(item.get("kind") or "evidence")
         if kind in {"workspace_status", "workspace_diff"}:
@@ -326,19 +326,16 @@ def _build_local_overlay_context(
         normalized_text = " ".join(text.split())
         tool = str(item.get("tool") or "").strip().lower()
         is_grounded_read = kind == "selected_file" or (kind == "local_tool_step" and tool in {"read_file", "read_symbol_span", "symbol_neighborhood"})
-        if is_grounded_read:
-            if grounded_read_count >= 5:
-                continue
-            label = tool or kind
-            parts.append(f"- grounded_local_read tool={label} path={path}\n{normalized_text[:420]}")
-            grounded_read_count += 1
-            continue
-        if supporting_count >= 3:
-            continue
         label = tool or kind
-        parts.append(f"- local_supporting_evidence kind={label} path={path}\n{normalized_text[:320]}")
-        supporting_count += 1
-        if grounded_read_count >= 5 and supporting_count >= 3:
+        excerpt_limit = 520 if is_grounded_read else 360
+        prefix = "grounded_local_read" if is_grounded_read else "local_supporting_evidence"
+        segment_key = "tool" if is_grounded_read else "kind"
+        segment = f"- {prefix} {segment_key}={label} path={path}\n{normalized_text[:excerpt_limit]}"
+        if parts and used_chars + len(segment) > context_char_budget:
+            continue
+        parts.append(segment)
+        used_chars += len(segment)
+        if used_chars >= context_char_budget:
             break
     report = dict(grounding_report or {})
     confirmed_paths = [str(item).strip() for item in list(report.get("direct_paths") or []) if str(item).strip()]
