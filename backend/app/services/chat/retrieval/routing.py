@@ -147,6 +147,7 @@ def tool_evidence_to_results(evidence: Dict[str, Any]) -> List[Dict[str, Any]]:
         start_line, end_line = parse_line_bounds(line_range)
         file_path = path
         key = f"{path}::{line_range}"
+        source_kind = str(window.get("source_kind") or "code_tool").strip() or "code_tool"
         payload = {
             "file_path": file_path,
             "source_file": path,
@@ -156,7 +157,7 @@ def tool_evidence_to_results(evidence: Dict[str, Any]) -> List[Dict[str, Any]]:
             "line_end": end_line,
             "text": str(window.get("content") or ""),
             "type": "code_reference",
-            "source_kind": "code_tool",
+            "source_kind": source_kind,
         }
         out.append(
             {

@@ -130,6 +130,43 @@ def _overlay_review_evidence_present(local_overlay: Dict[str, Any] | None) -> bo
     )
 
 
+def _result_source_kind_counts(results: List[Dict[str, Any]] | None) -> Dict[str, int]:
+    counts: Dict[str, int] = {}
+    for item in list(results or []):
+        if not isinstance(item, dict):
+            continue
+        payload = dict(item.get("payload") or {}) if isinstance(item.get("payload"), dict) else {}
+        kind = str(payload.get("source_kind") or "").strip().lower()
+        if not kind:
+            continue
+        counts[kind] = counts.get(kind, 0) + 1
+    return counts
+
+
+def _overlay_review_has_server_direct_reads(results: List[Dict[str, Any]] | None) -> bool:
+    counts = _result_source_kind_counts(results)
+    return any(
+        int(counts.get(kind) or 0) > 0
+        for kind in ("code_tool", "documents")
+    )
+
+
+def _answer_matches_review_contract(answer: str) -> bool:
+    text = str(answer or "").strip().lower()
+    if not text:
+        return False
+    markers = (
+        "## code review",
+        "### changed files",
+        "### grounded evidence",
+        "no confirmed defect findings",
+        "confirmed findings",
+        "### findings",
+        "### limits",
+    )
+    return any(marker in text for marker in markers)
+
+
 def _sources_align_with_overlay(local_overlay: Dict[str, Any] | None, sources: List[Dict[str, Any]] | None) -> bool:
     overlay = dict(local_overlay or {})
     allowed = {
@@ -192,6 +229,26 @@ def _should_render_overlay_review_fallback(
     if not _sources_align_with_overlay(overlay, sources):
         return False
     return _results_align_with_overlay(overlay, results)
+
+
+def _should_force_overlay_review_answer(
+    *,
+    question_contract: Dict[str, Any] | None,
+    local_overlay: Dict[str, Any] | None,
+    results: List[Dict[str, Any]] | None,
+    sources: List[Dict[str, Any]] | None,
+    answer: str = "",
+) -> bool:
+    if not _should_render_overlay_review_fallback(
+        question_contract=question_contract,
+        local_overlay=local_overlay,
+        results=results,
+        sources=sources,
+    ):
+        return False
+    if not _overlay_review_has_server_direct_reads(results):
+        return True
+    return not _answer_matches_review_contract(answer)
 
 
 def _should_render_workspace_graph_answer(
@@ -657,11 +714,12 @@ async def finalize_react_payload(
         )
         if rendered_answer:
             answer = rendered_answer
-    elif _should_render_overlay_review_fallback(
+    elif _should_force_overlay_review_answer(
         question_contract=normalized_question_contract,
         local_overlay=local_overlay,
         results=results,
         sources=sources,
+        answer=answer,
     ):
         rendered_answer = _render_overlay_review_answer(prepared.clean_message, local_overlay)
         if rendered_answer:

@@ -702,6 +702,7 @@ async def run_react_chat_generation(
                 "path": str(item.get("path") or "workspace"),
                 "line_range": str(item.get("line_range") or "1-1"),
                 "content": str(item.get("content") or ""),
+                "source_kind": "local_overlay",
             }
         )
 
@@ -761,6 +762,7 @@ async def run_react_chat_generation(
                         "path": str(row.get("path") or "workspace"),
                         "line_range": str(row.get("line_range") or "1-1"),
                         "content": str(row.get("content") or ""),
+                        "source_kind": "local_overlay",
                     }
                 )
         local_overlay_context = "\n\n".join(

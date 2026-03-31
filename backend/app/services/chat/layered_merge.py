@@ -277,6 +277,11 @@ def build_layer_manifest(
     local_overlay: Dict[str, Any],
 ) -> Dict[str, Any]:
     local_items = build_local_overlay_evidence(local_overlay)
+    overlay_grounded_code_count = sum(
+        1
+        for item in list(results or [])
+        if str(dict(item.get("payload", {}) or {}).get("source_kind") or "").strip().lower() == "local_overlay"
+    )
     server_code_count = sum(
         1
         for item in list(results or [])
@@ -323,6 +328,7 @@ def build_layer_manifest(
         "source_count": len(list(sources or [])),
         "summary": {
             "server_code_evidence": server_code_count,
+            "overlay_grounded_code_evidence": overlay_grounded_code_count,
             "local_overlay_evidence": len(local_items),
             "server_doc_evidence": server_doc_count,
             "docs_enabled": bool(routing_profile.get("docs_enabled")),

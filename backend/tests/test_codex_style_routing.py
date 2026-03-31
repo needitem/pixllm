@@ -49,6 +49,7 @@ from app.services.chat.planning import infer_expected_artifacts
 from app.services.chat.question_contract import build_question_contract, evaluate_question_contract
 from app.services.chat.react import code_explain_overlay
 from app.services.chat.react import engine as react_engine
+from app.services.chat.retrieval import routing as retrieval_routing
 from app.services.chat.retrieval.mode_policy import assess_retrieval_quality
 from app.services.chat.runtime_profile import resolve_runtime_routing_profile
 from app.services.tools import query_terms
@@ -777,7 +778,7 @@ def test_overlay_review_renderer_uses_grounded_diff_without_inaccessible_claims(
 
 
 def test_overlay_review_fallback_accepts_overlay_only_sources() -> None:
-    assert chat_results._should_render_overlay_review_fallback(
+    assert chat_results._should_force_overlay_review_answer(
         question_contract={"kind": "code_review"},
         local_overlay={
             "present": True,
@@ -796,7 +797,7 @@ def test_overlay_review_fallback_accepts_overlay_only_sources() -> None:
                 "payload": {
                     "file_path": "backend/app/services/chat/question_contract.py",
                     "source_file": "backend/app/services/chat/question_contract.py",
-                    "source_kind": "code_tool",
+                    "source_kind": "local_overlay",
                     "text": "def build_overlay_structure_profile(local_workspace_overlay=None):\n    return {}",
                 }
             }
@@ -808,11 +809,12 @@ def test_overlay_review_fallback_accepts_overlay_only_sources() -> None:
                 "score": 0.9,
             }
         ],
+        answer="## Workspace Overlay 설명",
     ) is True
 
 
 def test_overlay_review_fallback_rejects_non_overlay_sources() -> None:
-    assert chat_results._should_render_overlay_review_fallback(
+    assert chat_results._should_force_overlay_review_answer(
         question_contract={"kind": "code_review"},
         local_overlay={
             "present": True,
@@ -828,11 +830,12 @@ def test_overlay_review_fallback_rejects_non_overlay_sources() -> None:
                 "score": 0.9,
             }
         ],
+        answer="## Code Review",
     ) is False
 
 
 def test_overlay_review_fallback_rejects_non_overlay_results() -> None:
-    assert chat_results._should_render_overlay_review_fallback(
+    assert chat_results._should_force_overlay_review_answer(
         question_contract={"kind": "code_review"},
         local_overlay={
             "present": True,
@@ -857,7 +860,97 @@ def test_overlay_review_fallback_rejects_non_overlay_results() -> None:
                 "score": 0.9,
             }
         ],
+        answer="## Code Review",
     ) is False
+
+
+def test_overlay_review_force_fallback_ignores_search_only_noise_without_server_reads() -> None:
+    assert chat_results._should_force_overlay_review_answer(
+        question_contract={"kind": "code_review"},
+        local_overlay={
+            "present": True,
+            "selected_file_path": "backend/app/services/chat/question_contract.py",
+            "workspace_diff": "Index: backend/app/services/chat/question_contract.py",
+            "workspace_change_paths": ["backend/app/services/chat/question_contract.py"],
+        },
+        results=[
+            {
+                "payload": {
+                    "file_path": "backend/app/services/chat/question_contract.py",
+                    "source_file": "backend/app/services/chat/question_contract.py",
+                    "source_kind": "local_overlay",
+                    "text": "def build_question_contract(...):",
+                }
+            },
+            {
+                "payload": {
+                    "file_path": "backend/app/services/chat/question_contract.py",
+                    "source_file": "backend/app/services/chat/question_contract.py",
+                    "source_kind": "code_search",
+                    "text": "workspace_overlay_present",
+                }
+            },
+        ],
+        sources=[
+            {
+                "file_path": "backend/app/services/chat/question_contract.py",
+                "preview_text": "workspace_overlay_present",
+                "score": 0.9,
+            }
+        ],
+        answer="## Workspace Overlay 설명",
+    ) is True
+
+
+def test_overlay_review_force_fallback_keeps_grounded_review_when_server_read_exists() -> None:
+    assert chat_results._should_force_overlay_review_answer(
+        question_contract={"kind": "code_review"},
+        local_overlay={
+            "present": True,
+            "selected_file_path": "backend/app/services/chat/question_contract.py",
+            "workspace_diff": "Index: backend/app/services/chat/question_contract.py",
+            "workspace_change_paths": ["backend/app/services/chat/question_contract.py"],
+        },
+        results=[
+            {
+                "payload": {
+                    "file_path": "backend/app/services/chat/question_contract.py",
+                    "source_file": "backend/app/services/chat/question_contract.py",
+                    "source_kind": "code_tool",
+                    "text": "def build_question_contract(...):",
+                }
+            }
+        ],
+        sources=[
+            {
+                "file_path": "backend/app/services/chat/question_contract.py",
+                "preview_text": "def build_question_contract(...):",
+                "score": 0.9,
+            }
+        ],
+        answer="## Code Review\n\n### Changed Files\n- `backend/app/services/chat/question_contract.py`\n\n### Grounded Evidence\n- Selected file",
+    ) is False
+
+
+def test_tool_evidence_to_results_preserves_overlay_source_kind() -> None:
+    rows = retrieval_routing.tool_evidence_to_results(
+        {
+            "docs": {"search": {"results": []}, "chunks": []},
+            "code": {
+                "search": {"matches": []},
+                "windows": [
+                    {
+                        "path": "backend/app/services/chat/question_contract.py",
+                        "line_range": "10-20",
+                        "content": "def build_question_contract(...):",
+                        "source_kind": "local_overlay",
+                    }
+                ],
+            },
+        }
+    )
+
+    assert rows[0]["payload"]["source_kind"] == "local_overlay"
 
 
 def test_render_workspace_graph_answer_uses_anchor_span_and_downstream_calls() -> None:
