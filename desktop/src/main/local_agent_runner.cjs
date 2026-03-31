@@ -6,6 +6,8 @@ const {
   extractIdentifiers,
   pickRepresentativeEvidence,
   inferCodeRelations,
+  grepItemsFromTrace,
+  listFilesFromTrace,
   readWindowsFromTrace,
   readObservationsFromTrace,
 } = require('./local_agent_trace.cjs');
@@ -24,7 +26,7 @@ const {
 const LOCAL_TRACE_READ_CHAR_LIMIT = 16000;
 const FILE_READ_CHAR_LIMIT = 24000;
 const DEFAULT_FILE_READ_END_LINE = 2400;
-const MAX_TRACE_STEPS = 12;
+const MAX_TRACE_STEPS = 24;
 const MAX_ROOT_SYMBOLS = 4;
 const MAX_SUPPORT_SYMBOLS = 4;
 const MAX_GREP_LIMIT = 30;
@@ -38,6 +40,8 @@ const MAX_ROOT_GREP_SCAN_LIMIT = 80;
 const MAX_CORE_FILES = 4;
 const MAX_SUPPORT_FILES = 4;
 const MAX_RELATED_FILES = 8;
+const MAX_RELATED_OWNER_READS = 3;
+const MAX_BROAD_FILE_READS = 4;
 const FLOW_OUTLINE_LIMIT = 320;
 const CALL_KEYWORDS = new Set([
   'if',
@@ -131,6 +135,18 @@ function pathBasename(value) {
 
 function pathStem(value) {
   return pathBasename(value).replace(/\.[^.]+$/, '');
+}
+
+function pathDirname(value) {
+  const normalized = normalizePath(value);
+  const lastSlash = normalized.lastIndexOf('/');
+  return lastSlash >= 0 ? normalized.slice(0, lastSlash) : '';
+}
+
+function pathExtname(value) {
+  const normalized = pathBasename(value).toLowerCase();
+  const lastDot = normalized.lastIndexOf('.');
+  return lastDot >= 0 ? normalized.slice(lastDot) : '';
 }
 
 function pathSegments(value) {
@@ -616,6 +632,148 @@ function pickBestDefinition(items, selectedPath) {
     .sort((a, b) => Number(b.__score || 0) - Number(a.__score || 0) || String(a.path || '').localeCompare(String(b.path || '')))[0] || null;
 }
 
+function rankRelatedOwnerHits(items, selectedPath) {
+  return dedupeBy(
+    (Array.isArray(items) ? items : [])
+      .map((item) => {
+        const pathValue = normalizePath(item?.path);
+        let score = Number(item?.score || 0);
+        if (selectedPath && pathValue.toLowerCase() === normalizePath(selectedPath).toLowerCase()) score += 24;
+        score += sharedPrefixDepth(pathValue, selectedPath) * 4;
+        if (Number(item?.line || 0) > 0) score += 2;
+        return { ...item, __score: score };
+      })
+      .sort((a, b) => Number(b.__score || 0) - Number(a.__score || 0) || String(a.path || '').localeCompare(String(b.path || ''))),
+    (item) => normalizePath(item?.path),
+  );
+}
+
+function hasReadPath(trace, pathValue) {
+  const normalizedPath = normalizePath(pathValue).toLowerCase();
+  if (!normalizedPath) {
+    return false;
+  }
+  return readWindowsFromTrace(trace).some((item) => normalizePath(item.path).toLowerCase() === normalizedPath);
+}
+
+function scoreRelatedFileCandidate(pathValue, {
+  rootPath,
+  selectedPath,
+  questionTerms,
+  grepHits = [],
+  preferFlow = false,
+} = {}) {
+  const normalizedPath = normalizePath(pathValue);
+  if (!normalizedPath) {
+    return -100;
+  }
+  const normalizedRootPath = normalizePath(rootPath);
+  if (normalizedPath.toLowerCase() === normalizedRootPath.toLowerCase()) {
+    return -100;
+  }
+
+  const normalizedSelectedPath = normalizePath(selectedPath || rootPath);
+  const normalizedDir = pathDirname(normalizedPath).toLowerCase();
+  const rootDir = pathDirname(normalizedRootPath).toLowerCase();
+  const selectedDir = pathDirname(normalizedSelectedPath).toLowerCase();
+  const rootParentDir = pathDirname(rootDir).toLowerCase();
+  const rootStemParts = splitSymbolParts(pathStem(normalizedRootPath))
+    .map((item) => String(item || '').trim().toLowerCase())
+    .filter((item) => item.length >= 3);
+  const stem = pathStem(normalizedPath).toLowerCase();
+  let score = 0;
+
+  score += pathFlowBias(normalizedPath, { preferFlow });
+  score += Math.min(24, scoreFileQuestionAlignment(normalizedPath, '', questionTerms));
+  score += sharedPrefixDepth(normalizedPath, normalizedRootPath) * 4;
+
+  if (normalizedDir && normalizedDir === rootDir) score += preferFlow ? 26 : 18;
+  if (normalizedDir && normalizedDir === selectedDir) score += 10;
+  if (rootParentDir && normalizedDir.startsWith(rootParentDir)) score += 4;
+  if (pathExtname(normalizedPath) && pathExtname(normalizedPath) === pathExtname(normalizedRootPath)) score += 4;
+
+  for (const token of rootStemParts) {
+    if (stem.includes(token)) score += 4;
+  }
+
+  if (Array.isArray(grepHits) && grepHits.length > 0) {
+    score += 14;
+    score += Math.min(18, grepHits.length * 6);
+    if (grepHits.some((item) => /[A-Za-z_][A-Za-z0-9_]*\s*\(|\.\s*[A-Za-z_][A-Za-z0-9_]*\s*\(|::\s*[A-Za-z_][A-Za-z0-9_]*\s*\(/.test(String(item?.text || '')))) {
+      score += 6;
+    }
+  }
+
+  return score;
+}
+
+function chooseBroadReadCandidates(fileItems, trace, {
+  rootPath,
+  selectedPath,
+  questionTerms,
+  preferFlow = false,
+} = {}) {
+  const readPaths = new Set(
+    readObservationsFromTrace(trace)
+      .map((item) => normalizePath(item.path).toLowerCase())
+      .filter(Boolean),
+  );
+  const grepByPath = new Map();
+  for (const hit of grepItemsFromTrace(trace)) {
+    const pathValue = normalizePath(hit?.path);
+    if (!pathValue) continue;
+    const key = pathValue.toLowerCase();
+    if (!grepByPath.has(key)) {
+      grepByPath.set(key, []);
+    }
+    grepByPath.get(key).push({
+      line: Number(hit?.line || 0),
+      text: String(hit?.text || ''),
+      score: Number(hit?.score || 0),
+    });
+  }
+
+  const inventoryPaths = [
+    ...(Array.isArray(fileItems) ? fileItems : []).map((item) => normalizePath(item?.path || item)),
+    ...listFilesFromTrace(trace).map((item) => normalizePath(item?.path || item)),
+  ];
+
+  const candidates = dedupeBy(
+    inventoryPaths
+      .filter(Boolean)
+      .map((pathValue) => {
+        const grepHits = grepByPath.get(pathValue.toLowerCase()) || [];
+        return {
+          path: pathValue,
+          grepHits,
+          score: scoreRelatedFileCandidate(pathValue, {
+            rootPath,
+            selectedPath,
+            questionTerms,
+            grepHits,
+            preferFlow,
+          }),
+        };
+      })
+      .filter((item) => !readPaths.has(normalizePath(item.path).toLowerCase()))
+      .filter((item) => Number(item.score || 0) >= (preferFlow ? 18 : 14))
+      .sort((a, b) => Number(b.score || 0) - Number(a.score || 0) || String(a.path || '').localeCompare(String(b.path || ''))),
+    (item) => item?.path,
+  );
+
+  return candidates.slice(0, MAX_BROAD_FILE_READS);
+}
+
+function buildBroadReadInput(candidate, { preferFlow = false } = {}) {
+  const readWindow = buildCandidateReadWindow(candidate, { preferFlow });
+  return {
+    path: candidate.path,
+    startLine: readWindow.startLine,
+    endLine: readWindow.endLine,
+    maxChars: FILE_READ_CHAR_LIMIT,
+  };
+}
+
 function buildNodeRole(pathValue, primaryPath, coreSet, supportSet) {
   const normalized = normalizePath(pathValue).toLowerCase();
   if (normalized === normalizePath(primaryPath).toLowerCase()) return 'focus';
@@ -626,6 +784,25 @@ function buildNodeRole(pathValue, primaryPath, coreSet, supportSet) {
 
 function nextRound(trace) {
   return (Array.isArray(trace) ? trace.length : 0) + 1;
+}
+
+function appendTraceObservation(trace, thought, action, input, rawObservation) {
+  if (trace.length >= MAX_TRACE_STEPS) {
+    return { ok: false, error: 'local_trace_budget_exhausted' };
+  }
+  const observation = summarizeObservation(
+    action,
+    rawObservation,
+    LOCAL_TRACE_READ_CHAR_LIMIT,
+  );
+  trace.push({
+    round: nextRound(trace),
+    thought: String(thought || '').trim(),
+    tool: action,
+    input: input || {},
+    observation,
+  });
+  return observation;
 }
 
 async function executeTool(workspacePath, toolName, input) {
@@ -668,22 +845,75 @@ async function executeTool(workspacePath, toolName, input) {
 }
 
 async function pushTraceStep(trace, workspacePath, thought, action, input) {
-  if (trace.length >= MAX_TRACE_STEPS) {
-    return { ok: false, error: 'local_trace_budget_exhausted' };
-  }
-  const observation = summarizeObservation(
+  return appendTraceObservation(
+    trace,
+    thought,
     action,
+    input,
     await executeTool(workspacePath, action, input || {}),
-    LOCAL_TRACE_READ_CHAR_LIMIT,
   );
-  trace.push({
-    round: nextRound(trace),
-    thought: String(thought || '').trim(),
-    tool: action,
-    input: input || {},
-    observation,
-  });
-  return observation;
+}
+
+async function collectOwnerSpanReads(trace, workspacePath, hits, primarySymbol, {
+  selectedPath = '',
+  relationLabel = 'call site',
+} = {}) {
+  const owners = [];
+  for (const hit of rankRelatedOwnerHits(hits, selectedPath).slice(0, MAX_RELATED_OWNER_READS)) {
+    const hitPath = normalizePath(hit?.path);
+    if (!hitPath) continue;
+    const neighborhoodObservation = await pushTraceStep(
+      trace,
+      workspacePath,
+      `inspect the enclosing local symbol around the ${primarySymbol} ${relationLabel}`,
+      'symbol_neighborhood',
+      {
+        path: hitPath,
+        symbol: primarySymbol,
+        lineHint: Number(hit?.line || 0),
+        limit: 12,
+      },
+    );
+    const owner = pickNeighborhoodOwner(neighborhoodObservation?.items, primarySymbol);
+    if (!owner) {
+      continue;
+    }
+    const ownerSymbol = String(owner.name || owner.symbol || '').trim();
+    if (!ownerSymbol) {
+      continue;
+    }
+    const ownerLine = Number(owner.line || hit?.line || 0);
+    if (hasReadSymbol(trace, hitPath, ownerSymbol)) {
+      owners.push({
+        symbol: ownerSymbol,
+        path: hitPath,
+        line: ownerLine,
+        read: false,
+      });
+      continue;
+    }
+    const ownerSpan = await pushTraceStep(
+      trace,
+      workspacePath,
+      `read the local owner span for ${ownerSymbol}`,
+      'read_symbol_span',
+      {
+        path: hitPath,
+        symbol: ownerSymbol,
+        lineHint: ownerLine,
+        maxChars: LOCAL_TRACE_READ_CHAR_LIMIT,
+      },
+    );
+    if (ownerSpan?.ok) {
+      owners.push({
+        symbol: ownerSymbol,
+        path: hitPath,
+        line: ownerLine,
+        read: true,
+      });
+    }
+  }
+  return dedupeBy(owners, (item) => `${item.path}::${item.symbol}`);
 }
 
 function buildAnchorEvidenceMetrics(content, outlineItems) {
@@ -1119,9 +1349,14 @@ function buildWorkspaceGraph(question, trace, analysis) {
   const rootPath = normalizePath(analysis.rootPath || selectedPath);
   const primaryPath = normalizePath(analysis.primaryPath || rootPath || selectedPath);
   const selectedMatchesPrimary = Boolean(selectedPath) && selectedPath.toLowerCase() === primaryPath.toLowerCase();
+  const relatedOwners = dedupeBy(
+    Array.isArray(analysis.relatedOwners) ? analysis.relatedOwners : [],
+    (item) => `${normalizePath(item?.path)}::${String(item?.symbol || '').trim()}`,
+  );
   const readFiles = readObservationsFromTrace(trace);
   const relatedFiles = uniq([
     primaryPath,
+    ...relatedOwners.map((item) => item.path),
     analysis.callerOwner?.path || '',
     ...(analysis.supportReads || []).map((item) => item.path),
     ...readFiles.map((item) => item.path),
@@ -1132,6 +1367,7 @@ function buildWorkspaceGraph(question, trace, analysis) {
     analysis.callerOwner?.path || '',
   ]).filter(Boolean).slice(0, MAX_CORE_FILES);
   const supportFiles = uniq([
+    ...relatedOwners.map((item) => item.path),
     ...(analysis.supportReads || []).map((item) => item.path),
     ...relatedFiles.filter((pathValue) => !coreFiles.some((item) => item.toLowerCase() === pathValue.toLowerCase())),
   ]).filter(Boolean).slice(0, MAX_SUPPORT_FILES);
@@ -1193,6 +1429,26 @@ function buildWorkspaceGraph(question, trace, analysis) {
       symbol: analysis.callerOwner.symbol,
       path: analysis.callerOwner.path,
       line: Number(analysis.callerOwner.line || 0),
+      covered: true,
+      discovered: true,
+      search_completed: true,
+      base_symbol: analysis.primarySymbol,
+    });
+  }
+  for (const owner of relatedOwners) {
+    if (!owner?.symbol || !owner?.path) continue;
+    if (
+      analysis.callerOwner
+      && normalizePath(owner.path).toLowerCase() === normalizePath(analysis.callerOwner.path).toLowerCase()
+      && String(owner.symbol || '').trim().toLowerCase() === String(analysis.callerOwner.symbol || '').trim().toLowerCase()
+    ) {
+      continue;
+    }
+    chain.push({
+      relation: 'related_owner',
+      symbol: owner.symbol,
+      path: owner.path,
+      line: Number(owner.line || 0),
       covered: true,
       discovered: true,
       search_completed: true,
@@ -1282,6 +1538,7 @@ async function runLocalToolLoop({
   const rootFocusLines = Array.isArray(rootAnchor?.focusLines) ? rootAnchor.focusLines : [];
   const anchorQuestionTerms = normalizeQuestionTerms(question);
   const questionTerms = anchorTerms(question, rootPath);
+  const preferFlow = isFlowQuestion(question);
   if (!rootPath) {
     return {
       trace,
@@ -1295,6 +1552,15 @@ async function runLocalToolLoop({
     };
   }
 
+  const inventory = await listWorkspaceFiles(workspacePath, { limit: MAX_LIST_LIMIT });
+  appendTraceObservation(
+    trace,
+    'enumerate workspace files to widen the initial local evidence set',
+    'list_files',
+    { limit: MAX_LIST_LIMIT },
+    inventory,
+  );
+
   const analysis = {
     selectedPath: normalizePath(selectedFilePath),
     rootPath,
@@ -1304,6 +1570,7 @@ async function runLocalToolLoop({
     primaryPath: rootPath,
     primaryWindow: null,
     callerOwner: null,
+    relatedOwners: [],
     supportReads: [],
     summary: '',
   };
@@ -1317,12 +1584,12 @@ async function runLocalToolLoop({
 
   const outlineObservation = await pushTraceStep(trace, workspacePath, 'inspect local declarations in the anchor file', 'symbol_outline', {
     path: rootPath,
-    limit: isFlowQuestion(question) ? FLOW_OUTLINE_LIMIT : 120,
+    limit: preferFlow ? FLOW_OUTLINE_LIMIT : 120,
   });
   const outlineItems = Array.isArray(outlineObservation?.items) ? outlineObservation.items : [];
   const rootCandidates = chooseBestOutlineItems(outlineItems, anchorQuestionTerms, {
     focusLines: rootFocusLines,
-    preferFlow: isFlowQuestion(question),
+    preferFlow,
   });
   analysis.candidateSymbols = rootCandidates.map((item) => String(item?.name || '').trim()).filter(Boolean);
 
@@ -1353,93 +1620,46 @@ async function runLocalToolLoop({
       symbol: analysis.primarySymbol,
       limit: 20,
     });
-    const bestCaller = pickBestCallerHit(callerObservation?.items, rootPath);
-    if (bestCaller) {
-      const neighborhoodObservation = await pushTraceStep(trace, workspacePath, `inspect the enclosing local symbol around the ${analysis.primarySymbol} call site`, 'symbol_neighborhood', {
-        path: bestCaller.path,
-        symbol: analysis.primarySymbol,
-        lineHint: Number(bestCaller.line || 0),
-        limit: 12,
-      });
-      const owner = pickNeighborhoodOwner(neighborhoodObservation?.items, analysis.primarySymbol);
-      if (owner) {
-        const ownerSymbol = String(owner.name || owner.symbol || '').trim();
-        if (hasReadSymbol(trace, bestCaller.path, ownerSymbol)) {
-          analysis.callerOwner = {
-            symbol: ownerSymbol,
-            path: normalizePath(bestCaller.path),
-            line: Number(owner.line || bestCaller.line || 0),
-            read: false,
-          };
-        } else {
-          const ownerSpan = await pushTraceStep(trace, workspacePath, `read the caller owner span for ${ownerSymbol}`, 'read_symbol_span', {
-            path: bestCaller.path,
-            symbol: ownerSymbol,
-            lineHint: Number(owner.line || bestCaller.line || 0),
-            maxChars: LOCAL_TRACE_READ_CHAR_LIMIT,
-          });
-          if (ownerSpan?.ok) {
-            analysis.callerOwner = {
-              symbol: ownerSymbol,
-              path: normalizePath(bestCaller.path),
-              line: Number(owner.line || bestCaller.line || 0),
-              read: true,
-            };
-          }
-        }
-      }
-    }
+    analysis.relatedOwners = await collectOwnerSpanReads(
+      trace,
+      workspacePath,
+      callerObservation?.items,
+      analysis.primarySymbol,
+      {
+        selectedPath: rootPath,
+        relationLabel: 'call site',
+      },
+    );
+    analysis.callerOwner = analysis.relatedOwners[0] || null;
 
     if (!analysis.callerOwner) {
       const referenceObservation = await pushTraceStep(trace, workspacePath, `trace references of ${analysis.primarySymbol} when direct callers are absent`, 'find_references', {
         symbol: analysis.primarySymbol,
         limit: 24,
       });
-      const bestReference = pickBestCallerHit(referenceObservation?.items, rootPath);
-      if (bestReference) {
-        const neighborhoodObservation = await pushTraceStep(trace, workspacePath, `inspect the enclosing local symbol around the ${analysis.primarySymbol} reference`, 'symbol_neighborhood', {
-          path: bestReference.path,
-          symbol: analysis.primarySymbol,
-          lineHint: Number(bestReference.line || 0),
-          limit: 12,
-        });
-        const owner = pickNeighborhoodOwner(neighborhoodObservation?.items, analysis.primarySymbol);
-        if (owner) {
-          const ownerSymbol = String(owner.name || owner.symbol || '').trim();
-          if (hasReadSymbol(trace, bestReference.path, ownerSymbol)) {
-            analysis.callerOwner = {
-              symbol: ownerSymbol,
-              path: normalizePath(bestReference.path),
-              line: Number(owner.line || bestReference.line || 0),
-              read: false,
-            };
-          } else {
-          const ownerSpan = await pushTraceStep(trace, workspacePath, `read the reference owner span for ${ownerSymbol}`, 'read_symbol_span', {
-            path: bestReference.path,
-            symbol: ownerSymbol,
-            lineHint: Number(owner.line || bestReference.line || 0),
-            maxChars: LOCAL_TRACE_READ_CHAR_LIMIT,
-          });
-          if (ownerSpan?.ok) {
-            analysis.callerOwner = {
-              symbol: ownerSymbol,
-              path: normalizePath(bestReference.path),
-              line: Number(owner.line || bestReference.line || 0),
-              read: true,
-            };
-          }
-          }
-        }
-      }
+      analysis.relatedOwners = await collectOwnerSpanReads(
+        trace,
+        workspacePath,
+        referenceObservation?.items,
+        analysis.primarySymbol,
+        {
+          selectedPath: rootPath,
+          relationLabel: 'reference',
+        },
+      );
+      analysis.callerOwner = analysis.relatedOwners[0] || null;
     }
   }
 
-  const callerWindow = analysis.callerOwner
-    ? readWindowsFromTrace(trace).find((item) => {
-      return normalizePath(item.path).toLowerCase() === normalizePath(analysis.callerOwner.path).toLowerCase()
-        && String(item.symbol || '').trim().toLowerCase() === String(analysis.callerOwner.symbol || '').trim().toLowerCase();
-    }) || null
-    : null;
+  const callerWindows = (Array.isArray(analysis.relatedOwners) ? analysis.relatedOwners : [])
+    .map((owner) => {
+      return readWindowsFromTrace(trace).find((item) => {
+        return normalizePath(item.path).toLowerCase() === normalizePath(owner.path).toLowerCase()
+          && String(item.symbol || '').trim().toLowerCase() === String(owner.symbol || '').trim().toLowerCase();
+      }) || null;
+    })
+    .filter(Boolean);
+  const callerWindow = callerWindows[0] || null;
   const priorPrimaryWindow = analysis.primaryWindow;
   if (
     callerWindow
@@ -1452,7 +1672,7 @@ async function runLocalToolLoop({
   }
   const supportSymbols = chooseSupportSymbols(
     analysis.primaryWindow,
-    [callerWindow, priorPrimaryWindow].filter(Boolean),
+    [...callerWindows, priorPrimaryWindow].filter(Boolean),
     outlineItems,
     questionTerms,
     [analysis.primarySymbol, analysis.callerOwner?.symbol || ''],
@@ -1518,6 +1738,29 @@ async function runLocalToolLoop({
   }
 
   analysis.supportReads = dedupeBy(analysis.supportReads, (item) => `${item.path}::${item.symbol}`);
+
+  for (const candidate of chooseBroadReadCandidates(
+    Array.isArray(inventory?.items) ? inventory.items : [],
+    trace,
+    {
+      rootPath: analysis.primaryPath || rootPath,
+      selectedPath: analysis.selectedPath || rootPath,
+      questionTerms,
+      preferFlow,
+    },
+  )) {
+    if (hasReadPath(trace, candidate.path)) {
+      continue;
+    }
+    await pushTraceStep(
+      trace,
+      workspacePath,
+      `ground the related local file ${pathBasename(candidate.path)} to widen the workspace context`,
+      'read_file',
+      buildBroadReadInput(candidate, { preferFlow }),
+    );
+  }
+
   analysis.summary = analysis.primarySymbol
     ? `Collected local flow evidence around ${analysis.primarySymbol}${analysis.callerOwner?.symbol ? ` with caller ${analysis.callerOwner.symbol}` : ''}.`
     : `Collected local file evidence from ${analysis.primaryPath}.`;
@@ -1543,6 +1786,9 @@ module.exports = {
     chooseBestOutlineItems,
     choosePrimaryWindow,
     chooseSupportSymbols,
+    rankRelatedOwnerHits,
+    chooseBroadReadCandidates,
+    buildBroadReadInput,
     buildWorkspaceGraph,
     scoreFileQuestionAlignment,
   },
