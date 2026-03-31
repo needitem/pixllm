@@ -393,10 +393,8 @@ def test_overlay_bootstrap_extracts_flow_candidates_from_support_reads() -> None
     assert any(item["caller_symbol"] == "EmptyModelPropCheck" for item in pack["flow_observations"])
     assert any(item["callee_symbol"] == "RunConvergence" for item in pack["flow_observations"])
     assert any(item["unresolved_symbol"] == "RunConvergence" for item in pack["unresolved_caller_callee_edges"])
-    assert any(
-        item.get("tool") == "find_symbol" and item.get("symbol") == "RunConvergence"
-        for item in pack["next_search_candidates"]
-    )
+    assert "RunConvergence" in list(pack["open_frontier_symbols"] or [])
+    assert list(pack["next_search_candidates"] or []) == []
 
 
 def test_react_loop_timeout_can_be_disabled() -> None:

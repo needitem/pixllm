@@ -340,6 +340,10 @@ def _build_overlay_bootstrap_context(bootstrap: Dict[str, Any] | None) -> str:
     if open_symbols:
         parts.append("[Open Frontier Symbols]")
         parts.extend(f"- {symbol}" for symbol in open_symbols[:6])
+        parts.append(
+            "[Overlay Frontier Guidance]\n"
+            "These symbols come from the client-side local overlay. Treat them as local unresolved flow frontier, not as server-search instructions by default."
+        )
     unresolved_edges = list(payload.get("unresolved_caller_callee_edges") or [])
     if unresolved_edges:
         parts.append("[Unresolved Caller/Callee Edges]")

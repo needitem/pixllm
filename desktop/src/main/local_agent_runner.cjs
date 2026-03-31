@@ -31,8 +31,10 @@ const MAX_GREP_LIMIT = 30;
 const MAX_LIST_LIMIT = 5000;
 const MAX_ROOT_QUERY_CANDIDATES = 4;
 const MAX_ROOT_PATHS_PER_QUERY = 3;
-const MAX_ROOT_FILE_CANDIDATES = 4;
+const MAX_ROOT_FILE_CANDIDATES = 6;
 const MAX_ROOT_GREPHITS_PER_QUERY = 12;
+const MAX_ROOT_GREP_SCAN_LIMIT = 80;
+const MAX_ROOT_EXPANSION_QUERIES = 8;
 const MAX_CORE_FILES = 4;
 const MAX_SUPPORT_FILES = 4;
 const MAX_RELATED_FILES = 8;
@@ -60,6 +62,10 @@ const ASSIGNMENT_SIGNAL_RE = /(?:[A-Za-z_][A-Za-z0-9_]*|\)|\])\s*(?:[+\-*/%]?=|\
 const COMMENT_ONLY_LINE_RE = /^\s*(?:\/\/|#|\/\*|\*|<!--)/;
 const INLINE_BLOCK_COMMENT_RE = /\/\*.*?\*\//g;
 const INLINE_LINE_COMMENT_RE = /\/\/.*$/g;
+const STRING_LITERAL_RE = /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g;
+const EXECUTABLE_FLOW_PATH_RE = /\.(?:cs|vb|c|cc|cpp|cxx|h|hh|hpp|hxx|py|js|cjs|mjs|ts|tsx|jsx)$/i;
+const MARKUP_FLOW_PATH_RE = /\.(?:xaml|xml|resx|json|yaml|yml|toml|ini|config|txt|md|rst|html|htm|css|scss|less)$/i;
+const PROJECT_METADATA_PATH_RE = /\.(?:sln|csproj|vcxproj|vbproj|fsproj|props|targets)$/i;
 const KOREAN_QUERY_NOISE_TOKENS = new Set([
   '\uC124\uBA85',
   '\uC124\uBA85\uD574\uC918',
@@ -96,6 +102,15 @@ const FLOW_META_TERMS = new Set([
   '\uACBD\uB85C',
   '\uC124\uBA85',
   '\uBD84\uC11D',
+]);
+const GENERIC_UI_IDENTIFIER_TERMS = new Set([
+  'view',
+  'display',
+  'window',
+  'dialog',
+  'control',
+  'page',
+  'screen',
 ]);
 
 function pathBasename(value) {
@@ -284,6 +299,10 @@ function stripInlineComments(text) {
     .trim();
 }
 
+function stripStringLiterals(text) {
+  return String(text || '').replace(STRING_LITERAL_RE, '""');
+}
+
 function countDistinctQuestionTerms(text, questionTerms) {
   const lowered = String(text || '').toLowerCase();
   const distinct = new Set();
@@ -293,6 +312,113 @@ function countDistinctQuestionTerms(text, questionTerms) {
     if (lowered.includes(loweredTerm)) distinct.add(loweredTerm);
   }
   return distinct.size;
+}
+
+function pathFlowBias(pathValue, { preferFlow = false } = {}) {
+  const normalized = normalizePath(pathValue).toLowerCase();
+  if (!normalized) {
+    return 0;
+  }
+  if (/\/(?:obj|bin|dist|build|out|node_modules|packages|\.tmp)\//i.test(normalized)) {
+    return -48;
+  }
+  if (EXECUTABLE_FLOW_PATH_RE.test(normalized)) {
+    return preferFlow ? 26 : 12;
+  }
+  if (PROJECT_METADATA_PATH_RE.test(normalized)) {
+    return preferFlow ? -32 : -16;
+  }
+  if (MARKUP_FLOW_PATH_RE.test(normalized)) {
+    return preferFlow ? -28 : -10;
+  }
+  return 0;
+}
+
+function buildCandidateReadWindow(candidate, { preferFlow = false } = {}) {
+  const focusLines = (Array.isArray(candidate?.grepHits) ? candidate.grepHits : [])
+    .map((item) => Number(item?.line || 0))
+    .filter((item) => item > 0)
+    .sort((left, right) => left - right);
+  if (focusLines.length === 0) {
+    return {
+      startLine: 1,
+      endLine: preferFlow ? 800 : 400,
+    };
+  }
+  const center = focusLines[0];
+  const radius = preferFlow ? 120 : 80;
+  return {
+    startLine: Math.max(1, center - radius),
+    endLine: Math.max(center + radius, center + 40),
+  };
+}
+
+function trimPathStemPrefixes(stem) {
+  return String(stem || '')
+    .replace(/\.(?:xaml|xml|json|yaml|yml|md|txt)$/i, '')
+    .replace(/^(?:Win|UC|Vm|VM|Dlg|Page|View|Window|UserControl)[_-]?/, '');
+}
+
+function deriveAnchorExpansionQueriesFromHits(hits, questionTerms) {
+  const queries = [];
+  const questionSet = new Set((Array.isArray(questionTerms) ? questionTerms : []).map((item) => String(item || '').trim().toLowerCase()).filter(Boolean));
+
+  for (const hit of Array.isArray(hits) ? hits : []) {
+    const stem = trimPathStemPrefixes(pathStem(hit?.path));
+    if (!stem) continue;
+    const stemParts = splitSymbolParts(stem).filter((item) => String(item || '').trim().length >= 4);
+    const structuredStem = stem.includes('_') || stemParts.length >= 2;
+    const loweredStem = stem.toLowerCase();
+    if (structuredStem && !questionSet.has(loweredStem) && identifierStructureScore(stem) >= 4) {
+      queries.push(stem);
+    }
+    for (let index = 0; index < stemParts.length; index += 1) {
+      const part = String(stemParts[index] || '').trim();
+      if (!part || FLOW_META_TERMS.has(part.toLowerCase())) continue;
+      if (
+        structuredStem
+        && part.length >= 9
+        && !questionSet.has(part.toLowerCase())
+        && !GENERIC_UI_IDENTIFIER_TERMS.has(part.toLowerCase())
+      ) {
+        queries.push(part);
+      }
+      const nextPart = String(stemParts[index + 1] || '').trim();
+      if (!nextPart) continue;
+      const combined = `${part}${nextPart}`;
+      if (combined.length >= 8 && identifierStructureScore(combined) >= 4) {
+        queries.push(combined);
+      }
+    }
+  }
+
+  return uniq(queries)
+    .filter((item) => !questionSet.has(String(item || '').trim().toLowerCase()))
+    .sort((left, right) => {
+      const leftParts = splitSymbolParts(left);
+      const rightParts = splitSymbolParts(right);
+      const priority = (token, parts) => {
+        const lastPart = String(parts[parts.length - 1] || '').trim().toLowerCase();
+        let score = identifierStructureScore(token) * 10 + Math.min(40, String(token || '').length);
+        if (parts.length >= 2) score += parts.length * 8;
+        if (GENERIC_UI_IDENTIFIER_TERMS.has(lastPart)) score -= 28;
+        return score;
+      };
+      return priority(right, rightParts) - priority(left, leftParts) || String(left || '').localeCompare(String(right || ''));
+    })
+    .slice(0, MAX_ROOT_EXPANSION_QUERIES);
+}
+
+function countStructuredQueries(queries = []) {
+  let count = 0;
+  for (const query of Array.isArray(queries) ? queries : []) {
+    const token = String(query || '').trim();
+    if (!token) continue;
+    if (identifierStructureScore(token) >= 4 || splitSymbolParts(token).length >= 2) {
+      count += 1;
+    }
+  }
+  return count;
 }
 
 function dedupeBy(items, keySelector) {
@@ -659,7 +785,7 @@ function buildQuestionAlignmentMetrics(pathValue, content, outlineItems, questio
         commentDistinct.add(loweredTerm);
         continue;
       }
-      const strippedLine = stripInlineComments(rawLine).toLowerCase();
+      const strippedLine = stripInlineComments(stripStringLiterals(rawLine)).toLowerCase();
       if (strippedLine.includes(loweredTerm)) {
         codeTermHits += 1;
         codeDistinct.add(loweredTerm);
@@ -693,6 +819,7 @@ function scoreAnchorCandidateSeed(candidate, questionTerms) {
   if (grepHits.length > 0 && commentOnlyHits === grepHits.length) {
     score -= 28;
   }
+  score += pathFlowBias(pathValue);
   if (candidate?.selected) {
     score += 8;
   }
@@ -713,17 +840,20 @@ function scoreAnchorCandidateInspection(candidate, questionTerms, { preferFlow =
   score += alignment.codeDistinctTerms * 80;
   score += alignment.outlineTermHits * 18;
   score += alignment.pathTermHits * 12;
-  score += alignment.codeTermHits * 4;
-  score += alignment.commentDistinctTerms * 6;
-  score += metrics.methodCount * 4;
-  score += metrics.callTokenCount * 6;
-  score += metrics.callMentionCount * 2;
-  score += metrics.controlCount * 3;
-  score += metrics.assignmentCount;
+  score += Math.min(20, alignment.codeTermHits * 4);
+  score += Math.min(12, alignment.commentDistinctTerms * 6);
+  score += Math.min(56, metrics.methodCount * 4);
+  score += Math.min(36, metrics.callTokenCount * 6);
+  score += Math.min(48, metrics.callMentionCount * 2);
+  score += Math.min(18, metrics.controlCount * 3);
+  score += Math.min(16, metrics.assignmentCount);
+  score += pathFlowBias(candidate?.path, { preferFlow });
   if (outlineCandidates[0]) {
     score += 12;
   }
   if (preferFlow) {
+    const structuredQueryCount = countStructuredQueries(candidate?.queries);
+    score += Math.min(54, structuredQueryCount * 18);
     if (
       alignment.codeDistinctTerms > 0
       || alignment.outlineTermHits > 0
@@ -734,14 +864,17 @@ function scoreAnchorCandidateInspection(candidate, questionTerms, { preferFlow =
       score += 18;
     }
     if (alignment.codeDistinctTerms === 0 && alignment.outlineTermHits === 0) {
+      score -= 180;
+    }
+    if (structuredQueryCount === 0 && alignment.codeDistinctTerms === 0 && alignment.outlineTermHits === 0) {
       score -= 48;
     }
     if (metrics.declarationOnly) {
-      score -= 36;
+      score -= 48;
     }
     const grepHits = Array.isArray(candidate?.grepHits) ? candidate.grepHits : [];
     if (grepHits.length > 0 && grepHits.every((item) => Boolean(item?.commentOnly)) && alignment.codeDistinctTerms === 0) {
-      score -= 36;
+      score -= 48;
     }
   }
   return {
@@ -752,7 +885,7 @@ function scoreAnchorCandidateInspection(candidate, questionTerms, { preferFlow =
   };
 }
 
-function mergeAnchorCandidate(candidates, payload, questionTerms) {
+function mergeAnchorCandidate(candidates, payload) {
   const pathValue = normalizePath(payload?.path);
   if (!pathValue) {
     return;
@@ -775,13 +908,12 @@ function mergeAnchorCandidate(candidates, payload, questionTerms) {
     }
   }
   if (payload?.hit) {
-    const commentOnly = isCommentOnlyLine(payload.hit?.text);
     current.grepHits.push({
       query: String(payload.query || '').trim(),
       line: Number(payload.hit?.line || 0),
       text: String(payload.hit?.text || '').trim(),
-      commentOnly,
-      score: scoreGrepAnchorHit(payload.hit, questionTerms, payload.query),
+      commentOnly: Boolean(payload?.commentOnly),
+      score: Number(payload?.hitScore || 0),
     });
     current.grepHits.sort((left, right) => Number(right.score || 0) - Number(left.score || 0));
     current.grepHits = current.grepHits.slice(0, MAX_ROOT_PATHS_PER_QUERY);
@@ -792,25 +924,66 @@ function mergeAnchorCandidate(candidates, payload, questionTerms) {
 
 async function collectAnchorCandidates(workspacePath, question, selectedPath, questionTerms) {
   const candidates = new Map();
+  const preferFlow = isFlowQuestion(question);
+  const seedHits = [];
   if (selectedPath) {
-    mergeAnchorCandidate(candidates, { path: selectedPath, selected: true, source: 'selected' }, questionTerms);
+    mergeAnchorCandidate(candidates, { path: selectedPath, selected: true, source: 'selected' });
   }
 
   const anchorQueries = buildAnchorQueries(question, questionTerms).slice(0, MAX_ROOT_QUERY_CANDIDATES);
   for (const queryText of anchorQueries) {
     const token = String(queryText || '').trim();
     if (!token) continue;
-    const observation = await grepWorkspace(workspacePath, token, MAX_GREP_LIMIT);
+    const observation = await grepWorkspace(workspacePath, token, MAX_ROOT_GREP_SCAN_LIMIT);
     if (!observation?.ok) continue;
     const rankedHits = (Array.isArray(observation?.items) ? observation.items : [])
       .map((hit) => ({
         ...hit,
-        __score: scoreGrepAnchorHit(hit, questionTerms, token),
+        __score: scoreGrepAnchorHit(hit, questionTerms, token, { preferFlow }),
+        __commentOnly: isCommentOnlyLine(hit?.text),
       }))
       .sort((left, right) => Number(right.__score || 0) - Number(left.__score || 0) || String(left.path || '').localeCompare(String(right.path || '')))
       .slice(0, MAX_ROOT_GREPHITS_PER_QUERY);
-    for (const hit of rankedHits.slice(0, MAX_ROOT_PATHS_PER_QUERY)) {
-      mergeAnchorCandidate(candidates, { path: hit?.path, query: token, hit, source: 'grep' }, questionTerms);
+    const uniqueHits = dedupeBy(rankedHits, (item) => item?.path).slice(0, MAX_ROOT_PATHS_PER_QUERY);
+    for (const hit of uniqueHits) {
+      seedHits.push(hit);
+      mergeAnchorCandidate(candidates, {
+        path: hit?.path,
+        query: token,
+        hit,
+        source: 'grep',
+        hitScore: hit?.__score,
+        commentOnly: hit?.__commentOnly,
+      });
+    }
+  }
+
+  if (preferFlow) {
+    const expansionQueries = deriveAnchorExpansionQueriesFromHits(seedHits, questionTerms);
+    for (const queryText of expansionQueries) {
+      const token = String(queryText || '').trim();
+      if (!token) continue;
+      const observation = await grepWorkspace(workspacePath, token, MAX_ROOT_GREP_SCAN_LIMIT);
+      if (!observation?.ok) continue;
+      const rankedHits = (Array.isArray(observation?.items) ? observation.items : [])
+        .map((hit) => ({
+          ...hit,
+          __score: scoreGrepAnchorHit(hit, questionTerms, token, { preferFlow: true }),
+          __commentOnly: isCommentOnlyLine(hit?.text),
+        }))
+        .sort((left, right) => Number(right.__score || 0) - Number(left.__score || 0) || String(left.path || '').localeCompare(String(right.path || '')))
+        .slice(0, MAX_ROOT_GREPHITS_PER_QUERY);
+      const uniqueHits = dedupeBy(rankedHits, (item) => item?.path).slice(0, MAX_ROOT_PATHS_PER_QUERY);
+      for (const hit of uniqueHits) {
+        mergeAnchorCandidate(candidates, {
+          path: hit?.path,
+          query: token,
+          hit,
+          source: 'grep',
+          hitScore: hit?.__score,
+          commentOnly: hit?.__commentOnly,
+        });
+      }
     }
   }
 
@@ -825,7 +998,7 @@ async function collectAnchorCandidates(workspacePath, question, selectedPath, qu
       .sort((left, right) => Number(right.score || 0) - Number(left.score || 0) || String(left.path || '').localeCompare(String(right.path || '')))
       .slice(0, 2);
     for (const item of ranked) {
-      mergeAnchorCandidate(candidates, { path: item.path, source: 'list_files' }, questionTerms);
+      mergeAnchorCandidate(candidates, { path: item.path, source: 'list_files' });
     }
   }
 
@@ -835,10 +1008,11 @@ async function collectAnchorCandidates(workspacePath, question, selectedPath, qu
 }
 
 async function inspectAnchorCandidate(workspacePath, candidate, questionTerms, { preferFlow = false } = {}) {
+  const readWindow = buildCandidateReadWindow(candidate, { preferFlow });
   const readObservation = await readWorkspaceFile(workspacePath, candidate.path, {
     maxChars: Math.min(FILE_READ_CHAR_LIMIT, 6000),
-    startLine: 1,
-    endLine: 400,
+    startLine: readWindow.startLine,
+    endLine: readWindow.endLine,
   });
   const content = readObservation?.ok ? String(readObservation.content || '') : '';
   const outlineObservation = readObservation?.ok
@@ -911,11 +1085,12 @@ async function resolveRootPath(workspacePath, question, selectedFilePath, trace)
   };
 }
 
-function scoreGrepAnchorHit(item, questionTerms, queryText) {
+function scoreGrepAnchorHit(item, questionTerms, queryText, { preferFlow = false } = {}) {
   const pathValue = normalizePath(item?.path);
   const loweredPath = pathValue.toLowerCase();
   const text = String(item?.text || '').trim();
   const loweredText = text.toLowerCase();
+  const codeText = stripInlineComments(stripStringLiterals(text)).toLowerCase();
   const rawQuery = String(queryText || '').trim().toLowerCase();
   let score = 0;
 
@@ -923,12 +1098,15 @@ function scoreGrepAnchorHit(item, questionTerms, queryText) {
     return 0;
   }
   const commentOnly = isCommentOnlyLine(text);
-  if (rawQuery && loweredText.includes(rawQuery)) score += 24;
+  score += pathFlowBias(pathValue, { preferFlow });
+  if (rawQuery && codeText.includes(rawQuery)) score += 24;
+  else if (rawQuery && loweredText.includes(rawQuery)) score += 4;
   if (rawQuery && loweredPath.includes(rawQuery)) score += 12;
   for (const term of Array.isArray(questionTerms) ? questionTerms : []) {
     const loweredTerm = String(term || '').trim().toLowerCase();
     if (!loweredTerm) continue;
-    if (loweredText.includes(loweredTerm)) score += 10;
+    if (codeText.includes(loweredTerm)) score += 10;
+    else if (loweredText.includes(loweredTerm)) score += 2;
     if (loweredPath.includes(loweredTerm)) score += 6;
   }
   if (/\/(?:obj|bin|dist|build|out|node_modules|packages|\.tmp)\//i.test(pathValue)) score -= 40;

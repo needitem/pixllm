@@ -1041,18 +1041,24 @@ def _extract_question_search_terms(question: str, *, limit: int) -> List[str]:
 def _build_next_search_candidates(
     *,
     question: str,
+    local_overlay: Dict[str, Any],
     open_frontier_symbol_candidates: List[Dict[str, Any]],
     unresolved_edges: List[Dict[str, Any]],
     limit: int,
 ) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     seen = set()
+    local_prefixes = _collect_local_prefixes(local_overlay)
 
     def _append(*, tool: str, query: str = "", symbol: str = "", reason: str = "", path: str = "") -> None:
         probe = str(symbol or query or "").strip()
         if not probe:
             return
-        key = (str(tool or "").strip().lower(), probe.lower(), _normalize_path(path).lower())
+        normalized_path = _normalize_path(path)
+        path_prefix = _top_level_prefix(normalized_path)
+        if path_prefix and path_prefix in local_prefixes:
+            return
+        key = (str(tool or "").strip().lower(), probe.lower(), normalized_path.lower())
         if key in seen:
             return
         seen.add(key)
@@ -1062,7 +1068,7 @@ def _build_next_search_candidates(
                 "query": str(query or "").strip(),
                 "symbol": str(symbol or "").strip(),
                 "reason": str(reason or "").strip(),
-                "path": _normalize_path(path),
+                "path": normalized_path,
             }
         )
 
@@ -1106,15 +1112,6 @@ def _build_next_search_candidates(
             )
         if len(out) >= limit:
             return out[:limit]
-
-    for token in _extract_question_search_terms(question, limit=limit):
-        _append(
-            tool="grep",
-            query=token,
-            reason="question term fallback",
-        )
-        if len(out) >= limit:
-            break
 
     return out[:limit]
 
@@ -1222,6 +1219,7 @@ def _build_evidence_pack(
     )
     next_search_candidates = _build_next_search_candidates(
         question=question,
+        local_overlay=local_overlay,
         open_frontier_symbol_candidates=open_frontier_symbol_candidates,
         unresolved_edges=unresolved_edges,
         limit=int(frontier_budget.get("next_search_candidate_cap") or 6),
