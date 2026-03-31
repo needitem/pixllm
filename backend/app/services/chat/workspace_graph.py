@@ -434,12 +434,22 @@ def _find_anchor_window(
     windows = collect_grounded_overlay_windows(local_overlay)
     normalized_focus = _normalize_path(focus_path)
     normalized_target = str(target_symbol or "").strip()
+    candidates: List[Dict[str, Any]] = []
     for window in windows:
         if _normalize_path(window.get("path")) != normalized_focus:
             continue
         content = str(window.get("content") or "")
         if normalized_target and re.search(rf"\b{re.escape(normalized_target)}\s*\(", content):
-            return window
+            candidates.append(window)
+    if candidates:
+        return sorted(
+            candidates,
+            key=lambda item: (
+                0 if str(item.get("line_range") or "").strip() not in {"", "1-1"} else 1,
+                len(str(item.get("content") or "")),
+                len(str(item.get("line_range") or "")),
+            ),
+        )[0]
     for window in windows:
         if _normalize_path(window.get("path")) == normalized_focus:
             return window
@@ -450,7 +460,9 @@ def _extract_anchor_calls(content: str, *, anchor_symbol: str = "") -> List[str]
     out: List[str] = []
     seen = set()
     anchor_lower = str(anchor_symbol or "").strip().lower()
-    for token in _FLOW_CALL_RE.findall(str(content or "")):
+    normalized_content = re.sub(r"/\*.*?\*/", " ", str(content or ""), flags=re.S)
+    normalized_content = re.sub(r"//.*?$", " ", normalized_content, flags=re.M)
+    for token in _FLOW_CALL_RE.findall(normalized_content):
         symbol = str(token or "").strip()
         lowered = symbol.lower()
         if not symbol or not symbol[:1].isupper():

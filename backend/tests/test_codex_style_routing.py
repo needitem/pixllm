@@ -753,7 +753,10 @@ def test_render_workspace_graph_answer_uses_anchor_span_and_downstream_calls() -
     }
     local_overlay = {
         "selected_file_path": "MATR/ViewModels/UserControls/ImageMatching/Vm_ImageMatching_Heterogeneous.cs",
-        "selected_file_content": "",
+        "selected_file_content": (
+            "public class VmImageMatchingHeterogeneous { "
+            "public void SelectMatchingData(){ RaisePropertyChanged(); } }"
+        ),
         "local_trace": [
             {
                 "tool": "read_symbol_span",
@@ -761,9 +764,14 @@ def test_render_workspace_graph_answer_uses_anchor_span_and_downstream_calls() -
                     "path": "MATR/ViewModels/UserControls/ImageMatching/Vm_ImageMatching_Heterogeneous.cs",
                     "lineRange": "299-334",
                     "content": (
-                        "public void SelectMatchingData(){ "
-                        "HandleInitialState(); LoadTargetImage(); LoadReferenceImage(); "
-                        "IsTargerAndRefernceImageUsed(); LoadLastResultReferenceImagePath(); }"
+                        "public void SelectMatchingData(){\n"
+                        "HandleInitialState();\n"
+                        "LoadTargetImage();\n"
+                        "LoadReferenceImage();\n"
+                        "// SetRegistrationMethod();\n"
+                        "IsTargerAndRefernceImageUsed();\n"
+                        "LoadLastResultReferenceImagePath();\n"
+                        "}"
                     ),
                 },
             }
@@ -788,6 +796,8 @@ def test_render_workspace_graph_answer_uses_anchor_span_and_downstream_calls() -
     assert "LoadLastResultReferenceImagePath()" in answer
     assert "SearchMatchingResultForPair()" in answer
     assert "아직 열린 frontier" in answer
+    assert "RaisePropertyChanged()" not in answer
+    assert "SetRegistrationMethod()" not in answer
 
 
 def test_tool_mode_hint_tells_model_to_use_client_grounded_overlay_reads() -> None:
