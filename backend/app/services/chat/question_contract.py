@@ -310,7 +310,7 @@ def build_question_contract(
         return _base_contract(
             kind="code_review",
             retrieval_mode="code",
-            answer_style_hint="default",
+            answer_style_hint="review",
             require_direct_reads=True,
             budget={"max_rounds": 10, "max_tool_calls": 18},
         )
@@ -379,7 +379,7 @@ def build_question_contract(
         return _base_contract(
             kind="code_review",
             retrieval_mode="code",
-            answer_style_hint="default",
+            answer_style_hint="review",
             require_direct_reads=True,
             budget={"max_rounds": 10, "max_tool_calls": 18},
         )
@@ -480,7 +480,7 @@ def normalize_question_contract(
 
     if normalized["retrieval_mode"] not in {"code", "docs", "hybrid"}:
         normalized["retrieval_mode"] = fallback["retrieval_mode"]
-    if normalized["answer_style_hint"] not in {"default", "reference", "explanation", "tutorial", "troubleshooting", "comparison"}:
+    if normalized["answer_style_hint"] not in {"default", "reference", "explanation", "tutorial", "troubleshooting", "comparison", "review"}:
         normalized["answer_style_hint"] = fallback["answer_style_hint"]
     return normalized
 

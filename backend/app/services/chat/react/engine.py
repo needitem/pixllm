@@ -181,6 +181,14 @@ def _build_tool_mode_hint(
         answer_style_hint = "Write the final answer as a concise reference summary grounded in the retrieved evidence.\n"
     elif answer_style == "troubleshooting":
         answer_style_hint = "Write the final answer as a troubleshooting guide with symptoms, likely causes, checks, and fixes.\n"
+    elif answer_style == "review":
+        answer_style_hint = (
+            "Write the final answer as a code review.\n"
+            "Present findings first, ordered by severity when evidence supports one.\n"
+            "Each finding must name the grounded file or diff surface and explain the concrete risk.\n"
+            "If the provided evidence does not support a concrete defect, say explicitly that no confirmed findings were identified from the grounded overlay evidence.\n"
+            "Do not suggest running tree, ls, or other local discovery commands when the overlay already includes selected file or diff evidence.\n"
+        )
     contract_hint = ""
     if coverage_axes:
         contract_hint = (
@@ -304,7 +312,8 @@ def _build_local_overlay_context(
         "[Overlay Evidence Guidance]\n"
         "The desktop client already read the local workspace spans below and sent their contents here."
         " Treat those excerpts as grounded evidence for the final answer even if the server cannot reopen the same paths."
-        " Do not say the local workspace is inaccessible when these client-grounded reads are present.",
+        " Do not say the local workspace is inaccessible when these client-grounded reads are present."
+        " If diff or status evidence is present, treat it as grounded review evidence instead of asking for tree/ls-style discovery commands.",
     ]
     ordered_items = sorted(
         list(local_overlay_items or []),

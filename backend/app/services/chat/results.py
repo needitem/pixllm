@@ -33,6 +33,70 @@ TokenCallback = Optional[Callable[[str], Awaitable[None] | None]]
 SourcesCallback = Optional[Callable[[List[Dict[str, Any]]], Awaitable[None] | None]]
 
 
+def _uses_korean(text: str) -> bool:
+    return any("\uac00" <= char <= "\ud7a3" for char in str(text or ""))
+
+
+def _overlay_changed_paths(local_overlay: Dict[str, Any] | None) -> List[str]:
+    overlay = dict(local_overlay or {})
+    paths = [str(item).strip() for item in list(overlay.get("workspace_change_paths") or []) if str(item).strip()]
+    selected = str(overlay.get("selected_file_path") or "").strip()
+    if selected and selected not in paths:
+        paths.insert(0, selected)
+    seen = set()
+    ordered: List[str] = []
+    for item in paths:
+        lowered = item.lower()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        ordered.append(item)
+    return ordered
+
+
+def _render_overlay_review_answer(question: str, local_overlay: Dict[str, Any] | None) -> str:
+    overlay = dict(local_overlay or {})
+    changed_paths = _overlay_changed_paths(overlay)
+    diff_text = str(overlay.get("workspace_diff") or "").strip()
+    selected_path = str(overlay.get("selected_file_path") or "").strip()
+    uses_korean = _uses_korean(question)
+
+    if uses_korean:
+        lines = ["## 코드 리뷰", "", "현재 제공된 오버레이 증거만으로는 확정 가능한 결함을 확인하지 못했습니다.", ""]
+        if changed_paths:
+            lines.append("### 확인된 변경 파일")
+            lines.extend(f"- `{path}`" for path in changed_paths[:5])
+            lines.append("")
+        lines.append("### 근거")
+        if selected_path:
+            lines.append(f"- 선택 파일: `{selected_path}`")
+        if diff_text:
+            snippet = " ".join(diff_text.split())[:320]
+            lines.append(f"- 워크스페이스 diff 오버레이: `{snippet}`")
+        lines.append("")
+        lines.append("### 한계")
+        lines.append("- 이번 응답은 클라이언트가 첨부한 로컬 오버레이와 diff만 근거로 삼았습니다.")
+        lines.append("- 이 실행에서는 추가 서버 읽기나 테스트 결과가 그라운딩되지 않아 구체 결함을 확정하지는 않았습니다.")
+        return "\n".join(lines).strip()
+
+    lines = ["## Code Review", "", "No confirmed defect findings were identified from the grounded overlay evidence alone.", ""]
+    if changed_paths:
+        lines.append("### Changed Files")
+        lines.extend(f"- `{path}`" for path in changed_paths[:5])
+        lines.append("")
+    lines.append("### Grounded Evidence")
+    if selected_path:
+        lines.append(f"- Selected file: `{selected_path}`")
+    if diff_text:
+        snippet = " ".join(diff_text.split())[:320]
+        lines.append(f"- Workspace diff overlay: `{snippet}`")
+    lines.append("")
+    lines.append("### Limits")
+    lines.append("- This answer relied on the client-provided local overlay and diff evidence.")
+    lines.append("- No additional grounded server reads or test results were available in this run to confirm a concrete defect.")
+    return "\n".join(lines).strip()
+
+
 def _should_render_workspace_graph_answer(
     *,
     question_contract: Dict[str, Any] | None,
@@ -494,6 +558,15 @@ async def finalize_react_payload(
             grounded_paths=grounded_overlay_paths,
             local_overlay=local_overlay,
         )
+        if rendered_answer:
+            answer = rendered_answer
+    elif (
+        str(normalized_question_contract.get("kind") or "").strip().lower() == "code_review"
+        and bool(local_overlay.get("present"))
+        and not results
+        and not sources
+    ):
+        rendered_answer = _render_overlay_review_answer(prepared.clean_message, local_overlay)
         if rendered_answer:
             answer = rendered_answer
 

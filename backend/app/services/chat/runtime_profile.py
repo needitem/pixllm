@@ -36,10 +36,10 @@ def _normalize_retrieval_bias(value: str) -> str:
 
 def _normalize_answer_style(value: str, question_contract: Dict[str, Any], response_type: str) -> str:
     token = str(value or "").strip().lower()
-    if token in {"default", "tutorial", "reference", "explanation", "troubleshooting", "comparison"}:
+    if token in {"default", "tutorial", "reference", "explanation", "troubleshooting", "comparison", "review"}:
         return token
     contract_hint = str(dict(question_contract or {}).get("answer_style_hint") or "").strip().lower()
-    if contract_hint in {"tutorial", "reference", "explanation", "troubleshooting", "comparison"}:
+    if contract_hint in {"tutorial", "reference", "explanation", "troubleshooting", "comparison", "review"}:
         return contract_hint
     rt = str(response_type or "").strip().lower()
     if rt == "doc_lookup":

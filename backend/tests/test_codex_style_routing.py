@@ -753,6 +753,28 @@ def test_workspace_graph_render_gate_allows_grounded_partial_flow(monkeypatch) -
     ) is True
 
 
+def test_overlay_review_renderer_uses_grounded_diff_without_inaccessible_claims() -> None:
+    answer = chat_results._render_overlay_review_answer(
+        "현재 workspace 변경사항 리뷰해줘.",
+        {
+            "selected_file_path": "backend/app/services/chat/question_contract.py",
+            "workspace_diff": (
+                "Index: backend/app/services/chat/question_contract.py\n"
+                "--- backend/app/services/chat/question_contract.py\n"
+                "+++ backend/app/services/chat/question_contract.py\n"
+                "+def build_overlay_structure_profile(local_workspace_overlay=None):\n"
+                "+    return {}"
+            ),
+            "workspace_change_paths": ["backend/app/services/chat/question_contract.py"],
+        },
+    )
+
+    assert "코드 리뷰" in answer
+    assert "확정 가능한 결함을 확인하지 못했습니다" in answer
+    assert "tree" not in answer.lower()
+    assert "inaccessible" not in answer.lower()
+
+
 def test_render_workspace_graph_answer_uses_anchor_span_and_downstream_calls() -> None:
     graph = {
         "focus_file": "MATR/ViewModels/UserControls/ImageMatching/Vm_ImageMatching_Heterogeneous.cs",
