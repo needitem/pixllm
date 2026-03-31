@@ -791,7 +791,16 @@ def test_overlay_review_fallback_accepts_overlay_only_sources() -> None:
             ),
             "workspace_change_paths": ["backend/app/services/chat/question_contract.py"],
         },
-        results=[],
+        results=[
+            {
+                "payload": {
+                    "file_path": "backend/app/services/chat/question_contract.py",
+                    "source_file": "backend/app/services/chat/question_contract.py",
+                    "source_kind": "code_tool",
+                    "text": "def build_overlay_structure_profile(local_workspace_overlay=None):\n    return {}",
+                }
+            }
+        ],
         sources=[
             {
                 "file_path": "backend/app/services/chat/question_contract.py",
@@ -816,6 +825,35 @@ def test_overlay_review_fallback_rejects_non_overlay_sources() -> None:
             {
                 "file_path": "backend/app/services/chat/results.py",
                 "preview_text": "async def finalize_react_payload(...):",
+                "score": 0.9,
+            }
+        ],
+    ) is False
+
+
+def test_overlay_review_fallback_rejects_non_overlay_results() -> None:
+    assert chat_results._should_render_overlay_review_fallback(
+        question_contract={"kind": "code_review"},
+        local_overlay={
+            "present": True,
+            "selected_file_path": "backend/app/services/chat/question_contract.py",
+            "workspace_diff": "Index: backend/app/services/chat/question_contract.py",
+            "workspace_change_paths": ["backend/app/services/chat/question_contract.py"],
+        },
+        results=[
+            {
+                "payload": {
+                    "file_path": "backend/app/services/chat/results.py",
+                    "source_file": "backend/app/services/chat/results.py",
+                    "source_kind": "code_tool",
+                    "text": "async def finalize_react_payload(...):",
+                }
+            }
+        ],
+        sources=[
+            {
+                "file_path": "backend/app/services/chat/question_contract.py",
+                "preview_text": "def build_overlay_structure_profile(local_workspace_overlay=None): pass",
                 "score": 0.9,
             }
         ],

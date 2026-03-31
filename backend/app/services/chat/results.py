@@ -148,6 +148,32 @@ def _sources_align_with_overlay(local_overlay: Dict[str, Any] | None, sources: L
     return all(path.lower() in allowed for path in source_paths)
 
 
+def _results_align_with_overlay(local_overlay: Dict[str, Any] | None, results: List[Dict[str, Any]] | None) -> bool:
+    overlay = dict(local_overlay or {})
+    allowed = {
+        path.replace("\\", "/").lower()
+        for path in [
+            *(_overlay_changed_paths(overlay) or []),
+            str(overlay.get("selected_file_path") or "").strip(),
+        ]
+        if str(path).strip()
+    }
+    if not allowed:
+        return False
+    result_paths: List[str] = []
+    for item in list(results or []):
+        if not isinstance(item, dict):
+            continue
+        payload = dict(item.get("payload") or {}) if isinstance(item.get("payload"), dict) else {}
+        path = str(payload.get("file_path") or payload.get("source_file") or "").strip()
+        if not path:
+            continue
+        result_paths.append(path.replace("\\", "/"))
+    if not result_paths:
+        return True
+    return all(path.lower() in allowed for path in result_paths)
+
+
 def _should_render_overlay_review_fallback(
     *,
     question_contract: Dict[str, Any] | None,
@@ -163,9 +189,9 @@ def _should_render_overlay_review_fallback(
         return False
     if not _overlay_review_evidence_present(overlay):
         return False
-    if list(results or []):
+    if not _sources_align_with_overlay(overlay, sources):
         return False
-    return _sources_align_with_overlay(overlay, sources)
+    return _results_align_with_overlay(overlay, results)
 
 
 def _should_render_workspace_graph_answer(
