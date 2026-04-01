@@ -198,65 +198,6 @@ function toolBatchSignature(toolUses) {
     .join('||');
 }
 
-function summarizeToolRequests(toolUses) {
-  return (Array.isArray(toolUses) ? toolUses : [])
-    .map((toolUse) => {
-      const keys = Object.keys(toolUse?.input && typeof toolUse.input === 'object' ? toolUse.input : {});
-      return `${toStringValue(toolUse?.name)}(${keys.join(', ')})`;
-    })
-    .filter(Boolean)
-    .join(', ');
-}
-
-function summarizeToolResults(toolExecutions) {
-  return (Array.isArray(toolExecutions) ? toolExecutions : [])
-    .map((item) => {
-      const toolName = toStringValue(item?.toolUse?.name || item?.name);
-      const observation = item?.observation || {};
-      const pathValue = toStringValue(observation?.path);
-      const detail = pathValue
-        ? pathValue
-        : toStringValue(observation?.error)
-          ? `error=${toStringValue(observation.error)}`
-          : observation?.status
-            ? `status=${toStringValue(observation.status)}`
-            : '';
-      return `${toolName}${observation?.ok === false ? ' failed' : ' ok'}${detail ? ` (${detail})` : ''}`;
-    })
-    .filter(Boolean)
-    .join('; ')
-    .slice(0, 1600);
-}
-
-function interruptedObservation(message = 'Interrupted by user') {
-  return {
-    ok: false,
-    error: 'interrupted',
-    message: toStringValue(message) || 'Interrupted by user',
-    status: 'cancelled',
-    interrupted: true,
-  };
-}
-
-function buildToolExecutionResult(toolUse, observation) {
-  const summarized = summarizeObservation(toolUse?.name, observation, 12000);
-  return {
-    toolUse,
-    observation,
-    resultBlock: createToolResultBlock({
-      toolUseId: toolUse?.id,
-      name: toolUse?.name,
-      content: JSON.stringify(summarized, null, 2),
-      isError: observation?.ok === false,
-    }),
-  };
-}
-
-function isBackgroundTaskObservation(observation) {
-  const task = observation?.task && typeof observation.task === 'object' ? observation.task : null;
-  return Boolean(task?.background);
-}
-
 function isLengthFinishReason(reason) {
   return /length|max_tokens|max_output_tokens/i.test(toStringValue(reason));
 }
