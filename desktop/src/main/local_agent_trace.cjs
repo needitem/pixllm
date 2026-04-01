@@ -179,7 +179,13 @@ function symbolOutlinesFromTrace(trace) {
 function summarizeObservation(toolName, observation, maxChars = 16000) {
   const payload = observation || {};
   if (toolName === 'list_files') {
-    return { ok: true, total: payload.total || 0, items: Array.isArray(payload.items) ? payload.items.slice(0, 500) : [] };
+    return {
+      ok: payload.ok !== false,
+      total: payload.total || 0,
+      items: Array.isArray(payload.items) ? payload.items.slice(0, 500) : [],
+      error: payload.error || '',
+      message: payload.message || '',
+    };
   }
   if (toolName === 'glob' || toolName === 'glob_files') {
     return {
@@ -187,6 +193,7 @@ function summarizeObservation(toolName, observation, maxChars = 16000) {
       pattern: payload.pattern || '',
       items: Array.isArray(payload.items) ? payload.items.slice(0, 200) : [],
       error: payload.error || '',
+      message: payload.message || '',
     };
   }
   if (toolName === 'todo_read' || toolName === 'todo_write') {
@@ -195,10 +202,17 @@ function summarizeObservation(toolName, observation, maxChars = 16000) {
       total: Number(payload.total || 0),
       items: Array.isArray(payload.items) ? payload.items.slice(0, 100) : [],
       error: payload.error || '',
+      message: payload.message || '',
     };
   }
   if (toolName === 'grep') {
-    return { ok: Boolean(payload.ok), query: payload.query || '', items: Array.isArray(payload.items) ? payload.items.slice(0, 20) : [], error: payload.error || '' };
+    return {
+      ok: Boolean(payload.ok),
+      query: payload.query || '',
+      items: Array.isArray(payload.items) ? payload.items.slice(0, 20) : [],
+      error: payload.error || '',
+      message: payload.message || '',
+    };
   }
   if (toolName === 'find_symbol' || toolName === 'find_references') {
     return {
@@ -206,6 +220,7 @@ function summarizeObservation(toolName, observation, maxChars = 16000) {
       symbol: payload.symbol || payload.query || '',
       items: Array.isArray(payload.items) ? payload.items.slice(0, 20) : [],
       error: payload.error || '',
+      message: payload.message || '',
     };
   }
   if (toolName === 'find_callers') {
@@ -214,6 +229,7 @@ function summarizeObservation(toolName, observation, maxChars = 16000) {
       symbol: payload.symbol || payload.query || '',
       items: Array.isArray(payload.items) ? payload.items.slice(0, 20) : [],
       error: payload.error || '',
+      message: payload.message || '',
     };
   }
   if (toolName === 'read_file' || toolName === 'read_symbol_span') {
@@ -223,6 +239,7 @@ function summarizeObservation(toolName, observation, maxChars = 16000) {
       truncated: Boolean(payload.truncated),
       content: String(payload.content || '').slice(0, maxChars),
       error: payload.error || '',
+      message: payload.message || '',
       lineRange: String(payload.lineRange || ''),
       symbol: String(payload.symbol || ''),
       matchKind: String(payload.matchKind || payload.match_kind || ''),
@@ -234,6 +251,7 @@ function summarizeObservation(toolName, observation, maxChars = 16000) {
       path: payload.path || '',
       bytes: Number(payload.bytes || 0),
       error: payload.error || '',
+      message: payload.message || '',
     };
   }
   if (toolName === 'edit' || toolName === 'replace_in_file') {
@@ -243,6 +261,7 @@ function summarizeObservation(toolName, observation, maxChars = 16000) {
       occurrences: Number(payload.occurrences || 0),
       replace_all: Boolean(payload.replace_all || payload.replaceAll),
       error: payload.error || '',
+      message: payload.message || '',
     };
   }
   if (toolName === 'run_build') {
@@ -253,6 +272,7 @@ function summarizeObservation(toolName, observation, maxChars = 16000) {
       stdout: String(payload.stdout || '').slice(0, maxChars),
       stderr: String(payload.stderr || '').slice(0, maxChars),
       error: payload.error || '',
+      message: payload.message || '',
     };
   }
   if (toolName === 'bash' || toolName === 'run_shell' || toolName === 'powershell') {
@@ -263,6 +283,7 @@ function summarizeObservation(toolName, observation, maxChars = 16000) {
       stdout: String(payload.stdout || '').slice(0, maxChars),
       stderr: String(payload.stderr || '').slice(0, maxChars),
       error: payload.error || '',
+      message: payload.message || '',
     };
   }
   if (toolName === 'web' || toolName === 'web_fetch') {
@@ -273,6 +294,7 @@ function summarizeObservation(toolName, observation, maxChars = 16000) {
       content: String(payload.content || '').slice(0, maxChars),
       truncated: Boolean(payload.truncated),
       error: payload.error || '',
+      message: payload.message || '',
     };
   }
   if (toolName === 'symbol_outline') {
@@ -283,6 +305,7 @@ function summarizeObservation(toolName, observation, maxChars = 16000) {
       backend: payload.backend || '',
       items: Array.isArray(payload.items) ? payload.items.slice(0, 40) : [],
       error: payload.error || '',
+      message: payload.message || '',
     };
   }
   if (toolName === 'symbol_neighborhood') {
@@ -311,9 +334,13 @@ function summarizeObservation(toolName, observation, maxChars = 16000) {
         ? `${Number(payload.lineHint || payload.line_hint || 0)}-${Number(payload.lineHint || payload.line_hint || 0)}`
         : '',
       error: payload.error || '',
+      message: payload.message || '',
     };
   }
-  return payload;
+  return {
+    ...payload,
+    message: payload.message || '',
+  };
 }
 
 function extractIdentifiers(text) {

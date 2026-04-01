@@ -14,9 +14,13 @@ const {
 } = require('./local_agent_protocol.cjs');
 const { loadAgentState, saveAgentState } = require('./local_agent_state_store.cjs');
 const { listTasks, listTerminalCaptures } = require('./local_task_runtime.cjs');
+const { findUngroundedSourceMentions } = require('./local_source_guard.cjs');
 const {
   summarizeObservation,
+  grepItemsFromTrace,
+  listFilesFromTrace,
   readObservationsFromTrace,
+  symbolOutlinesFromTrace,
   failedSteps,
 } = require('../local_agent_trace.cjs');
 
@@ -33,6 +37,7 @@ const MAX_FILE_CACHE_ENTRIES = 24;
 const MAX_TRANSITIONS = 64;
 const MAX_REPEATED_TOOL_BATCHES = 2;
 const MAX_NO_PROGRESS_TURNS = 3;
+const MAX_UNGROUNDED_ANSWER_RETRIES = 2;
 
 function toSerializableTraceStep(step = {}) {
   return {
@@ -228,6 +233,30 @@ function summarizeToolResults(toolExecutions) {
     .slice(0, 1600);
 }
 
+function interruptedObservation(message = 'Interrupted by user') {
+  return {
+    ok: false,
+    error: 'interrupted',
+    message: toStringValue(message) || 'Interrupted by user',
+    status: 'cancelled',
+    interrupted: true,
+  };
+}
+
+function buildToolExecutionResult(toolUse, observation) {
+  const summarized = summarizeObservation(toolUse?.name, observation, 12000);
+  return {
+    toolUse,
+    observation,
+    resultBlock: createToolResultBlock({
+      toolUseId: toolUse?.id,
+      name: toolUse?.name,
+      content: JSON.stringify(summarized, null, 2),
+      isError: observation?.ok === false,
+    }),
+  };
+}
+
 function isBackgroundTaskObservation(observation) {
   const task = observation?.task && typeof observation.task === 'object' ? observation.task : null;
   return Boolean(task?.background);
@@ -315,6 +344,7 @@ function initialState({ historyMessages = [] } = {}) {
     repeatedToolBatchSignature: '',
     repeatedToolBatchCount: 0,
     pendingAssistantContinuation: '',
+    ungroundedAnswerRetries: 0,
     noProgressTurns: 0,
     lastProgressSignature: '',
     terminalReason: '',
@@ -399,6 +429,7 @@ class LocalAgentEngine {
       repeatedToolBatchSignature: toStringValue(restored.repeatedToolBatchSignature),
       repeatedToolBatchCount: Number(restored.repeatedToolBatchCount || 0),
       pendingAssistantContinuation: toStringValue(restored.pendingAssistantContinuation),
+      ungroundedAnswerRetries: Number(restored.ungroundedAnswerRetries || 0),
       noProgressTurns: Number(restored.noProgressTurns || 0),
       lastProgressSignature: toStringValue(restored.lastProgressSignature),
       terminalReason: toStringValue(restored.terminalReason),
@@ -433,6 +464,7 @@ class LocalAgentEngine {
       repeatedToolBatchSignature: toStringValue(this.state.repeatedToolBatchSignature),
       repeatedToolBatchCount: Number(this.state.repeatedToolBatchCount || 0),
       pendingAssistantContinuation: toStringValue(this.state.pendingAssistantContinuation),
+      ungroundedAnswerRetries: Number(this.state.ungroundedAnswerRetries || 0),
       noProgressTurns: Number(this.state.noProgressTurns || 0),
       lastProgressSignature: toStringValue(this.state.lastProgressSignature),
       terminalReason: toStringValue(this.state.terminalReason),
@@ -584,6 +616,52 @@ class LocalAgentEngine {
       this.toolDescriptions = await describeTools(this.tools);
     }
     return this.toolDescriptions;
+  }
+
+  _groundedSourcePaths(trace = []) {
+    const paths = new Set();
+    const append = (value) => {
+      const normalized = toStringValue(value).replace(/\\/g, '/');
+      if (normalized) paths.add(normalized);
+    };
+
+    for (const item of readObservationsFromTrace(trace)) append(item?.path);
+    for (const item of grepItemsFromTrace(trace)) append(item?.path);
+    for (const item of listFilesFromTrace(trace)) append(item?.path);
+    for (const item of symbolOutlinesFromTrace(trace)) append(item?.path);
+
+    return Array.from(paths);
+  }
+
+  _ensureGroundedFinalAnswer(answer, trace = [], turn = 0) {
+    const unknownMentions = findUngroundedSourceMentions(answer, this._groundedSourcePaths(trace));
+    if (unknownMentions.length === 0) {
+      this.state.ungroundedAnswerRetries = 0;
+      return true;
+    }
+
+    this._recordTranscript({
+      kind: 'ungrounded_answer',
+      turn,
+      mentions: unknownMentions.slice(0, 8),
+    });
+    this._recordTransition('ungrounded_answer', {
+      turn,
+      count: unknownMentions.length,
+    });
+
+    if (Number(this.state.ungroundedAnswerRetries || 0) >= MAX_UNGROUNDED_ANSWER_RETRIES) {
+      this.state.ungroundedAnswerRetries = 0;
+      return true;
+    }
+
+    this.state.ungroundedAnswerRetries += 1;
+    this._pushMetaUserMessage(
+      `Your previous answer referenced file paths that were not grounded in prior tool results: ${unknownMentions.slice(0, 4).join(', ')}. Only mention files that already appeared in search, list, or read results, or call tools first.`,
+      { turn, mentions: unknownMentions.slice(0, 4) },
+    );
+    this._persistState();
+    return false;
   }
 
   async _callModel(messages, { signal = null, onModelToken = async () => {}, modelTools = [] } = {}) {
@@ -934,10 +1012,13 @@ class LocalAgentEngine {
           this.state.maxOutputTokensOverride = 0;
           this.state.repeatedToolBatchSignature = '';
           this.state.repeatedToolBatchCount = 0;
+          const runTrace = this.state.trace.slice(traceStartIndex);
+          if (!this._ensureGroundedFinalAnswer(finalAnswer, runTrace, turn)) {
+            continue;
+          }
           this.state.terminalReason = 'final_answer';
           await onStatus({ phase: 'finalize', message: 'Finalizing answer...' });
           await onToken(finalAnswer);
-          const runTrace = this.state.trace.slice(traceStartIndex);
           const readObservations = readObservationsFromTrace(runTrace);
           const primary = readObservations[0] || {};
           this._recordTranscript({
@@ -975,6 +1056,7 @@ class LocalAgentEngine {
         this.state.pendingAssistantContinuation = '';
         this.state.maxOutputTokensRecoveryCount = 0;
         this.state.maxOutputTokensOverride = 0;
+        this.state.ungroundedAnswerRetries = 0;
 
         const batchSignature = toolBatchSignature(toolUses);
         if (batchSignature && batchSignature === this.state.repeatedToolBatchSignature) {
@@ -1004,7 +1086,24 @@ class LocalAgentEngine {
         const executeToolUse = async (toolUse) => {
           if (signal?.aborted) {
             this._recordTransition('cancelled', { turn, phase: 'tool' });
-            throw new Error('Cancelled');
+            const observation = interruptedObservation();
+            this.state.trace.push({
+              round: turn,
+              thought: assistantText,
+              tool: toolUse.name,
+              toolUseId: toolUse.id,
+              input: toolUse.input,
+              observation,
+            });
+            this._recordTranscript({
+              kind: 'tool_result',
+              turn,
+              tool: toolUse.name,
+              toolUseId: toolUse.id,
+              ok: false,
+              interrupted: true,
+            });
+            return buildToolExecutionResult(toolUse, observation);
           }
           await onToolUse({
             turn,
@@ -1012,7 +1111,16 @@ class LocalAgentEngine {
             name: toolUse.name,
             input: toolUse.input,
           });
-          const observation = await this.tools.call(toolUse.name, toolUse.input);
+          let observation;
+          try {
+            observation = await this.tools.call(toolUse.name, toolUse.input);
+          } catch (error) {
+            observation = {
+              ok: false,
+              error: 'tool_call_failed',
+              message: error instanceof Error ? error.message : String(error),
+            };
+          }
           this.state.totalUsage.tool_calls += 1;
           this.state.trace.push({
             round: turn,
@@ -1023,7 +1131,6 @@ class LocalAgentEngine {
             observation,
           });
           this._updateFileCache(toolUse.name, observation);
-          const summarized = summarizeObservation(toolUse.name, observation, 12000);
           await onToolResult({
             turn,
             id: toolUse.id,
@@ -1037,16 +1144,7 @@ class LocalAgentEngine {
             toolUseId: toolUse.id,
             ok: observation?.ok !== false,
           });
-          return {
-            toolUse,
-            observation,
-            resultBlock: createToolResultBlock({
-              toolUseId: toolUse.id,
-              name: toolUse.name,
-              content: JSON.stringify(summarized, null, 2),
-              isError: observation?.ok === false,
-            }),
-          };
+          return buildToolExecutionResult(toolUse, observation);
         };
 
         const canParallelize = toolUses.length > 1 && toolUses.every((toolUse) => {
@@ -1073,7 +1171,19 @@ class LocalAgentEngine {
           tool: toolUses[0].name,
         });
         const toolExecutions = canParallelize
-          ? await Promise.all(toolUses.map((toolUse) => executeToolUse(toolUse)))
+          ? (await Promise.allSettled(toolUses.map((toolUse) => executeToolUse(toolUse)))).map((entry, index) => {
+              if (entry.status === 'fulfilled') {
+                return entry.value;
+              }
+              const observation = signal?.aborted
+                ? interruptedObservation()
+                : {
+                    ok: false,
+                    error: 'tool_call_failed',
+                    message: entry.reason instanceof Error ? entry.reason.message : String(entry.reason),
+                  };
+              return buildToolExecutionResult(toolUses[index], observation);
+            })
           : await (async () => {
               const items = [];
               for (const toolUse of toolUses) {
@@ -1102,6 +1212,7 @@ class LocalAgentEngine {
         });
 
         const allFailed = toolExecutions.length > 0 && toolExecutions.every((item) => item?.observation?.ok === false);
+        const interrupted = toolExecutions.some((item) => item?.observation?.interrupted === true);
         if (allFailed) {
           this._pushMetaUserMessage(
             'The previous tool batch failed. Change strategy, use a different tool, or answer with the blocker instead of repeating the same calls.',
@@ -1131,8 +1242,16 @@ class LocalAgentEngine {
           count: toolUses.length,
           parallel: canParallelize,
           allFailed,
+          interrupted,
           summary: this.state.pendingToolUseSummary,
         });
+        if (interrupted && signal?.aborted) {
+          this.state.pendingToolUseSummary = '';
+          this.state.terminalReason = 'cancelled';
+          this._persistState();
+          await onTerminal({ reason: 'cancelled', turn });
+          throw new Error('Cancelled');
+        }
         this._persistState();
       }
 

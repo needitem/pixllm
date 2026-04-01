@@ -12,7 +12,7 @@ const {
   runBuild,
   runWorkspaceShell,
 } = require('../workspace.cjs');
-const { defineLocalTool, findToolByName } = require('./local_tool.cjs');
+const { defineLocalTool, findToolByName, normalizeToolInvocation } = require('./local_tool.cjs');
 const { readTodos, writeTodos } = require('./local_todo_store.cjs');
 const { loadSettings, saveSettings } = require('../settings.cjs');
 const {
@@ -639,6 +639,7 @@ function getAllLocalBaseTools(limits = {}) {
       name: 'lsp',
       aliases: ['LSP'],
       kind: 'read',
+      workspaceRelativePaths: ['path'],
       inputSchema: objectSchema({
         action: enumSchema(
           ['workspace_symbols', 'document_symbols', 'references', 'callers', 'read_symbol', 'diagnostics'],
@@ -666,6 +667,7 @@ function getAllLocalBaseTools(limits = {}) {
       name: 'notebook_edit',
       aliases: ['NotebookEdit'],
       kind: 'write',
+      workspaceRelativePaths: ['path'],
       inputSchema: objectSchema({
         path: stringSchema('Workspace-relative .ipynb path'),
         operation: enumSchema(['replace_cell', 'append_cell'], 'Notebook cell edit operation'),
@@ -974,6 +976,7 @@ function getAllLocalBaseTools(limits = {}) {
     defineLocalTool({
       name: 'read_symbol_span',
       kind: 'read',
+      workspaceRelativePaths: ['path'],
       inputSchema: objectSchema({
         path: stringSchema('Workspace-relative file path'),
         symbol: stringSchema('Symbol name to read'),
@@ -1002,6 +1005,7 @@ function getAllLocalBaseTools(limits = {}) {
     defineLocalTool({
       name: 'symbol_outline',
       kind: 'read',
+      workspaceRelativePaths: ['path'],
       inputSchema: objectSchema({
         path: stringSchema('Workspace-relative file path'),
         symbol: stringSchema('Optional symbol filter'),
@@ -1024,6 +1028,7 @@ function getAllLocalBaseTools(limits = {}) {
     defineLocalTool({
       name: 'symbol_neighborhood',
       kind: 'read',
+      workspaceRelativePaths: ['path'],
       inputSchema: objectSchema({
         path: stringSchema('Workspace-relative file path'),
         lineHint: integerSchema('1-based line number near the symbol', { minimum: 1 }),
@@ -1048,6 +1053,7 @@ function getAllLocalBaseTools(limits = {}) {
     defineLocalTool({
       name: 'read_file',
       kind: 'read',
+      workspaceRelativePaths: ['path'],
       inputSchema: objectSchema({
         path: stringSchema('Workspace-relative file path'),
         startLine: integerSchema('1-based start line', { minimum: 1 }),
@@ -1071,6 +1077,7 @@ function getAllLocalBaseTools(limits = {}) {
       name: 'write',
       aliases: ['write_file', 'Write'],
       kind: 'write',
+      workspaceRelativePaths: ['path'],
       inputSchema: objectSchema({
         path: stringSchema('Workspace-relative file path'),
         content: stringSchema('Full UTF-8 file content to write'),
@@ -1089,6 +1096,7 @@ function getAllLocalBaseTools(limits = {}) {
       name: 'edit',
       aliases: ['replace_in_file', 'Edit'],
       kind: 'write',
+      workspaceRelativePaths: ['path'],
       inputSchema: objectSchema({
         path: stringSchema('Workspace-relative file path'),
         old_string: stringSchema('Exact text to replace'),
@@ -1244,7 +1252,28 @@ function createLocalToolCollection({ workspacePath = '', sessionId = '', limits 
       if (!tool) {
         return { ok: false, error: `tool_not_registered:${normalizedToolName}` };
       }
-      return tool.call(input || {}, context);
+      const normalizedInput = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
+      const invocation = await normalizeToolInvocation(tool, normalizedInput, context);
+      if (!invocation.ok) {
+        return {
+          ok: false,
+          tool: normalizedToolName,
+          error: toStringValue(invocation.error || 'invalid_tool_input'),
+          message: toStringValue(invocation.message || 'Invalid tool input'),
+          details: Array.isArray(invocation.details) ? invocation.details : [],
+          ...(invocation.path ? { path: toStringValue(invocation.path) } : {}),
+        };
+      }
+      try {
+        return await tool.call(invocation.input || {}, context);
+      } catch (error) {
+        return {
+          ok: false,
+          tool: normalizedToolName,
+          error: 'tool_call_failed',
+          message: error instanceof Error ? error.message : String(error),
+        };
+      }
     },
   };
 }

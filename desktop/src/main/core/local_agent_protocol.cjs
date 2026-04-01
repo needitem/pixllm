@@ -280,6 +280,7 @@ function buildSystemPrompt({ workspacePath = '', selectedFilePath = '', toolDesc
     'Do not emit tool_result blocks manually. The runtime sends tool results back to you.',
     'When you have enough grounded evidence, reply with plain text only and no <tool_use> blocks.',
     'Ground every code claim in the tool_result content already shown in the transcript.',
+    'Do not mention file paths, line ranges, or symbols unless they appeared in prior tool results.',
     'If the runtime asks you to continue after an output cutoff, resume directly from the cutoff with no recap or apology.',
     'If a tool batch failed or was rejected, change strategy. Do not repeat the identical tool batch unless new evidence requires it.',
     'If you need to edit files, prefer precise edits before full rewrites.',
