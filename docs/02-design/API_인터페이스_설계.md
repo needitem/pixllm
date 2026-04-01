@@ -2,35 +2,35 @@
 
 기준일: 2026-04-01
 
-이 문서는 현재 코드에 구현된 인터페이스를 기준으로 설명합니다. 과거 문서에 있던 `/api/v2/sessions` 같은 control-plane API는 현재 desktop local agent 경로의 구현 기준이 아닙니다.
+이 문서는 현재 구현된 desktop IPC, local agent stream, backend HTTP surface를 정리한다.
 
-## 1. 현재 인터페이스 층
+## 1. 인터페이스 층
 
-현재 PIXLLM의 주요 인터페이스는 세 층입니다.
+현재 PIXLLM의 실행 인터페이스는 세 층이다.
 
 | 구간 | 현재 방식 | 역할 |
 |---|---|---|
-| Renderer -> preload | Electron context bridge | 데스크톱 메서드 노출 |
-| preload -> Electron main | IPC invoke / event | 세션, 워크스페이스, 로컬 에이전트 스트림 |
-| Electron main -> backend | HTTP | health, runs, approvals, LLM endpoint |
+| renderer -> preload | Electron context bridge | UI에서 안전한 desktop surface 호출 |
+| preload -> main | IPC invoke / event | 세션, workspace, local agent stream 제어 |
+| main -> backend | HTTP | health, runs, approvals, evidence, LLM endpoint |
 
-## 2. 현재 preload surface
+## 2. preload surface
 
-`window.pixllmDesktop`가 현재 데스크톱 인터페이스입니다.
+`window.pixllmDesktop`가 현재 renderer가 쓰는 주 surface다.
 
-주요 메서드:
+핵심 메서드:
 
 - settings: `loadSettings`, `saveSettings`
 - sessions: `listSessions`, `getSession`, `createSession`, `saveSession`
 - local agent: `agentChatStreamStart`, `agentChatStreamCancel`, `answerAgentQuestion`
 - backend runs: `apiHealth`, `apiRuns`, `apiRun`, `apiCancelRun`, `apiResumeRun`, `apiApproveRun`, `apiRejectRun`
-- workspace: `chooseWorkspace`, `svnInfo`, `svnStatus`, `svnDiff`, `listWorkspaceFiles`, `readWorkspaceFile`, `writeWorkspaceFile`, `grepWorkspace`, `runBuild`
+- workspace: `chooseWorkspace`, `listWorkspaceFiles`, `readWorkspaceFile`, `writeWorkspaceFile`, `grepWorkspace`, `runBuild`, `svnInfo`, `svnStatus`, `svnDiff`
 
-## 3. 현재 로컬 에이전트 스트림 이벤트
+## 3. local agent stream events
 
-renderer는 `onAgentStreamEvent`로 `agent:stream-event`를 구독합니다.
+renderer는 `agent:stream-event`를 구독한다.
 
-현재 방출되는 이벤트 타입:
+현재 event 종류:
 
 - `request_start`
 - `session_restored`
@@ -60,9 +60,9 @@ renderer는 `onAgentStreamEvent`로 `agent:stream-event`를 구독합니다.
 }
 ```
 
-## 4. `done` payload
+## 4. done payload
 
-현재 로컬 에이전트 완료 이벤트는 아래 필드를 포함합니다.
+`done` event는 아래 필드를 반환한다.
 
 - `answer`
 - `local_trace`
@@ -72,7 +72,7 @@ renderer는 `onAgentStreamEvent`로 `agent:stream-event`를 구독합니다.
 - `primary_file_path`
 - `primary_file_content`
 
-`local_overlay`에는 현재 데스크톱 로컬 런타임 메타데이터가 들어갑니다.
+`local_overlay`는 desktop local runtime 메타데이터다.
 
 - `engine`
 - `session_id`
@@ -80,9 +80,9 @@ renderer는 `onAgentStreamEvent`로 `agent:stream-event`를 구독합니다.
 - `primary_file_path`
 - `runtime`
 
-## 5. 현재 backend HTTP API
+## 5. backend HTTP surface
 
-데스크톱이 실제로 호출하는 backend API:
+desktop이 직접 호출하는 backend API:
 
 - `GET /api/v1/health`
 - `GET /api/v1/runs`
@@ -92,31 +92,41 @@ renderer는 `onAgentStreamEvent`로 `agent:stream-event`를 구독합니다.
 - `GET /api/v1/runs/{run_id}/approvals`
 - `POST /api/v1/runs/{run_id}/approvals/{approval_id}/approve`
 - `POST /api/v1/runs/{run_id}/approvals/{approval_id}/reject`
+- `POST /api/v1/tool-api/orchestrate/collect_evidence`
 
-현재 `/api/v1/tool-api`는 존재하지만, desktop local agent의 기본 tool loop는 이를 직접 사용하지 않습니다.
+현재 `/api/v1/tool-api/orchestrate/collect_evidence`는 `company_reference_search`가 사용한다. 이 호출은 회사 엔진 소스나 내부 문서를 read-only evidence로 수집하는 용도다.
 
-## 6. 현재 LLM 인터페이스
+## 6. LLM 인터페이스
 
-로컬 에이전트는 두 종류의 LLM endpoint를 지원합니다.
+desktop local agent는 두 종류의 LLM surface를 쓸 수 있다.
 
 - OpenAI 호환: `POST /v1/chat/completions`
-- proxy 모드: `POST /v1/llm/chat_completions`
+- proxy mode: `POST /v1/llm/chat_completions`
 
-streaming 호출도 같은 두 축을 사용합니다.
+streaming도 같은 축을 따른다.
 
-- OpenAI 호환 stream
+- OpenAI 호환 SSE
 - proxy stream `/v1/llm/chat_completions/stream`
 
-현재 구현에서는 streaming 중 tool call을 즉시 실행하지 않고, 스트림이 끝난 뒤 수집된 `tool_calls`를 실행합니다.
+현재 구현은 native tool-calling transcript를 기준으로 flattening한다. 예전 XML-style `<tool_use>/<tool_result>` fallback을 기본 경로로 두지 않는다.
 
-## 7. 현재 구현되지 않은 인터페이스
+## 7. streaming tool execution 상태
 
-현재 코드 기준으로 아직 구현되지 않았거나 로컬 채팅 루프의 표준 인터페이스가 아닌 것:
+현재 상태는 다음과 같다.
+
+- 스트리밍 중 parse 가능한 tool call은 선실행을 시작할 수 있다.
+- turn 종료 시 `ToolRuntime`이 prefetched result를 claim해서 재사용한다.
+- cancel 또는 model error 시 unclaimed tool call은 drain하거나 synthetic result로 transcript를 복구한다.
+- 아직 claude-code처럼 같은 스트림 안에서 `tool_result`를 모델에 즉시 재주입하지는 않는다.
+
+## 8. 현재 범위 밖 인터페이스
+
+현재 코드 기준으로 기본 경로가 아닌 것:
 
 - `/api/v2/sessions/*`
-- bridge / remote environment control API
+- remote bridge control API
 - team worker orchestration API
-- CLI/SDK host용 stdio runtime
-- MCP tool/resource transport
+- MCP transport
+- plugin/skill host transport
 
-따라서 현재 PIXLLM의 핵심 인터페이스는 `Electron IPC + local agent stream + backend /api/v1/runs + LLM endpoint`로 이해하는 것이 맞습니다.
+현재 PIXLLM의 인터페이스는 `Electron IPC + local agent stream + backend /api/v1/runs + backend evidence + LLM endpoint`로 이해하는 게 맞다.

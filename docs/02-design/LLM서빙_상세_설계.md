@@ -1,45 +1,38 @@
 # LLM 서빙 상세 설계
 
-> 목적: 현재 PIXLLM 데스크톱 로컬 에이전트가 LLM을 어떻게 호출하는지 정리
+목적: 현재 PIXLLM desktop runtime이 LLM을 어떻게 호출하는지 정리한다.
 
 ## 1. 현재 구조
 
-현재 모델 호출의 실제 진입점은 `desktop/src/main/core/local_model_client.cjs`입니다.
+현재 모델 호출의 진입점은 `QueryEngine.cjs`와 `services/model/streamModelCompletion.cjs`다.
 
-호출 표면은 두 가지입니다.
+호출 모드는 두 가지다.
 
-- OpenAI-compatible 직접 호출
-- backend proxy 호출
+- OpenAI-compatible direct call
+- backend proxy call
 
 ```mermaid
 flowchart LR
     UI["Desktop Renderer"] --> MAIN["Electron Main"]
-    MAIN --> ENGINE["LocalAgentEngine"]
-    ENGINE --> CLIENT["local_model_client.cjs"]
+    MAIN --> QE["QueryEngine"]
+    QE --> CLIENT["streamModelCompletion.cjs"]
     CLIENT -->|openai mode| OA["/v1/chat/completions"]
     CLIENT -->|proxy mode| API["/v1/llm/chat_completions"]
-    API --> VLLM["backend/app/routers/llm.py"]
+    API --> ROUTER["backend/app/routers/llm.py"]
 ```
 
-## 2. 엔드포인트 결정 방식
+## 2. mode 결정
 
-`local_model_client.cjs`는 base URL을 보고 두 모드 중 하나를 고릅니다.
+`streamModelCompletion.cjs`는 base URL을 보고 모드를 고른다.
 
 - base URL이 `/api`로 끝나면 `proxy`
 - 아니면 `openai`
 
-현재 사용 엔드포인트:
-
-| 모드 | 비스트리밍 | 스트리밍 |
-|---|---|---|
-| `openai` | `/v1/chat/completions` | `/v1/chat/completions` with `stream: true` |
-| `proxy` | `/v1/llm/chat_completions` | `/v1/llm/chat_completions/stream` |
-
-추가로 primary/fallback base URL과 token을 둘 다 설정할 수 있습니다.
+primary/fallback base URL과 token도 같이 지원한다.
 
 ## 3. 요청 payload
 
-현재 요청은 아래 공통 필드를 중심으로 구성됩니다.
+공통 핵심 필드:
 
 - `model`
 - `messages`
@@ -49,68 +42,62 @@ flowchart LR
 - `temperature`
 - `stop`
 
-response format은 모드별로 다르게 맞춰집니다.
+response format 차이:
 
-- proxy 모드: `response_format: "text" | "json_object"` 식
-- openai 모드: OpenAI 형식 `response_format: { type: "json_object" }`
+- proxy mode: 문자열 `response_format`
+- openai mode: OpenAI 형식의 `response_format`
 
-## 4. 스트리밍 처리 방식
+message는 `query.cjs`가 block transcript를 model-friendly message 배열로 flatten한 결과를 쓴다.
 
-현재 스트리밍은 "토큰은 즉시", "도구 실행은 응답 종료 후" 구조입니다.
+## 4. streaming 처리
 
-구체적으로는:
+현재 streaming 동작:
 
-1. SSE 청크를 읽으면서 text delta를 누적합니다.
-2. openai/tool delta 또는 proxy `done` payload에서 tool call 조각을 누적합니다.
-3. 토큰은 곧바로 UI에 전달합니다.
-4. tool call은 응답이 끝난 뒤 엔진이 batch로 실행합니다.
+1. SSE 또는 OpenAI stream에서 text delta를 누적한다.
+2. tool call delta도 같이 누적한다.
+3. token은 즉시 UI로 전달한다.
+4. `StreamingToolExecutor`가 parse 가능한 concurrency-safe tool call은 미리 실행 시작한다.
+5. turn 종료 시 `ToolRuntime`이 prefetched execution을 claim하거나 synthetic result로 복구한다.
 
-즉 현재 구현은 `streaming-time tool execution`이 아닙니다.
+중요:
+
+- 현재는 same-stream tool result reinjection이 아니다.
+- 즉 claude-code처럼 같은 생성 스트림 안에서 완료된 tool result를 다시 모델에 먹이지 않는다.
 
 ## 5. 반환 구조
 
-`local_model_client.cjs`가 엔진에 돌려주는 표준 구조는 아래와 같습니다.
+현재 query loop가 받는 핵심 구조:
 
 - `text`
 - `tool_calls`
 - `finish_reason`
 - `usage`
 
-엔진은 이 결과를 다시 assistant text와 tool batch로 나눠 후속 처리합니다.
+streaming일 때도 최종적으로는 이 구조로 수렴한다.
 
 ## 6. backend proxy 역할
 
-backend 쪽 LLM 라우터는 `backend/app/routers/llm.py`입니다.
+backend `routers/llm.py`의 역할:
 
-현재 역할:
+- OpenAI-compatible 요청을 backend 정책 아래로 감쌈
+- stream event를 token/done/error 형태로 중계
+- proxy 모드 payload shape를 안정화
 
-- OpenAI-compatible 요청을 backend 정책 안으로 감쌉니다.
-- 스트리밍 시 `token`, `done`, `error` 이벤트를 냅니다.
-- tool call 조각을 수집해 최종 payload에 포함합니다.
+desktop의 주 loop는 여기 있지 않다. backend는 LLM proxy와 evidence/control API 역할을 한다.
 
-보조 파싱 로직은 `backend/app/core/llm_utils.py`에 있습니다.
+## 7. 현재 강점과 한계
 
-## 7. 현재 설계의 장점과 한계
+강점:
 
-장점:
-
-- OpenAI-compatible endpoint와 backend proxy를 모두 붙일 수 있습니다.
-- direct/proxy 전환이 설정만으로 가능합니다.
-- 스트리밍 토큰 UX는 이미 있습니다.
+- direct/proxy 전환이 설정만으로 가능
+- primary/fallback endpoint 지원
+- native tool-calling 기반 flattening 사용
+- streaming 중 tool prefetch와 cancel recovery 지원
 
 한계:
 
-- tool call은 스트리밍 중 즉시 실행되지 않습니다.
-- 모델 선택은 기본적으로 단일 active model 중심입니다.
-- Claude Code처럼 tool executor가 generation loop 안에 직접 붙어 있지는 않습니다.
+- same-stream tool result reinjection 없음
+- claude-code 수준의 깊은 generation-integrated executor는 아님
+- 모델별 고급 routing은 아직 얕음
 
-## 8. 현재 기준 비범위
-
-현재 로컬 경로에 없는 것:
-
-- 모델별 역할 분담용 multi-agent serving
-- MCP/open-world transport
-- stream 중 즉시 tool execution
-- tool result를 모델 스트림 안으로 실시간 재주입하는 구조
-
-현재 PIXLLM의 LLM 서빙은 `로컬 에이전트가 하나의 모델 호출 루프를 돌리고, 도구는 응답 완료 후 batch 실행한다`로 이해하는 것이 맞습니다.
+현재 PIXLLM의 LLM serving을 설명할 때는 `desktop QueryEngine이 model loop를 주도하고, streamModelCompletion이 direct/proxy transport를 담당한다`고 쓰는 것이 정확하다.

@@ -2,38 +2,32 @@
 
 기준일: 2026-04-01
 
-이 폴더 문서는 현재 구현과 목표 설계를 함께 다룹니다. 다만 현재 코드를 설명할 때는 아래 문서를 우선 기준으로 봅니다.
+이 문서 묶음은 현재 저장소의 실제 구현을 기준으로 정리한다. 예전 문서에 남아 있던 `local_agent_*`, `desktop/src/main/core/*`, `LocalAgentRuntime` 기준 설명은 더 이상 현재 구조가 아니다.
 
-- `01-overview/시스템_상세_아키텍처_설계.md`
-- `02-design/desktop_layered_tool_loop_architecture.md`
-- `02-design/API_인터페이스_설계.md`
-- `02-design/에이전트_상세_설계.md`
-- `05-reference/claude-code-vs-pixllm-20260401.md`
+현재 기준축은 아래와 같다.
 
-현재 구현의 핵심은 `desktop` 로컬 에이전트 경로입니다.
+- `desktop`이 유일한 agent loop를 가진다.
+- `backend`는 evidence, runs, approvals, health, LLM endpoint를 제공하는 보조 평면이다.
+- desktop 메인 런타임은 `QueryEngine.cjs`, `ToolRuntime.cjs`, `StreamingToolExecutor.cjs`, `processUserInput.cjs`, `tools/*` 구조를 따른다.
+- 회사 엔진 소스나 내부 문서는 `company_reference_search`로 backend evidence를 읽기 전용으로 참조한다.
+- MCP/open-world, remote bridge, team worker는 현재 기본 경로가 아니다.
 
-- Renderer -> preload IPC -> Electron main -> `local_agent_service.cjs`
-- `LocalAgentEngine`가 턴 루프를 관리
-- `LocalAgentRuntime`이 request context, tool policy, grounding, tool batch 실행을 담당
-- `createLocalToolCollection`이 실제 로컬 도구 registry
-- `workspace.cjs`가 파일/검색/셸/빌드 실행을 담당
-- 백엔드의 `/api/v1/runs`와 approval API는 별도 운영 표면이며, 현재 로컬 채팅 루프의 중심은 아닙니다
+먼저 읽을 문서:
 
-현재 로컬 에이전트 경로에서 아직 구현되지 않은 항목도 명시적으로 구분해서 봐야 합니다.
+1. `01-overview/시스템_상세_아키텍처_설계.md`
+2. `02-design/desktop_layered_tool_loop_architecture.md`
+3. `02-design/API_인터페이스_설계.md`
+4. `02-design/에이전트_상세_설계.md`
+5. `05-reference/claude-code-vs-pixllm-20260401.md`
 
-- MCP/open-world tool integration
-- team worker / remote bridge 실행
-- streaming 중 즉시 tool execution
-- desktop local loop와 backend tool runtime의 단일화
+디렉터리 요약:
 
-폴더 구조:
-
-- `01-overview`: 현재 구현 기준의 큰 구조와 운영 개념
-- `02-design`: 구현 세부와 향후 설계 방향
-- `03-test`: 검증 기록
-- `05-reference`: 비교 분석과 참고 자료
+- `01-overview`: 현재 제품 구조와 실행 경로 개요
+- `02-design`: desktop loop, tool/runtime, UI, backend evidence 설계
+- `03-test`: 수동 검증 기록
+- `05-reference`: 비교 문서와 참고 자료
 
 주의:
 
-- 일부 `02-design` 문서는 여전히 계획 성격이 남아 있습니다.
-- 현재 동작 여부는 항상 `desktop/src/main/`과 `backend/app/routers/` 코드를 우선합니다.
+- 오래된 계획 문서에는 미래 기능이나 과거 구조 설명이 일부 남을 수 있다.
+- 현재 동작과 구현 근거가 더 중요할 때는 `desktop/src/main/`과 `backend/app/` 코드를 우선 본다.

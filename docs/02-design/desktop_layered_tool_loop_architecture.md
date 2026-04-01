@@ -1,108 +1,117 @@
-# 데스크톱 레이어드 툴 루프 아키텍처
+# Desktop Layered Tool Loop Architecture
 
 기준일: 2026-04-01
 
-이 문서는 현재 구현된 desktop local agent의 실제 레이어를 설명합니다.
+이 문서는 현재 desktop 로컬 agent loop를 계층별로 설명한다.
 
 ## 1. 현재 핵심 개념
 
-현재 구조의 중심은 `LocalAgentEngine + LocalAgentRuntime` 조합입니다.
+현재 중심 구조는 `QueryEngine + ToolRuntime + tools/*`다.
 
-- `LocalAgentEngine`: 모델 호출, assistant 파싱, 턴 반복, compaction, 종료 조건
-- `LocalAgentRuntime`: request context, tool permission, grounded path, tool batch 실행
-- `LocalToolCollection`: tool registry, 입력 정규화, permission gate
+- `QueryEngine`이 모델 turn loop를 관리한다.
+- `processUserInput`이 pre-loop에서 request context를 만든다.
+- `ToolRuntime`이 active tools, permission, grounding, tool batch execution을 관리한다.
+- `StreamingToolExecutor`가 스트리밍 중 parse 가능한 tool call의 선실행과 drain/recovery를 담당한다.
+- `tools/*`는 실제 file, shell, build, reference, task tool 구현이다.
 
-현재 구현은 단일 `tool_loop` 중심입니다. `team`, `remote`, `MCP`, `plugin/skill` 실행 평면은 로컬 에이전트 기본 경로에 없습니다.
+현재 구조는 `single local tool loop`다. team, remote, MCP, plugin registry는 기본 경로가 아니다.
 
-## 2. 현재 레이어 정의
+## 2. 레이어 정의
 
 | 레이어 | 이름 | 현재 역할 |
 |---|---|---|
 | L0 | Desktop Event Surface | renderer와 main 사이의 요청/이벤트 전달 |
-| L1 | Request Context Assembly | explicit path, selected file, intent 추출 |
-| L2 | Model Turn Loop | 모델 호출, 응답 파싱, 반복 제어 |
-| L3 | Tool Normalization and Policy | schema 검증, path 정책, permission gate |
-| L4 | Tool Batch Execution | 도구 실행, trace 기록, transcript 기록 |
-| L5 | Grounding and Recovery | grounded answer 검사, 반복 배치 차단, interrupt 처리 |
-| L6 | Persistence and UI Stream | 상태 저장, stream event 방출, 최종 결과 반환 |
+| L1 | Pre-loop Context | intent, directives, explicit path, evidence mode, initial tool scope 계산 |
+| L2 | Query Loop | model call, parse, retry, compaction, grounding retry |
+| L3 | Streaming Tool Prefetch | tool delta sync, parseable tool call 선실행, claim/drain |
+| L4 | Permission and Grounding | deny-by-default gate, read-before-edit, backend-reference 분리 |
+| L5 | Tool Execution | workspace, task runtime, backend evidence API 호출 |
+| L6 | Transcript and Persistence | trace, transcript, file cache, session state 갱신 |
 
-## 3. 현재 턴 흐름
+## 3. 현재 흐름
 
 ```mermaid
 flowchart TD
-    A["User request"] --> B["Request context assembly"]
-    B --> C["Model call"]
-    C --> D["Assistant parse"]
-    D -->|final text| E["Grounding check"]
-    D -->|tool_use| F["Tool normalization + policy"]
-    F --> G["Tool batch execution"]
-    G --> H["tool_result blocks"]
+    A["User request"] --> B["processUserInput"]
+    B --> C["QueryEngine model call"]
+    C --> D["assistant blocks parse"]
+    D -->|text only| E["grounding check"]
+    D -->|tool calls| F["StreamingToolExecutor sync"]
+    F --> G["ToolRuntime executeToolBatch"]
+    G --> H["tool_result blocks + trace"]
     H --> C
-    E --> I["Persist + stream done"]
+    E --> I["persist + done event"]
 ```
 
-## 4. Request Context Assembly
+## 4. pre-loop
 
-현재 런타임이 pre-loop에서 추출하는 정보:
+`processUserInput`가 현재 계산하는 것:
 
-- 사용자 프롬프트 원문
-- selected file
-- 사용자 요청에 직접 등장한 파일 경로
-- change / execution / analysis / compare 성격
+- intent: analysis, change, execution, compare
+- directives: `/reference`, `/workspace`, `/hybrid`, `/exec`, `/change`, `/analysis`, `/config`
+- explicit path candidate
+- allowed direct paths
+- evidence preference: `workspace`, `reference`, `hybrid`
+- initial tool names
 
-이 정보는 두 군데에 사용됩니다.
+이 단계는 claude-code의 `processUserInput`보다 얕지만, 현재 desktop loop의 핵심 진입점이다.
 
-- 시스템 런타임 컨텍스트 메시지
-- 도구 permission 판단
+## 5. tool policy
 
-즉, 현재 PIXLLM은 `processUserInput`와 비슷한 역할을 최소 범위로 구현한 상태입니다.
+현재 policy는 deny-by-default다.
 
-## 5. Tool Policy
+주요 규칙:
 
-현재 tool policy는 아래를 강제합니다.
+- 이번 turn에 enable되지 않은 tool은 거절
+- unknown path는 바로 `read/edit/write`하지 않음
+- edit/write 전에 read가 필요함
+- backend reference path는 local file tool이 아니라 `company_reference_search`로 읽어야 함
+- shell/build/task mutation은 execution intent 또는 충분한 grounded context가 있어야 함
+- 새 tool이 명시 policy 없이 추가되면 `tool_policy_missing`으로 막힘
 
-- 사용자 요청이나 이전 도구 결과에 없던 경로를 바로 읽지 않음
-- 파일을 편집하기 전에 먼저 읽게 함
-- overwrite 전에 현재 파일 내용을 읽게 함
-- execution intent 없는 `bash` / `powershell` / `run_build`를 차단
-- `config set`은 명시적 변경 의도가 있을 때만 허용
+## 6. tool 범주
 
-현재는 `tool permission denied`를 structured result로 돌려주고, 모델이 전략을 바꾸도록 유도합니다.
-
-## 6. 현재 도구 범주
-
-현재 로컬 registry의 주 도구 그룹:
+현재 registry의 주 범주:
 
 - session/runtime: `todo_*`, `task_*`, `brief`, `ask_user_question`, `terminal_capture`
-- discovery/search: `list_files`, `glob`, `grep`, `find_symbol`, `find_callers`, `find_references`, `tool_search`
-- read/code intelligence: `read_file`, `read_symbol_span`, `symbol_outline`, `symbol_neighborhood`, `lsp`
-- write/edit: `write`, `edit`, `notebook_edit`
-- execute: `run_build`, `bash`, `powershell`
-- web: `web_search`, `web`
+- workspace discovery: `list_files`, `glob`, `grep`, `project_context_search`, `find_symbol`, `find_callers`, `find_references`
+- file/code read: `read_file`, `read_symbol_span`, `symbol_outline`, `symbol_neighborhood`, `lsp`
+- mutation: `write`, `edit`, `notebook_edit`
+- execution: `run_build`, `bash`, `powershell`
+- backend reference: `company_reference_search`
+- config: `config`
 
-현재 `tool_search`는 로컬 도구 설명 검색이며, MCP 도구 검색이 아닙니다.
+`web_search`, `web`, MCP/open-world registry는 현재 기본 경로에 없다.
 
-## 7. 현재 Recovery and Grounding
+## 7. streaming executor의 현재 수준
 
-현재 로컬 에이전트는 아래 recovery를 가집니다.
+현재 구현은 완전한 claude-code식 same-stream reinjection은 아니다.
 
-- malformed assistant reply 재시도
+- tool call delta가 충분히 parse되면 바로 실행을 시작한다.
+- concurrency-safe가 아닌 tool은 turn 종료 후 batch에서 실행한다.
+- batch 단계에서 prefetched result를 claim해 재사용한다.
+- cancel, parse failure, model error 시 `drainUnclaimed()`로 transcript 정합성을 복구한다.
+
+즉 현재는 `streaming prefetch + claim/recovery` 구조다.
+
+## 8. grounding과 recovery
+
+현재 recovery 장치:
+
+- parse retry
 - output token cutoff recovery
-- repeated tool batch 차단
-- interrupted tool result 기록
-- grounded final answer 재시도
-- tool_result/message budget compaction
+- message/tool_result compaction
+- repeated tool batch 제한
+- no-progress retry
+- ungrounded final answer retry
+- interrupted tool result synthetic recovery
+- stale-read 방어와 content hash fallback
 
-특히 최종 답변은 이전 read/search/list 결과에 나타나지 않은 파일 경로를 언급하면 재시도됩니다.
+## 9. 현재 한계
 
-## 8. 현재 한계
+- same-stream tool_result 재주입 없음
+- per-tool module 분리는 진행 중이지만 아직 일부 registry helper가 `tools.cjs`에 남아 있음
+- claude-code 수준의 깊은 pre-loop 전처리까지는 아님
+- desktop runtime과 backend ops plane은 분리되어 있음
 
-아직 구현되지 않은 항목:
-
-- streaming 중 즉시 tool execution
-- separate executor abstraction
-- team / remote / bridge escalation
-- MCP/open-world tool registry
-- backend tool runtime과 local runtime의 단일화
-
-따라서 현재 데스크톱 툴 루프는 `claude-code`의 전체 QueryEngine 구조를 완전히 복제한 것이 아니라, 그중 `pre-loop + permission + grounded tool loop`를 로컬 런타임으로 압축한 형태입니다.
+현재 PIXLLM을 설명할 때는 `desktop single loop를 강화한 grounded tool architecture`라고 표현하는 것이 가장 정확하다.
