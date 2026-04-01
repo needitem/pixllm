@@ -1,7 +1,7 @@
 import logging
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
-from ..chat.retrieval.service import run_retrieval
+from ..retrieval.service import run_retrieval
 from .code_runtime import (
     find_symbol as _find_symbol_impl,
     list_repo_files as _list_repo_files_impl,

@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from ... import config
-from ..chat.retrieval.service import run_retrieval
+from ..retrieval.service import run_retrieval
 from ...core.policy import SecurityPolicy
 from .access import register_doc_search, resolve_tool_user_context
 from .support import build_citations, clamp_int, normalize_doc_item, qdrant_point_id
