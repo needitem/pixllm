@@ -1,10 +1,8 @@
 const { createLocalToolCollection } = require('./local_tools.cjs');
 const { streamModelCompletion } = require('./local_model_client.cjs');
-const { createRunRequestContext } = require('./local_request_context.cjs');
-const { authorizeToolUse, collectGroundedPaths } = require('./local_tool_policy.cjs');
+const { LocalAgentRuntime } = require('./local_agent_runtime.cjs');
 const {
   createTextBlock,
-  createToolResultBlock,
   normalizeMessageBlocks,
   parseAssistantResponse,
   serializeBlocks,
@@ -16,9 +14,7 @@ const {
 } = require('./local_agent_protocol.cjs');
 const { loadAgentState, saveAgentState } = require('./local_agent_state_store.cjs');
 const { listTasks, listTerminalCaptures } = require('./local_task_runtime.cjs');
-const { findUngroundedSourceMentions } = require('./local_source_guard.cjs');
 const {
-  summarizeObservation,
   readObservationsFromTrace,
   failedSteps,
 } = require('../local_agent_trace.cjs');
@@ -376,22 +372,33 @@ class LocalAgentEngine {
     this.model = toStringValue(model);
     this.selectedFilePath = toStringValue(selectedFilePath);
     this.sessionId = toStringValue(sessionId);
+    this.state = this._restoreState(historyMessages);
     this.runtimeBridge = {
       askUserQuestion: async (payload) => this._askUserQuestion(payload),
       sendBrief: async (payload) => this._sendBrief(payload),
     };
+    this.runtime = new LocalAgentRuntime({
+      workspacePath: this.workspacePath,
+      selectedFilePath: this.selectedFilePath,
+      sessionId: this.sessionId,
+      state: this.state,
+      recordTranscript: (entry) => this._recordTranscript(entry),
+      recordTransition: (reason, extra) => this._recordTransition(reason, extra),
+      persistState: () => this._persistState(),
+      pushMetaUserMessage: (text, meta) => this._pushMetaUserMessage(text, meta),
+      updateFileCache: (toolName, observation) => this._updateFileCache(toolName, observation),
+    });
     this.tools = this.workspacePath
       ? createLocalToolCollection({
           workspacePath: this.workspacePath,
           sessionId: this.sessionId,
           runtimeBridge: this.runtimeBridge,
-          authorizeToolUse: (payload) => this._authorizeToolUse(payload),
+          authorizeToolUse: (payload) => this.runtime.authorizeToolUse(payload),
         })
       : { tools: [], call: async () => ({ ok: false, error: 'workspace_not_available' }) };
+    this.runtime.setTools(this.tools);
     this.toolDescriptions = '';
     this.runtimeHandlers = {};
-    this.activeRunContext = null;
-    this.state = this._restoreState(historyMessages);
     this.restoredSession = Number(this.state?.totalUsage?.resumed_sessions || 0) > 0;
   }
 
@@ -413,6 +420,9 @@ class LocalAgentEngine {
     this.apiToken = this.llmApiToken || toStringValue(apiToken) || this.apiToken || this.serverApiToken;
     this.model = toStringValue(model) || this.model;
     this.selectedFilePath = toStringValue(selectedFilePath) || this.selectedFilePath;
+    if (this.runtime) {
+      this.runtime.selectedFilePath = this.selectedFilePath;
+    }
   }
 
   _restoreState(historyMessages) {
@@ -635,55 +645,6 @@ class LocalAgentEngine {
     return this.toolDescriptions;
   }
 
-  _groundedSourcePaths(trace = []) {
-    return collectGroundedPaths({
-      trace,
-      fileCache: this.state.fileCache,
-      requestContext: this.activeRunContext,
-    });
-  }
-
-  _authorizeToolUse({ tool, input = {} } = {}) {
-    return authorizeToolUse({
-      tool,
-      input,
-      requestContext: this.activeRunContext,
-      trace: this.state.trace,
-      fileCache: this.state.fileCache,
-    });
-  }
-
-  _ensureGroundedFinalAnswer(answer, trace = [], turn = 0) {
-    const unknownMentions = findUngroundedSourceMentions(answer, this._groundedSourcePaths(trace));
-    if (unknownMentions.length === 0) {
-      this.state.ungroundedAnswerRetries = 0;
-      return true;
-    }
-
-    this._recordTranscript({
-      kind: 'ungrounded_answer',
-      turn,
-      mentions: unknownMentions.slice(0, 8),
-    });
-    this._recordTransition('ungrounded_answer', {
-      turn,
-      count: unknownMentions.length,
-    });
-
-    if (Number(this.state.ungroundedAnswerRetries || 0) >= MAX_UNGROUNDED_ANSWER_RETRIES) {
-      this.state.ungroundedAnswerRetries = 0;
-      return true;
-    }
-
-    this.state.ungroundedAnswerRetries += 1;
-    this._pushMetaUserMessage(
-      `Your previous answer referenced file paths that were not grounded in prior tool results: ${unknownMentions.slice(0, 4).join(', ')}. Only mention files that already appeared in search, list, or read results, or call tools first.`,
-      { turn, mentions: unknownMentions.slice(0, 4) },
-    );
-    this._persistState();
-    return false;
-  }
-
   async _callModel(messages, { signal = null, onModelToken = async () => {}, modelTools = [] } = {}) {
     let lastError = null;
     for (let attempt = 0; attempt <= MAX_MODEL_RETRIES; attempt += 1) {
@@ -765,8 +726,8 @@ class LocalAgentEngine {
 
   _runtimeContextMessage() {
     const lines = [];
-    if (toStringValue(this.activeRunContext?.summary)) {
-      lines.push(toStringValue(this.activeRunContext.summary));
+    if (toStringValue(this.runtime?.contextSummary())) {
+      lines.push(toStringValue(this.runtime.contextSummary()));
     }
     if (toStringValue(this.state.pendingToolUseSummary)) {
       lines.push(`Pending tool-use summary: ${toStringValue(this.state.pendingToolUseSummary)}`);
@@ -814,21 +775,20 @@ class LocalAgentEngine {
     this.runtimeHandlers = { onTransition, onUserQuestion, onBrief };
 
     try {
-      this.activeRunContext = createRunRequestContext({
+      const runContext = this.runtime.beginRun({
         prompt,
-        workspacePath: this.workspacePath,
         selectedFilePath: this.selectedFilePath,
       });
       const userBlocks = buildUserBlocks(
-        toStringValue(this.activeRunContext?.prompt || prompt),
-        toStringValue(this.activeRunContext?.selectedFilePath || this.selectedFilePath),
+        toStringValue(runContext?.prompt || prompt),
+        toStringValue(runContext?.selectedFilePath || this.selectedFilePath),
       );
       this.state.messages.push({ role: 'user', content: userBlocks });
       this._recordTranscript({
         kind: 'user',
-        prompt: toStringValue(this.activeRunContext?.prompt || prompt),
-        selectedFilePath: toStringValue(this.activeRunContext?.selectedFilePath || this.selectedFilePath),
-        explicitPaths: Array.isArray(this.activeRunContext?.explicitPaths) ? this.activeRunContext.explicitPaths.slice(0, 8) : [],
+        prompt: toStringValue(runContext?.prompt || prompt),
+        selectedFilePath: toStringValue(runContext?.selectedFilePath || this.selectedFilePath),
+        explicitPaths: Array.isArray(runContext?.explicitPaths) ? runContext.explicitPaths.slice(0, 8) : [],
       });
       this._persistState();
 
@@ -1047,7 +1007,11 @@ class LocalAgentEngine {
           this.state.repeatedToolBatchSignature = '';
           this.state.repeatedToolBatchCount = 0;
           const runTrace = this.state.trace.slice(traceStartIndex);
-          if (!this._ensureGroundedFinalAnswer(finalAnswer, runTrace, turn)) {
+          if (!this.runtime.ensureGroundedFinalAnswer(finalAnswer, {
+            trace: runTrace,
+            turn,
+            maxRetries: MAX_UNGROUNDED_ANSWER_RETRIES,
+          })) {
             continue;
           }
           this.state.terminalReason = 'final_answer';
@@ -1117,131 +1081,22 @@ class LocalAgentEngine {
           continue;
         }
 
-        const executeToolUse = async (toolUse) => {
-          if (signal?.aborted) {
-            this._recordTransition('cancelled', { turn, phase: 'tool' });
-            const observation = interruptedObservation();
-            this.state.trace.push({
-              round: turn,
-              thought: assistantText,
-              tool: toolUse.name,
-              toolUseId: toolUse.id,
-              input: toolUse.input,
-              observation,
-            });
-            this._recordTranscript({
-              kind: 'tool_result',
-              turn,
-              tool: toolUse.name,
-              toolUseId: toolUse.id,
-              ok: false,
-              interrupted: true,
-            });
-            return buildToolExecutionResult(toolUse, observation);
-          }
-          await onToolUse({
-            turn,
-            id: toolUse.id,
-            name: toolUse.name,
-            input: toolUse.input,
-          });
-          let observation;
-          try {
-            observation = await this.tools.call(toolUse.name, toolUse.input, {
-              requestContext: this.activeRunContext,
-              trace: this.state.trace,
-              fileCache: this.state.fileCache,
-            });
-          } catch (error) {
-            observation = {
-              ok: false,
-              error: 'tool_call_failed',
-              message: error instanceof Error ? error.message : String(error),
-            };
-          }
-          this.state.totalUsage.tool_calls += 1;
-          this.state.trace.push({
-            round: turn,
-            thought: assistantText,
-            tool: toolUse.name,
-            toolUseId: toolUse.id,
-            input: toolUse.input,
-            observation,
-          });
-          this._updateFileCache(toolUse.name, observation);
-          await onToolResult({
-            turn,
-            id: toolUse.id,
-            name: toolUse.name,
-            ok: observation?.ok !== false,
-          });
-          this._recordTranscript({
-            kind: 'tool_result',
-            turn,
-            tool: toolUse.name,
-            toolUseId: toolUse.id,
-            ok: observation?.ok !== false,
-          });
-          return buildToolExecutionResult(toolUse, observation);
-        };
-
-        const canParallelize = toolUses.length > 1 && toolUses.every((toolUse) => {
-          const descriptor = this.tools.describe(toolUse.name);
-          return descriptor && typeof descriptor.isConcurrencySafe === 'function' ? descriptor.isConcurrencySafe() : true;
-        });
-        this.state.pendingToolUseSummary = summarizeToolRequests(toolUses);
-        await onToolBatchStart({
+        const {
+          toolExecutions,
+          toolResultBlocks,
+          canParallelize,
+          allFailed,
+          interrupted,
+        } = await this.runtime.executeToolBatch({
           turn,
-          count: toolUses.length,
-          summary: this.state.pendingToolUseSummary,
-          parallelCandidate: canParallelize,
-        });
-        this._recordTranscript({
-          kind: 'tool_batch_start',
-          turn,
-          count: toolUses.length,
-          parallel: canParallelize,
-          summary: this.state.pendingToolUseSummary,
-        });
-        await onStatus({
-          phase: 'tool',
-          message: toolUses.length === 1 ? `Running ${toolUses[0].name}...` : `Running ${toolUses.length} tools...`,
-          tool: toolUses[0].name,
-        });
-        const toolExecutions = canParallelize
-          ? (await Promise.allSettled(toolUses.map((toolUse) => executeToolUse(toolUse)))).map((entry, index) => {
-              if (entry.status === 'fulfilled') {
-                return entry.value;
-              }
-              const observation = signal?.aborted
-                ? interruptedObservation()
-                : {
-                    ok: false,
-                    error: 'tool_call_failed',
-                    message: entry.reason instanceof Error ? entry.reason.message : String(entry.reason),
-                  };
-              return buildToolExecutionResult(toolUses[index], observation);
-            })
-          : await (async () => {
-              const items = [];
-              for (const toolUse of toolUses) {
-                items.push(await executeToolUse(toolUse));
-              }
-              return items;
-            })();
-
-        for (const item of toolExecutions) {
-          if (isBackgroundTaskObservation(item?.observation)) {
-            this.state.totalUsage.background_tasks_started += 1;
-          }
-        }
-
-        const toolResultBlocks = toolExecutions.map((item) => item.resultBlock);
-        this.state.pendingToolUseSummary = summarizeToolResults(toolExecutions) || summarizeToolRequests(toolUses);
-        this._recordTranscript({
-          kind: 'tool_use_summary',
-          turn,
-          summary: this.state.pendingToolUseSummary,
+          assistantText,
+          toolUses,
+          signal,
+          onToolUse,
+          onToolResult,
+          onToolBatchStart,
+          onToolBatchEnd,
+          onStatus,
         });
 
         this.state.messages.push({
@@ -1249,8 +1104,6 @@ class LocalAgentEngine {
           content: toolResultBlocks,
         });
 
-        const allFailed = toolExecutions.length > 0 && toolExecutions.every((item) => item?.observation?.ok === false);
-        const interrupted = toolExecutions.some((item) => item?.observation?.interrupted === true);
         if (allFailed) {
           this._pushMetaUserMessage(
             'The previous tool batch failed. Change strategy, use a different tool, or answer with the blocker instead of repeating the same calls.',
@@ -1266,22 +1119,6 @@ class LocalAgentEngine {
           turn,
           toolUses: toolUses.length,
           parallel: canParallelize,
-        });
-        await onToolBatchEnd({
-          turn,
-          count: toolUses.length,
-          summary: this.state.pendingToolUseSummary,
-          allFailed,
-          parallel: canParallelize,
-        });
-        this._recordTranscript({
-          kind: 'tool_batch_end',
-          turn,
-          count: toolUses.length,
-          parallel: canParallelize,
-          allFailed,
-          interrupted,
-          summary: this.state.pendingToolUseSummary,
         });
         if (interrupted && signal?.aborted) {
           this.state.pendingToolUseSummary = '';
@@ -1325,7 +1162,9 @@ class LocalAgentEngine {
       };
     } finally {
       this.runtimeHandlers = {};
-      this.activeRunContext = null;
+      if (this.runtime) {
+        this.runtime.endRun();
+      }
     }
   }
 }
