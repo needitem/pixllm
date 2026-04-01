@@ -1382,6 +1382,10 @@
           model: settings.selectedModel || 'qwen3.5-27b',
           baseUrl: settings.llmBaseUrl || settings.serverBaseUrl,
           apiToken: settings.llmApiToken || settings.apiToken,
+          serverBaseUrl: settings.serverBaseUrl,
+          serverApiToken: settings.apiToken,
+          llmBaseUrl: settings.llmBaseUrl,
+          llmApiToken: settings.llmApiToken,
           selectedFilePath,
           sessionId: selectedSessionId || '',
           historyMessages

@@ -1,5 +1,7 @@
 const { createLocalToolCollection } = require('./local_tools.cjs');
 const { streamModelCompletion } = require('./local_model_client.cjs');
+const { createRunRequestContext } = require('./local_request_context.cjs');
+const { authorizeToolUse, collectGroundedPaths } = require('./local_tool_policy.cjs');
 const {
   createTextBlock,
   createToolResultBlock,
@@ -17,10 +19,7 @@ const { listTasks, listTerminalCaptures } = require('./local_task_runtime.cjs');
 const { findUngroundedSourceMentions } = require('./local_source_guard.cjs');
 const {
   summarizeObservation,
-  grepItemsFromTrace,
-  listFilesFromTrace,
   readObservationsFromTrace,
-  symbolOutlinesFromTrace,
   failedSteps,
 } = require('../local_agent_trace.cjs');
 
@@ -358,14 +357,22 @@ class LocalAgentEngine {
     workspacePath = '',
     baseUrl = '',
     apiToken = '',
+    serverBaseUrl = '',
+    serverApiToken = '',
+    llmBaseUrl = '',
+    llmApiToken = '',
     model = '',
     selectedFilePath = '',
     sessionId = '',
     historyMessages = [],
   } = {}) {
     this.workspacePath = toStringValue(workspacePath);
-    this.baseUrl = toStringValue(baseUrl);
-    this.apiToken = toStringValue(apiToken);
+    this.serverBaseUrl = toStringValue(serverBaseUrl || baseUrl);
+    this.serverApiToken = toStringValue(serverApiToken || apiToken);
+    this.llmBaseUrl = toStringValue(llmBaseUrl);
+    this.llmApiToken = toStringValue(llmApiToken);
+    this.baseUrl = this.llmBaseUrl || this.serverBaseUrl;
+    this.apiToken = this.llmApiToken || this.serverApiToken;
     this.model = toStringValue(model);
     this.selectedFilePath = toStringValue(selectedFilePath);
     this.sessionId = toStringValue(sessionId);
@@ -378,10 +385,12 @@ class LocalAgentEngine {
           workspacePath: this.workspacePath,
           sessionId: this.sessionId,
           runtimeBridge: this.runtimeBridge,
+          authorizeToolUse: (payload) => this._authorizeToolUse(payload),
         })
       : { tools: [], call: async () => ({ ok: false, error: 'workspace_not_available' }) };
     this.toolDescriptions = '';
     this.runtimeHandlers = {};
+    this.activeRunContext = null;
     this.state = this._restoreState(historyMessages);
     this.restoredSession = Number(this.state?.totalUsage?.resumed_sessions || 0) > 0;
   }
@@ -389,11 +398,19 @@ class LocalAgentEngine {
   updateContext({
     baseUrl = '',
     apiToken = '',
+    serverBaseUrl = '',
+    serverApiToken = '',
+    llmBaseUrl = '',
+    llmApiToken = '',
     model = '',
     selectedFilePath = '',
   } = {}) {
-    this.baseUrl = toStringValue(baseUrl) || this.baseUrl;
-    this.apiToken = toStringValue(apiToken) || this.apiToken;
+    this.serverBaseUrl = toStringValue(serverBaseUrl) || this.serverBaseUrl || toStringValue(baseUrl) || this.baseUrl;
+    this.serverApiToken = toStringValue(serverApiToken) || this.serverApiToken || toStringValue(apiToken) || this.apiToken;
+    this.llmBaseUrl = toStringValue(llmBaseUrl) || this.llmBaseUrl;
+    this.llmApiToken = toStringValue(llmApiToken) || this.llmApiToken;
+    this.baseUrl = this.llmBaseUrl || toStringValue(baseUrl) || this.baseUrl || this.serverBaseUrl;
+    this.apiToken = this.llmApiToken || toStringValue(apiToken) || this.apiToken || this.serverApiToken;
     this.model = toStringValue(model) || this.model;
     this.selectedFilePath = toStringValue(selectedFilePath) || this.selectedFilePath;
   }
@@ -619,18 +636,21 @@ class LocalAgentEngine {
   }
 
   _groundedSourcePaths(trace = []) {
-    const paths = new Set();
-    const append = (value) => {
-      const normalized = toStringValue(value).replace(/\\/g, '/');
-      if (normalized) paths.add(normalized);
-    };
+    return collectGroundedPaths({
+      trace,
+      fileCache: this.state.fileCache,
+      requestContext: this.activeRunContext,
+    });
+  }
 
-    for (const item of readObservationsFromTrace(trace)) append(item?.path);
-    for (const item of grepItemsFromTrace(trace)) append(item?.path);
-    for (const item of listFilesFromTrace(trace)) append(item?.path);
-    for (const item of symbolOutlinesFromTrace(trace)) append(item?.path);
-
-    return Array.from(paths);
+  _authorizeToolUse({ tool, input = {} } = {}) {
+    return authorizeToolUse({
+      tool,
+      input,
+      requestContext: this.activeRunContext,
+      trace: this.state.trace,
+      fileCache: this.state.fileCache,
+    });
   }
 
   _ensureGroundedFinalAnswer(answer, trace = [], turn = 0) {
@@ -667,14 +687,16 @@ class LocalAgentEngine {
   async _callModel(messages, { signal = null, onModelToken = async () => {}, modelTools = [] } = {}) {
     let lastError = null;
     for (let attempt = 0; attempt <= MAX_MODEL_RETRIES; attempt += 1) {
-      try {
-        const maxTokens = Math.max(1600, Number(this.state.maxOutputTokensOverride || 0) || 1600);
-        const result = await streamModelCompletion({
-          baseUrl: this.baseUrl,
-          apiToken: this.apiToken,
-          model: this.model,
-          messages,
-          tools: Array.isArray(modelTools) ? modelTools : [],
+        try {
+          const maxTokens = Math.max(1600, Number(this.state.maxOutputTokensOverride || 0) || 1600);
+          const result = await streamModelCompletion({
+            baseUrl: this.llmBaseUrl || this.baseUrl || this.serverBaseUrl,
+            apiToken: this.llmApiToken || this.apiToken || this.serverApiToken,
+            fallbackBaseUrl: this.serverBaseUrl,
+            fallbackApiToken: this.serverApiToken,
+            model: this.model,
+            messages,
+            tools: Array.isArray(modelTools) ? modelTools : [],
           toolChoice: 'auto',
           maxTokens,
           temperature: 0.2,
@@ -743,6 +765,9 @@ class LocalAgentEngine {
 
   _runtimeContextMessage() {
     const lines = [];
+    if (toStringValue(this.activeRunContext?.summary)) {
+      lines.push(toStringValue(this.activeRunContext.summary));
+    }
     if (toStringValue(this.state.pendingToolUseSummary)) {
       lines.push(`Pending tool-use summary: ${toStringValue(this.state.pendingToolUseSummary)}`);
     }
@@ -789,12 +814,21 @@ class LocalAgentEngine {
     this.runtimeHandlers = { onTransition, onUserQuestion, onBrief };
 
     try {
-      const userBlocks = buildUserBlocks(prompt, this.selectedFilePath);
+      this.activeRunContext = createRunRequestContext({
+        prompt,
+        workspacePath: this.workspacePath,
+        selectedFilePath: this.selectedFilePath,
+      });
+      const userBlocks = buildUserBlocks(
+        toStringValue(this.activeRunContext?.prompt || prompt),
+        toStringValue(this.activeRunContext?.selectedFilePath || this.selectedFilePath),
+      );
       this.state.messages.push({ role: 'user', content: userBlocks });
       this._recordTranscript({
         kind: 'user',
-        prompt: toStringValue(prompt),
-        selectedFilePath: this.selectedFilePath,
+        prompt: toStringValue(this.activeRunContext?.prompt || prompt),
+        selectedFilePath: toStringValue(this.activeRunContext?.selectedFilePath || this.selectedFilePath),
+        explicitPaths: Array.isArray(this.activeRunContext?.explicitPaths) ? this.activeRunContext.explicitPaths.slice(0, 8) : [],
       });
       this._persistState();
 
@@ -1113,7 +1147,11 @@ class LocalAgentEngine {
           });
           let observation;
           try {
-            observation = await this.tools.call(toolUse.name, toolUse.input);
+            observation = await this.tools.call(toolUse.name, toolUse.input, {
+              requestContext: this.activeRunContext,
+              trace: this.state.trace,
+              fileCache: this.state.fileCache,
+            });
           } catch (error) {
             observation = {
               ok: false,
@@ -1287,6 +1325,7 @@ class LocalAgentEngine {
       };
     } finally {
       this.runtimeHandlers = {};
+      this.activeRunContext = null;
     }
   }
 }

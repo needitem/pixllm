@@ -281,6 +281,7 @@ function buildSystemPrompt({ workspacePath = '', selectedFilePath = '', toolDesc
     'When you have enough grounded evidence, reply with plain text only and no <tool_use> blocks.',
     'Ground every code claim in the tool_result content already shown in the transcript.',
     'Do not mention file paths, line ranges, or symbols unless they appeared in prior tool results.',
+    'User-referenced files and the selected file may be used directly. Discover any other path before reading, editing, or naming it.',
     'If the runtime asks you to continue after an output cutoff, resume directly from the cutoff with no recap or apology.',
     'If a tool batch failed or was rejected, change strategy. Do not repeat the identical tool batch unless new evidence requires it.',
     'If you need to edit files, prefer precise edits before full rewrites.',

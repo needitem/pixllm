@@ -202,6 +202,10 @@ export async function streamLocalAgentChat(
     model: string;
     baseUrl: string;
     apiToken: string;
+    serverBaseUrl?: string;
+    serverApiToken?: string;
+    llmBaseUrl?: string;
+    llmApiToken?: string;
     selectedFilePath?: string;
     sessionId?: string;
     historyMessages?: Array<{ role: string; content: string }>;

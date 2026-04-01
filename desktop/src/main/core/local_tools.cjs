@@ -610,6 +610,7 @@ function getAllLocalBaseTools(limits = {}) {
       }),
       searchHint: 'read or change desktop runtime configuration',
       laneAffinity: ['read', 'change', 'failure'],
+      isReadOnly: () => false,
       isConcurrencySafe: () => false,
       async description() {
         return 'Read or update desktop runtime settings';
@@ -1124,6 +1125,7 @@ function getAllLocalBaseTools(limits = {}) {
       }, ['tool']),
       searchHint: 'run workspace build or test command',
       laneAffinity: ['change', 'review', 'failure'],
+      isReadOnly: () => false,
       async description() {
         return 'Run a supported workspace build command such as dotnet, msbuild, cmake, or ninja';
       },
@@ -1171,6 +1173,7 @@ function getAllLocalBaseTools(limits = {}) {
       }, ['command']),
       searchHint: 'run safe workspace shell command',
       laneAffinity: ['read', 'review', 'failure', 'change'],
+      isReadOnly: () => false,
       async description() {
         return 'Run a safe workspace PowerShell command for read, diff, build, or test tasks';
       },
@@ -1194,6 +1197,7 @@ function getAllLocalBaseTools(limits = {}) {
       }, ['command']),
       searchHint: 'run a safe PowerShell command explicitly',
       laneAffinity: ['read', 'review', 'failure', 'change'],
+      isReadOnly: () => false,
       async description() {
         return 'Run a safe PowerShell command inside the workspace';
       },
@@ -1224,7 +1228,13 @@ function getAllLocalBaseTools(limits = {}) {
   ];
 }
 
-function createLocalToolCollection({ workspacePath = '', sessionId = '', limits = {}, runtimeBridge = {} } = {}) {
+function createLocalToolCollection({
+  workspacePath = '',
+  sessionId = '',
+  limits = {},
+  runtimeBridge = {},
+  authorizeToolUse = null,
+} = {}) {
   const normalizedWorkspacePath = toStringValue(workspacePath);
   const normalizedSessionId = toStringValue(sessionId);
   const tools = getAllLocalBaseTools(limits).filter((tool) => tool.isEnabled());
@@ -1246,14 +1256,18 @@ function createLocalToolCollection({ workspacePath = '', sessionId = '', limits 
     describe(toolName) {
       return findToolByName(tools, toStringValue(toolName)) || null;
     },
-    async call(toolName, input = {}) {
+    async call(toolName, input = {}, runtimeContext = {}) {
       const normalizedToolName = toStringValue(toolName);
       const tool = findToolByName(tools, normalizedToolName);
       if (!tool) {
         return { ok: false, error: `tool_not_registered:${normalizedToolName}` };
       }
+      const effectiveContext = {
+        ...context,
+        ...(runtimeContext && typeof runtimeContext === 'object' ? runtimeContext : {}),
+      };
       const normalizedInput = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
-      const invocation = await normalizeToolInvocation(tool, normalizedInput, context);
+      const invocation = await normalizeToolInvocation(tool, normalizedInput, effectiveContext);
       if (!invocation.ok) {
         return {
           ok: false,
@@ -1264,8 +1278,25 @@ function createLocalToolCollection({ workspacePath = '', sessionId = '', limits 
           ...(invocation.path ? { path: toStringValue(invocation.path) } : {}),
         };
       }
+      if (typeof authorizeToolUse === 'function') {
+        const decision = await authorizeToolUse({
+          tool,
+          input: invocation.input || {},
+          context: effectiveContext,
+        });
+        if (decision && decision.allow === false) {
+          return {
+            ok: false,
+            tool: normalizedToolName,
+            error: 'tool_permission_denied',
+            reason: toStringValue(decision.reason || 'tool_permission_denied'),
+            message: toStringValue(decision.message || 'Tool call rejected by local policy'),
+            suggested_tools: Array.isArray(decision.suggestedTools) ? decision.suggestedTools : [],
+          };
+        }
+      }
       try {
-        return await tool.call(invocation.input || {}, context);
+        return await tool.call(invocation.input || {}, effectiveContext);
       } catch (error) {
         return {
           ok: false,
