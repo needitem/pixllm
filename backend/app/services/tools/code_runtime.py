@@ -5,7 +5,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from ... import config
-from ..chat.retrieval.query_rewrite import build_query_rewrite
+from ..retrieval.query_rewrite import build_query_rewrite
 from ...core.policy import SecurityPolicy
 from .access import register_code_search, register_listed_files
 from .codebase import extract_symbol_query_candidates

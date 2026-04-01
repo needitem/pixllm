@@ -6,7 +6,7 @@ const {
   migrateLegacyFile
 } = require('./storage_paths.cjs');
 
-const SETTINGS_KEYS = ['serverBaseUrl', 'apiToken', 'workspacePath', 'selectedModel', 'recentWorkspaces'];
+const SETTINGS_KEYS = ['serverBaseUrl', 'apiToken', 'llmBaseUrl', 'llmApiToken', 'workspacePath', 'selectedModel', 'recentWorkspaces'];
 const ENCRYPTED_TOKEN_PREFIX = 'enc:v1:';
 
 function settingsPath() {
@@ -17,6 +17,8 @@ function defaultSettings() {
   return {
     serverBaseUrl: 'http://192.168.2.238:8000/api',
     apiToken: process.env.PIXLLM_API_TOKEN || '',
+    llmBaseUrl: process.env.PIXLLM_LLM_BASE_URL || '',
+    llmApiToken: process.env.PIXLLM_LLM_API_TOKEN || '',
     workspacePath: '',
     selectedModel: 'qwen3.5-27b',
     recentWorkspaces: []
@@ -93,7 +95,8 @@ function decodeApiToken(value) {
 function serializeSettings(source) {
   return {
     ...source,
-    apiToken: encodeApiToken(source?.apiToken)
+    apiToken: encodeApiToken(source?.apiToken),
+    llmApiToken: encodeApiToken(source?.llmApiToken)
   };
 }
 
@@ -102,7 +105,7 @@ function normalizeSettings(source) {
   for (const key of SETTINGS_KEYS) {
     if (key === 'recentWorkspaces') {
       normalized[key] = normalizeWorkspaceList(source?.[key]);
-    } else if (key === 'apiToken' && typeof source?.[key] === 'string') {
+    } else if ((key === 'apiToken' || key === 'llmApiToken') && typeof source?.[key] === 'string') {
       normalized[key] = decodeApiToken(source[key]);
     } else if (typeof source?.[key] === 'string') {
       normalized[key] = source[key];

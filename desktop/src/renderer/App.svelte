@@ -8,9 +8,20 @@
     fetchRuns,
     rejectRun,
     resumeRun,
-    streamChat,
+    type StreamAssistantMessagePayload,
+    streamLocalAgentChat,
     type StreamCancelledPayload,
     type ExecutionRun,
+    type StreamModelPayload,
+    type StreamRequestStartPayload,
+    type StreamSessionRestoredPayload,
+    type StreamTerminalPayload,
+    type StreamToolBatchPayload,
+    type StreamBriefPayload,
+    type StreamTransitionPayload,
+    type StreamToolUsePayload,
+    type StreamToolResultPayload,
+    type StreamUserQuestionPayload,
     type RunApproval,
     type RunArtifact,
     type RunStep,
@@ -113,6 +124,8 @@
   const DEFAULT_SETTINGS: DesktopSettings = {
     serverBaseUrl: 'http://192.168.2.238:8000/api',
     apiToken: '',
+    llmBaseUrl: '',
+    llmApiToken: '',
     workspacePath: '',
     selectedModel: 'qwen3.5-27b',
     recentWorkspaces: []
@@ -150,8 +163,6 @@
   let localToolError = '';
   let localPrimaryFilePath = '';
   let localPrimaryFileContent = '';
-  let localWorkspaceGraph: Record<string, unknown> = {};
-  const useAutoLocalLoop = true;
 
   let chatInput = '';
   const includeWorkspaceContext = true;
@@ -258,6 +269,36 @@
     const text = String(value || '').trim();
     if (!text) return 'No prompt recorded.';
     return text.length > limit ? `${text.slice(0, limit - 3)}...` : text;
+  }
+
+  function summarizeTransition(payload?: StreamTransitionPayload): string {
+    const reason = String(payload?.reason || '').trim();
+    if (!reason) return 'Runtime transition';
+    const labels: Record<string, string> = {
+      message_budget_compaction: 'Transcript compacted for message budget',
+      tool_result_budget_compaction: 'Older tool results compacted',
+      approx_token_budget_compaction: 'Approximate token budget compaction',
+      reactive_compact_retry: 'Reactive compaction retry',
+      max_output_tokens_escalate: 'Raised model output budget',
+      truncated_assistant_recovery: 'Recovering from truncated assistant output',
+      max_output_tokens_recovery: 'Continuing after output cutoff',
+      repeated_tool_batch_recovery: 'Blocked repeated tool batch',
+      tool_failure_recovery: 'Recovering after tool failures',
+      next_turn: 'Continuing to next reasoning turn',
+      final_answer: 'Final answer produced',
+      fallback: 'Fallback answer produced',
+      assistant_parse_retry: 'Retrying after malformed assistant output',
+      missing_tool_use_or_answer: 'Assistant produced neither answer nor tool request',
+      model_retry: 'Retrying model request',
+      cancelled: 'Run cancelled'
+    };
+    return labels[reason] || reason.replace(/_/g, ' ');
+  }
+
+  function summarizeTerminal(payload?: StreamTerminalPayload): string {
+    const reason = String(payload?.reason || '').trim();
+    if (!reason) return 'Run completed';
+    return reason.replace(/_/g, ' ');
   }
 
   function createMessageId() {
@@ -465,11 +506,24 @@
         summary: '',
         contextText: '',
         error: '',
+        workflowLane: {},
         workspaceGraph: {}
       };
     }
 
     const relatedFiles = ranked.map((item) => item.path).slice(0, 4);
+    const workflowLane =
+      /\.(cs|vb|c|cc|cpp|cxx|h|hh|hpp|hxx|py|js|cjs|mjs|ts|tsx|jsx)$/i.test(primaryPath)
+        ? {
+            name: 'read',
+            source: 'renderer_fallback',
+            reasons: ['selected_path_is_executable']
+          }
+        : {
+            name: 'read',
+            source: 'renderer_fallback',
+            reasons: ['renderer_recovery']
+          };
     const summary = `Renderer fallback recovered local evidence. Primary file: ${primaryPath}`;
     const contextText = [
       '[Local Flow Summary]',
@@ -490,6 +544,7 @@
       error: '',
       primaryFilePath: primaryPath,
       primaryFileContent: primaryContent,
+      workflowLane,
       workspaceGraph: {
         version: 1,
         question: prompt,
@@ -505,71 +560,6 @@
         })),
         edges: [],
       }
-    };
-  }
-
-  function buildLocalOverlayPayload(prompt: string) {
-    if (!settings.workspacePath) {
-      return {};
-    }
-    const hasLocalOverlay = hasUsableLocalOverlayEvidence();
-    if (!hasLocalOverlay) {
-      return {
-        client_metadata: appInfo
-          ? {
-              app_name: appInfo.name,
-              app_version: appInfo.version,
-              build_revision: appInfo.buildRevision,
-              build_time: appInfo.buildTime,
-              build_id: appInfo.buildId,
-              is_packaged: appInfo.isPackaged,
-              platform: appInfo.platform
-            }
-          : {}
-      };
-    }
-    const overlaySelectedFilePath = selectedFilePath || localPrimaryFilePath;
-    const overlaySelectedFileContent = selectedFileContent || localPrimaryFileContent;
-    const workspaceChangePaths = extractChangedPaths(`${workspaceStatus || ''}\n${workspaceDiff || ''}`);
-
-    const overlayAttachment = {
-      kind: 'local_workspace_overlay',
-      name: workspaceName || 'workspace-overlay',
-      path: settings.workspacePath,
-      content_type: 'application/json',
-      metadata: {
-        workspace_path: settings.workspacePath,
-        selected_file_path: overlaySelectedFilePath || '',
-        selected_file_content: overlaySelectedFileContent ? overlaySelectedFileContent.slice(0, 8000) : '',
-        workspace_status: workspaceStatus ? workspaceStatus.slice(0, 4000) : '',
-        workspace_diff: workspaceDiff ? workspaceDiff.slice(0, 6000) : '',
-        workspace_change_paths: workspaceChangePaths.slice(0, 64),
-        local_summary: localToolSummary || '',
-        local_context_text: localToolContext || '',
-        local_error: localToolError || '',
-        local_trace: localToolTrace,
-        workspace_graph: localWorkspaceGraph,
-        question: prompt
-      }
-    };
-
-    return {
-      workspace_id: settings.workspacePath,
-      attachments: [overlayAttachment],
-      tool_scope: ['local_workspace_overlay', 'server_code_baseline'],
-      goal: 'Use the local workspace as the primary code graph. Consult server-side engine code only when local code references engine/framework symbols that need baseline lookup.',
-      task_type: 'workspace_overlay',
-      client_metadata: appInfo
-        ? {
-            app_name: appInfo.name,
-            app_version: appInfo.version,
-            build_revision: appInfo.buildRevision,
-            build_time: appInfo.buildTime,
-            build_id: appInfo.buildId,
-            is_packaged: appInfo.isPackaged,
-            platform: appInfo.platform
-          }
-        : {}
     };
   }
 
@@ -1106,7 +1096,6 @@
     selectedFileContent = '';
     localPrimaryFilePath = '';
     localPrimaryFileContent = '';
-    localWorkspaceGraph = {};
     workspaceSearchResults = [];
     localToolTrace = [];
     localToolSummary = '';
@@ -1121,6 +1110,8 @@
     try {
       const serverBaseUrl = settingsForm.serverBaseUrl.trim();
       const apiToken = settingsForm.apiToken.trim();
+      const llmBaseUrl = settingsForm.llmBaseUrl.trim();
+      const llmApiToken = settingsForm.llmApiToken.trim();
       const selectedModel = settingsForm.selectedModel.trim();
 
       if (!serverBaseUrl || !selectedModel) {
@@ -1131,6 +1122,8 @@
       const next = await desktop.saveSettings({
         serverBaseUrl,
         apiToken,
+        llmBaseUrl,
+        llmApiToken,
         selectedModel
       });
       applyLoadedSettings(next);
@@ -1288,64 +1281,6 @@
 
   }
 
-  async function runAutoLocalLoop(prompt: string) {
-    const question = String(prompt || '').trim();
-    if (!settings.workspacePath || !question) {
-      localToolTrace = [];
-      localToolSummary = '';
-      localToolContext = '';
-      localToolError = '';
-      localPrimaryFilePath = '';
-      localPrimaryFileContent = '';
-      localWorkspaceGraph = {};
-      return;
-    }
-
-    const loop = await desktop.runLocalToolLoop({
-      workspacePath: settings.workspacePath,
-      question,
-      selectedFilePath,
-      maxRounds: 12,
-      serverBaseUrl: settings.serverBaseUrl,
-      apiToken: settings.apiToken,
-      model: settings.selectedModel || 'qwen3.5-27b'
-    });
-
-    localToolTrace = Array.isArray(loop.trace) ? loop.trace : [];
-    localToolSummary = loop.summary || '';
-    localToolContext = loop.contextText || '';
-    localToolError = loop.error || '';
-    localPrimaryFilePath = loop.primaryFilePath || '';
-    localPrimaryFileContent = loop.primaryFileContent || '';
-    localWorkspaceGraph =
-      loop.workspaceGraph && typeof loop.workspaceGraph === 'object' ? loop.workspaceGraph : {};
-
-    if (!hasUsableLocalOverlayEvidence()) {
-      const recovered = await recoverLocalEvidenceFromWorkspace(question);
-      if (Array.isArray(recovered.trace) && recovered.trace.length > 0) {
-        localToolTrace = recovered.trace;
-      }
-      if (recovered.summary) {
-        localToolSummary = recovered.summary;
-      }
-      if (recovered.contextText) {
-        localToolContext = recovered.contextText;
-      }
-      if (recovered.primaryFilePath) {
-        localPrimaryFilePath = recovered.primaryFilePath;
-      }
-      if (recovered.primaryFileContent) {
-        localPrimaryFileContent = recovered.primaryFileContent;
-      }
-      if (recovered.workspaceGraph && typeof recovered.workspaceGraph === 'object') {
-        localWorkspaceGraph = recovered.workspaceGraph;
-      }
-      if (hasUsableLocalOverlayEvidence()) {
-        localToolError = '';
-      }
-    }
-  }
-
   async function activateWorkspace(workspacePath: string) {
     const target = String(workspacePath || '').trim();
     if (!target || target === settings.workspacePath) {
@@ -1403,7 +1338,6 @@
     localToolError = '';
     localPrimaryFilePath = '';
     localPrimaryFileContent = '';
-    localWorkspaceGraph = {};
     selectedExecutionMessageId = assistantMessageId;
     selectedExecutionItemId = '';
     conversation = [
@@ -1434,51 +1368,24 @@
     await persistCurrentSession({ titleHint: prompt });
 
     try {
-      if (useAutoLocalLoop) {
-        updateConversationMessage(assistantMessageId, (message) => ({
-          ...message,
-          status: 'Running local tool loop...',
-          state: 'streaming'
+      const historyMessages = conversation
+        .filter((message) => message.id !== assistantMessageId)
+        .map((message) => ({
+          role: message.role,
+          content: message.content
         }));
-        appendStatusEvent(assistantMessageId, { message: 'Running local tool loop...' });
-        await runAutoLocalLoop(prompt);
-        updateConversationMessage(assistantMessageId, (message) => ({
-          ...message,
-          localTrace: localToolTrace,
-          localSummary: localToolSummary,
-          localError: localToolError
-        }));
-        await persistCurrentSession({ titleHint: prompt });
-      }
 
-      if (settings.workspacePath && useAutoLocalLoop && !hasUsableLocalOverlayEvidence()) {
-        const warningMessage =
-          localToolError ||
-          localToolSummary ||
-          'Local workspace evidence collection did not produce usable code context. Continuing with server search only.';
-        updateConversationMessage(assistantMessageId, (message) => ({
-          ...message,
-          status: 'Local workspace anchor unavailable. Continuing with server search...',
-          state: 'streaming',
-          localTrace: localToolTrace,
-          localSummary: localToolSummary || warningMessage,
-          localError: warningMessage
-        }));
-        appendStatusEvent(assistantMessageId, {
-          message: 'Local workspace anchor unavailable. Continuing with server search...',
-          phase: 'local_overlay'
-        });
-        await persistCurrentSession({ titleHint: prompt });
-      }
-
-      const requestOptions = buildLocalOverlayPayload(prompt);
-
-      const stream = await streamChat(
-        settings.serverBaseUrl,
-        settings.apiToken,
-        prompt,
-        settings.selectedModel || 'qwen3.5-27b',
-        requestOptions,
+      const stream = await streamLocalAgentChat(
+        {
+          workspacePath: settings.workspacePath || '',
+          prompt,
+          model: settings.selectedModel || 'qwen3.5-27b',
+          baseUrl: settings.llmBaseUrl || settings.serverBaseUrl,
+          apiToken: settings.llmApiToken || settings.apiToken,
+          selectedFilePath,
+          sessionId: selectedSessionId || '',
+          historyMessages
+        },
         {
           onToken: (chunk) => {
             updateConversationMessage(assistantMessageId, (message) => ({
@@ -1487,11 +1394,113 @@
               state: 'streaming'
             }));
           },
+          onRequestStart: (payload?: StreamRequestStartPayload) => {
+            appendStatusEvent(assistantMessageId, {
+              message: payload?.resumed ? 'Resuming existing session' : 'Started agent request',
+              phase: 'request_start'
+            });
+          },
+          onSessionRestored: (_payload?: StreamSessionRestoredPayload) => {
+            appendStatusEvent(assistantMessageId, {
+              message: 'Restored previous agent runtime state',
+              phase: 'session_restored'
+            });
+          },
+          onModel: (payload?: StreamModelPayload) => {
+            const preview = String(payload?.preview || '').trim();
+            if (!preview) return;
+            updateConversationMessage(assistantMessageId, (message) => ({
+              ...message,
+              status: `Model: ${preview}`,
+              state: 'streaming'
+            }));
+          },
+          onAssistantMessage: (payload?: StreamAssistantMessagePayload) => {
+            const toolUses = Number(payload?.toolUses || 0);
+            appendStatusEvent(assistantMessageId, {
+              message:
+                toolUses > 0
+                  ? `Assistant emitted ${toolUses} tool request${toolUses === 1 ? '' : 's'}`
+                  : 'Assistant emitted answer text',
+              phase: 'assistant_message'
+            });
+          },
+          onToolUse: (payload?: StreamToolUsePayload) => {
+            const name = String(payload?.name || '').trim();
+            if (!name) return;
+            appendStatusEvent(assistantMessageId, {
+              message: `Model requested ${name}`,
+              phase: 'tool_use',
+              tool: name
+            });
+          },
+          onToolResult: (payload?: StreamToolResultPayload) => {
+            const name = String(payload?.name || '').trim();
+            if (!name) return;
+            appendStatusEvent(assistantMessageId, {
+              message: payload?.ok === false ? `${name} failed` : `${name} completed`,
+              phase: 'tool_result',
+              tool: name
+            });
+          },
+          onToolBatchStart: (payload?: StreamToolBatchPayload) => {
+            appendStatusEvent(assistantMessageId, {
+              message: payload?.count && payload.count > 1 ? `Starting tool batch (${payload.count})` : 'Starting tool batch',
+              phase: 'tool_batch_start'
+            });
+          },
+          onToolBatchEnd: (payload?: StreamToolBatchPayload) => {
+            appendStatusEvent(assistantMessageId, {
+              message:
+                payload?.allFailed
+                  ? 'Tool batch ended with failures'
+                  : payload?.count && payload.count > 1
+                    ? `Finished tool batch (${payload.count})`
+                    : 'Finished tool batch',
+              phase: 'tool_batch_end'
+            });
+          },
+          onTransition: (payload?: StreamTransitionPayload) => {
+            appendStatusEvent(assistantMessageId, {
+              message: summarizeTransition(payload),
+              phase: 'transition'
+            });
+          },
+          onTerminal: (payload?: StreamTerminalPayload) => {
+            appendStatusEvent(assistantMessageId, {
+              message: summarizeTerminal(payload),
+              phase: 'terminal'
+            });
+          },
+          onUserQuestion: async (
+            payload?: StreamUserQuestionPayload,
+            respond?: (answer: string) => Promise<{ ok: boolean; requestId: string; questionId: string }>
+          ) => {
+            const promptText = String(payload?.prompt || '').trim() || 'Agent needs more input.';
+            const titleText = String(payload?.title || '').trim() || 'Question';
+            appendStatusEvent(assistantMessageId, {
+              message: `${titleText}: waiting for your input`,
+              phase: 'user_question'
+            });
+            const answer = window.prompt(promptText, String(payload?.defaultValue || ''));
+            await respond?.(answer == null ? '' : answer);
+            appendStatusEvent(assistantMessageId, {
+              message: `${titleText}: response submitted`,
+              phase: 'user_question'
+            });
+          },
+          onBrief: (payload?: StreamBriefPayload) => {
+            const messageText = String(payload?.message || '').trim();
+            if (!messageText) return;
+            appendStatusEvent(assistantMessageId, {
+              message: messageText,
+              phase: 'brief'
+            });
+          },
           onStatus: (payload?: StreamStatusPayload) => {
             const statusMessage = payload?.message || payload?.phase || 'Streaming...';
             updateConversationMessage(assistantMessageId, (message) => ({
               ...message,
-              runId: payload?.run_id || message.runId,
               status: statusMessage,
               state: 'streaming'
             }));
@@ -1500,20 +1509,36 @@
               phase: payload?.phase,
               tool: payload?.tool
             });
-            if (payload?.run_id) {
-              selectedRunId = payload.run_id;
-              startRunDetailPolling(assistantMessageId, payload.run_id);
-            }
             void persistCurrentSession({ titleHint: prompt });
           },
           onDone: async (payload?: StreamDonePayload) => {
+            localToolTrace = Array.isArray(payload?.local_trace)
+              ? payload.local_trace.map((step, index) => ({
+                  round: Number((step as Record<string, unknown>)?.round || index + 1),
+                  thought: String((step as Record<string, unknown>)?.thought || ''),
+                  tool: String((step as Record<string, unknown>)?.tool || ''),
+                  input:
+                    (step as Record<string, unknown>)?.input &&
+                    typeof (step as Record<string, unknown>).input === 'object'
+                      ? ((step as Record<string, unknown>).input as Record<string, unknown>)
+                      : {},
+                  observation: (step as Record<string, unknown>)?.observation ?? null
+                }))
+              : [];
+            localToolSummary = typeof payload?.local_summary === 'string' ? payload.local_summary : '';
+            localPrimaryFilePath =
+              typeof payload?.primary_file_path === 'string' ? payload.primary_file_path : '';
+            localPrimaryFileContent =
+              typeof payload?.primary_file_content === 'string' ? payload.primary_file_content : '';
             updateConversationMessage(assistantMessageId, (message) => ({
               ...message,
               content:
                 payload?.answer && !message.content.trim() ? payload.answer : message.content,
               status: undefined,
               state: 'done',
-              runId: payload?.run_id || message.runId,
+              localTrace: localToolTrace,
+              localSummary: localToolSummary,
+              localError: '',
               reasoningSummary:
                 payload?.reasoning_summary && typeof payload.reasoning_summary === 'object'
                   ? payload.reasoning_summary
@@ -1531,22 +1556,10 @@
                   ? payload.local_overlay
                   : undefined
             }));
-            if (payload?.run_id) {
-              selectedRunId = payload.run_id;
-              stopRunDetailPolling(payload.run_id);
-              try {
-                const detail = await fetchRun(settings.serverBaseUrl, settings.apiToken, payload.run_id);
-                updateRunSnapshotMessage(assistantMessageId, detail);
-              } catch {
-                // Keep the message even if run detail fails to load.
-              }
-            } else {
-              stopRunDetailPolling();
-            }
+            stopRunDetailPolling();
             clearActiveStreamHooks();
             busy = false;
             await persistCurrentSession({ titleHint: prompt });
-            await refreshRuns();
           },
           onCancelled: (payload?: StreamCancelledPayload) => {
             const cancelledMessage = payload?.message || 'Cancelled';
@@ -2013,6 +2026,14 @@
               <label class="field">
                 <span>API Token</span>
                 <input bind:value={settingsForm.apiToken} type="password" placeholder="Optional bearer token" />
+              </label>
+              <label class="field">
+                <span>LLM Base URL</span>
+                <input bind:value={settingsForm.llmBaseUrl} placeholder="Optional direct LLM URL" />
+              </label>
+              <label class="field">
+                <span>LLM Token</span>
+                <input bind:value={settingsForm.llmApiToken} type="password" placeholder="Optional direct LLM token" />
               </label>
               <label class="field">
                 <span>Chat Model</span>

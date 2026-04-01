@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends
 from ..schemas.search import SearchRequest
 from ..envelopes import ok
 from ..deps import get_search_svc, get_embed_model, get_code_tools
-from ..services.chat.retrieval.service import run_retrieval, run_code_tool_retrieval
+from ..services.retrieval.service import run_retrieval, run_code_tool_retrieval
 
 
 router = APIRouter()

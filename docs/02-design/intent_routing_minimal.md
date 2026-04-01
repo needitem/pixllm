@@ -2,117 +2,71 @@
 
 ## Summary
 
-PIXLLM now treats intent routing as a small, fail-open hinting layer instead of a
-strict classifier gate.
+PIXLLM의 라우터는 더 이상 세밀한 intent classifier가 아닙니다.
 
-The goal is simple:
+이 라우터의 유일한 역할은 현재 턴을 어느 실행 표면으로 보낼지 결정하는 것입니다.
 
-- keep broad engineering questions flowing through the code-first pipeline
-- avoid request failures caused by invalid classifier labels
-- reserve special response types for only a few explicit user signals
+## 1. 라우팅 버킷
 
-This policy is especially important for this project because most real user
-traffic is code-oriented:
+라우터는 아래 다섯 값만 고릅니다.
 
-- code explanation
-- flow / structure summaries
-- usage walkthroughs
-- debugging
-- implementation or patch requests
+- `answer_now`
+- `tool_loop`
+- `task_run`
+- `team_run`
+- `remote_run`
 
-In that environment, an aggressive multi-intent classifier creates more
-instability than value.
+## 2. 기본 규칙
 
-## Current Policy
+- 명시적 기술 질문은 기본적으로 `tool_loop`입니다.
+- 편집, 테스트, 빌드, 실행 요청은 `task_run`입니다.
+- 병렬 분해가 명확히 유리한 경우만 `team_run`입니다.
+- 원격 환경, 격리 worktree, 재연결 세션이 필요하면 `remote_run`입니다.
+- 이미 충분한 근거가 세션 안에 있고 추가 실행이 필요 없을 때만 `answer_now`입니다.
 
-The front router is intentionally minimal and deterministic.
+## 3. 입력 신호
 
-It now resolves a coarse routing bucket first:
+라우터는 아래 구조 신호만 봅니다.
 
-- `read_code`
-- `change_code`
-- `doc_lookup`
+- 사용자가 변경을 요청했는가
+- 명령 실행이나 검증이 필요한가
+- 장시간 작업이 예상되는가
+- 병렬 분해 또는 위임이 필요한가
+- 현재 세션에 충분한 evidence가 이미 있는가
+- 로컬이 아니라 원격 실행면이 필요한가
 
-Then it derives a compatible `response_type` hint for downstream routing.
+## 4. 하지 않는 것
 
-Default fallback:
+- `bug_fix`, `migration`, `usage_guide`, `design_review` 같은 큰 taxonomy를 여기서 맞추지 않습니다.
+- 문장 키워드만으로 docs-first lane을 선택하지 않습니다.
+- 저신뢰 분류값 때문에 요청을 fail-close하지 않습니다.
 
-- broad engineering prompts -> `read_code` -> `code_explain`
-- explicit document lookup -> `doc_lookup`
-- explicit change intent or write-capable request metadata -> `change_code`
+## 5. 출력 필드
 
-## Why We Minimized Intent Classification
+라우터 출력은 최소한 아래를 포함합니다.
 
-The previous direction depended too much on a fine-grained intent classifier.
-That caused several problems:
+```json
+{
+  "route": "tool_loop",
+  "mutation_required": false,
+  "verification_required": "light",
+  "preferred_surface": "local",
+  "reason": "technical_request_without_sufficient_evidence"
+}
+```
 
-- invalid LLM output could block the request during prepare
-- broad Korean prompts were hard to fit into narrow labels
-- the classifier had to solve distinctions that retrieval can solve more safely
-- latency and fragility increased without adding much routing value
+## 6. 예시
 
-Examples of prompts that should not fail at intent time:
+- `이 함수가 어디서 호출되는지 찾아줘` -> `tool_loop`
+- `이 버그 고치고 테스트 돌려줘` -> `task_run`
+- `이 리팩터링을 구현/리뷰로 나눠 병렬 진행해` -> `team_run`
+- `원격 환경에서 세션 띄워서 확인해` -> `remote_run`
+- `방금 읽은 두 파일만 기준으로 요약해줘` -> `answer_now`
 
-- `영상 정합 흐름 정리해줘`
-- `background map 로드 흐름 설명`
-- `이 모듈 구조 설명해줘`
+## 7. 설계 원칙
 
-These are not high-risk classification problems. They are normal code-reading
-questions and should proceed directly to code-first retrieval.
+- 대부분의 엔지니어링 질문은 `tool_loop`로 흘려보냅니다.
+- 의미 분류보다 실행 요구를 먼저 봅니다.
+- 세부 작업 성격은 이후 task/agent 단계에서 정해도 늦지 않습니다.
 
-## Recommended Routing Model
-
-Think of the system as using three layers:
-
-1. Minimal front router
-2. Runtime routing profile
-3. Retrieval / ReAct loop
-
-The front router should answer only:
-
-- is this clearly docs-first?
-- is this clearly a write / change request?
-- otherwise: treat it as read-code
-
-The runtime profile and retrieval loop do the real work:
-
-- choose code vs docs priority
-- gather evidence
-- refine when evidence is weak
-- generate the final answer style
-
-## Design Rules
-
-- Do not fail closed on invalid or low-confidence intent output.
-- Do not use the intent layer as the main source of truth for code vs docs.
-- Do not create large keyword tables that become a second classifier.
-- Do prefer structured request metadata such as `task_type`, `tool_scope`, and `approval_mode`.
-- Do keep a very small set of deterministic strong-signal checks.
-- Do default broad technical prompts to `read_code`, which normally maps to `code_explain`.
-- Do treat `response_type` primarily as a downstream presentation hint.
-
-## Practical Effect
-
-With this policy:
-
-- `NXImageView usage guide` -> `read_code` -> `usage_guide`
-- `NXImageView 문서 찾아줘` -> `doc_lookup`
-- `영상 정합 흐름 정리해줘` -> `read_code` -> `code_explain`
-- explicit write request metadata -> `change_code`
-
-The important change is not the exact label.
-The important change is that the request continues through the normal runtime
-pipeline instead of failing during intent resolution.
-
-## Implementation Notes
-
-Relevant code:
-
-- `backend/app/services/chat/intent.py`
-- `backend/app/services/chat/runtime_profile.py`
-- `backend/app/services/chat/retrieval/mode_policy.py`
-
-Validation:
-
-- `backend/tests/test_backend_helpers.py`
-- `backend/tests/test_runtime_profile.py`
+즉 minimal router는 `질문의 이름`을 맞추는 컴포넌트가 아니라, `실행 모드`를 고르는 얇은 게이트여야 합니다.

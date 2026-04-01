@@ -62,6 +62,7 @@ const ALLOWED_TEXT_EXTENSIONS = new Set([
   '.less',
   '.svelte',
   '.sql',
+  '.ipynb',
   '.bat',
   '.cmd',
   '.ps1',
@@ -78,6 +79,7 @@ const SVN_INFO_TIMEOUT_MS = 30_000;
 const SVN_STATUS_TIMEOUT_MS = 30_000;
 const SVN_DIFF_TIMEOUT_MS = 120_000;
 const BUILD_TIMEOUT_MS = 10 * 60 * 1000;
+const SHELL_TIMEOUT_MS = 60_000;
 
 function isAllowedWorkbenchFile(fileName) {
   const lowered = String(fileName || '').toLowerCase();
@@ -1288,6 +1290,112 @@ async function runBuild(workspacePath, tool, args) {
   };
 }
 
+function isDangerousShellCommand(commandText) {
+  const lowered = String(commandText || '').toLowerCase();
+  if (!lowered) return true;
+  if (/[;&><]/.test(lowered)) return true;
+  return [
+    /\bremove-item\b/,
+    /\bdel\b/,
+    /\berase\b/,
+    /\brmdir\b/,
+    /\brd\b/,
+    /\brm\b/,
+    /\bformat\b/,
+    /\bshutdown\b/,
+    /\brestart-computer\b/,
+    /\bstop-computer\b/,
+    /\bgit\s+reset\s+--hard\b/,
+    /\bgit\s+clean\b/,
+    /\bsvn\s+revert\b/,
+  ].some((pattern) => pattern.test(lowered));
+}
+
+function isAllowedShellCommand(commandText) {
+  const lowered = String(commandText || '').trim().toLowerCase();
+  if (!lowered) return false;
+  return [
+    /^git\s+(status|diff|show|log|branch)\b/,
+    /^svn\s+(status|diff|info|log)\b/,
+    /^dotnet\b/,
+    /^msbuild\b/,
+    /^cmake\b/,
+    /^ninja\b/,
+    /^pytest\b/,
+    /^python\b/,
+    /^node\b/,
+    /^npm\b/,
+    /^pnpm\b/,
+    /^yarn\b/,
+    /^rg\b/,
+    /^get-childitem\b/,
+    /^get-content\b/,
+    /^select-string\b/,
+    /^test-path\b/,
+    /^resolve-path\b/,
+    /^ls\b/,
+    /^dir\b/,
+    /^type\b/,
+    /^cat\b/,
+  ].some((pattern) => pattern.test(lowered));
+}
+
+async function runWorkspaceShell(workspacePath, commandText, options = {}) {
+  const script = String(commandText || '').trim();
+  let normalizedPath;
+  try {
+    normalizedPath = await normalizeWorkspacePath(workspacePath);
+  } catch (error) {
+    return invalidWorkspaceResult(error);
+  }
+
+  if (!script) {
+    return {
+      ok: false,
+      code: 1,
+      stdout: '',
+      stderr: '',
+      error: 'empty_command',
+    };
+  }
+  if (isDangerousShellCommand(script)) {
+    return {
+      ok: false,
+      code: 1,
+      stdout: '',
+      stderr: '',
+      error: 'command_rejected_by_safety_policy',
+    };
+  }
+  if (!isAllowedShellCommand(script)) {
+    return {
+      ok: false,
+      code: 1,
+      stdout: '',
+      stderr: '',
+      error: 'command_not_in_allowed_shell_prefixes',
+    };
+  }
+
+  const timeoutMs = Math.max(1_000, Math.min(Number(options.timeoutMs || options.timeout_ms || SHELL_TIMEOUT_MS), BUILD_TIMEOUT_MS));
+  let lastResult = null;
+  for (const candidate of powershellExecutableCandidates()) {
+    lastResult = await runCommand(candidate, ['-NoLogo', '-NoProfile', '-Command', script], normalizedPath, {
+      timeoutMs,
+    });
+    if (lastResult.ok || lastResult.stdout || lastResult.stderr) {
+      return {
+        ...lastResult,
+        command: script,
+      };
+    }
+  }
+  return {
+    ...(lastResult || invalidWorkspaceResult(new Error('powershell_unavailable'))),
+    command: script,
+  };
+}
+
 module.exports = {
   selectWorkspace,
   svnInfo,
@@ -1303,5 +1411,6 @@ module.exports = {
   findReferencesInWorkspace,
   symbolNeighborhoodInWorkspace,
   symbolOutlineInWorkspace,
-  runBuild
+  runBuild,
+  runWorkspaceShell,
 };

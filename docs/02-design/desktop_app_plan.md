@@ -2,117 +2,103 @@
 
 ## 목표
 
-웹 우선 흐름을 데스크톱 우선 흐름으로 바꾼다.
+PIXLLM 데스크톱 앱을 `백엔드 채팅창`이 아니라 `세션 실행 콘솔`로 재설계합니다.
 
-원칙:
+핵심 방향:
 
-- 서버는 중앙 추론 / API 역할
-- 앱은 로컬 workspace / 로컬 툴 역할
-- 질문은 가능한 한 선택한 workbench 기준으로 동작
+- 앱이 주 실행면입니다.
+- 사용자는 `세션`, `태스크`, `아티팩트`, `승인`, `팀 실행`을 앱 안에서 다룹니다.
+- 백엔드는 모델/데이터/제어 평면으로 남고, 앱은 작업 오케스트레이션의 표면이 됩니다.
 
-## 현재 상태 정리
+## 제품 개념
 
-현재까지 구현된 것:
+앱은 아래 다섯 화면군을 중심으로 구성합니다.
 
-- Electron main / preload
-- settings 저장
-- workspace 선택
-- 코드 / 문서 / UI 소스 파일 목록
-- 파일 읽기
-- grep 검색
-- `svn info`, `svn status`, `svn diff`
-- local build
-- backend `/health`, `/runs`, `/chat`
-- run 상세 / approval / resume / cancel
-- 스트리밍 chat
+- 세션 목록과 재개
+- 중앙 작업 스트림
+- 우측 컨텍스트/아티팩트 패널
+- 하단 터미널/로그 패널
+- 승인/팀 상태 패널
 
-추가된 핵심:
+## 핵심 사용자 흐름
 
-- 질문 전 자동 로컬 툴 루프
-- local tool trace / summary
-- 선택적으로 `write_file` 까지 가능한 구조
+1. 사용자가 워크스페이스를 선택합니다.
+2. 새 세션을 열거나 기존 세션을 재개합니다.
+3. 질문, 편집 요청, 리뷰 요청, 빌드/테스트 요청을 보냅니다.
+4. 앱은 실행 과정을 메시지뿐 아니라 tool/task 이벤트로 보여줍니다.
+5. 필요하면 사용자는 approval inbox에서 승인하거나 거절합니다.
+6. 결과는 최종 답변과 함께 diff, 로그, 테스트 결과, 계획서를 아티팩트로 확인합니다.
 
-## 자동 로컬 툴 루프
+## 화면 구성
 
-질문을 서버로 보내기 전에 로컬에서 반복 탐색을 수행한다.
+### 1. Session Rail
 
-현재 툴:
+- 세션 목록
+- 최근 워크스페이스
+- 즐겨찾기된 프로젝트
+- 실행 중 task 배지
 
-- `list_files`
-- `grep`
-- `read_file`
-- `svn_status`
-- `svn_diff`
-- `run_build`
-- `write_file`
+### 2. Main Timeline
 
-기본 동작:
+- 사용자 메시지
+- assistant 응답
+- tool start/result 이벤트
+- task 진행률
+- approval 요청과 처리 결과
+- verification 요약
 
-1. 질문을 받는다.
-2. 로컬 LLM 또는 fallback heuristic 으로 다음 액션을 고른다.
-3. 로컬 툴을 실행한다.
-4. trace를 쌓는다.
-5. 충분한 컨텍스트가 모이면 서버 chat 으로 넘긴다.
+### 3. Context Panel
 
-## 현재 한계
+- 현재 파일과 심볼
+- 수집된 evidence bundle
+- source references
+- 모델/실행 모드
 
-아직 완전한 자율 코딩 에이전트는 아니다.
+### 4. Artifact Panel
 
-현재는:
+- diff viewer
+- build/test 결과
+- 계획서
+- 리뷰 findings
+- 명령 결과 로그
 
-- 로컬에서 사전 탐색
-- 필요하면 파일 쓰기와 build 가능
-- 그 결과를 서버 질문에 포함
+### 5. Team and Bridge Panel
 
-아직 없는 것:
+- 병렬 worker 상태
+- 파일 ownership
+- remote session 상태
+- reconnect / stop 제어
 
-- patch diff 단위 수정
-- 실패한 build/test를 바탕으로 재수정 루프
-- 심볼 인덱스 기반 탐색
-- 장기 작업용 재개/복구
-
-## 다음 단계
+## 단계별 계획
 
 ### Phase 1
 
-- local tool loop 안정화
-- file search / read / build / write trace 고도화
+- 세션 생성/재개
+- 스트리밍 타임라인
+- artifact viewer
+- approval inbox
 
 ### Phase 2
 
-- patch 기반 수정
-- 수정 후 build/test 재실행
-- 실패 시 재탐색 / 재수정 루프
+- task retry/resume
+- patch apply/reject UX
+- structured terminal panel
+- verification result panel
 
 ### Phase 3
 
-- installer / packaging
-- production polish
+- team execution 시각화
+- remote bridge session monitor
+- automation/inbox surface
 
-## 디렉터리
+## 비목표
 
-```text
-desktop/
-  package.json
-  tsconfig.json
-  vite.config.ts
-  src/
-    main/
-      main.cjs
-      preload.cjs
-      settings.cjs
-      workspace.cjs
-      server.cjs
-      local_agent.cjs
-    renderer/
-      index.html
-      main.ts
-      App.svelte
-      app.css
-      lib/
-        api.ts
-        ipc.ts
-        store.ts
-  scripts/
-    smoke-api.mjs
-```
+- 순수 채팅 UX로 회귀하지 않습니다.
+- 웹 프런트엔드를 별도 제품 표면으로 되살리지 않습니다.
+- 모든 작업을 중앙 서버가 먼저 판단하는 구조로 되돌리지 않습니다.
+
+## 성공 기준
+
+- 사용자가 "무슨 작업이 실행됐는지"를 답변 밖에서도 추적할 수 있어야 합니다.
+- 장시간 실행과 파일 변경 결과를 아티팩트로 검토할 수 있어야 합니다.
+- 세션 단위로 재개, retry, review가 가능해야 합니다.

@@ -21,14 +21,14 @@ if (window.location.protocol === 'file:' || allowedHostnames.includes(window.loc
     ipcRenderer.invoke('api:approve-run', baseUrl, apiToken, runId, approvalId, note),
   apiRejectRun: (baseUrl, apiToken, runId, approvalId, note) =>
     ipcRenderer.invoke('api:reject-run', baseUrl, apiToken, runId, approvalId, note),
-  apiChat: (baseUrl, apiToken, message, model, options) => ipcRenderer.invoke('api:chat', baseUrl, apiToken, message, model, options),
-  apiChatStreamStart: (baseUrl, apiToken, message, model, options) =>
-    ipcRenderer.invoke('api:chat-stream-start', baseUrl, apiToken, message, model, options),
-  apiChatStreamCancel: (requestId) => ipcRenderer.invoke('api:chat-stream-cancel', requestId),
-  onChatStreamEvent: (callback) => {
+  agentChatStreamStart: (payload) => ipcRenderer.invoke('agent:chat-stream-start', payload),
+  agentChatStreamCancel: (requestId) => ipcRenderer.invoke('agent:chat-stream-cancel', requestId),
+  answerAgentQuestion: (requestId, questionId, answer) =>
+    ipcRenderer.invoke('agent:question-answer', requestId, questionId, answer),
+  onAgentStreamEvent: (callback) => {
     const listener = (_, payload) => callback(payload);
-    ipcRenderer.on('chat:stream-event', listener);
-    return () => ipcRenderer.removeListener('chat:stream-event', listener);
+    ipcRenderer.on('agent:stream-event', listener);
+    return () => ipcRenderer.removeListener('agent:stream-event', listener);
   },
   chooseWorkspace: () => ipcRenderer.invoke('workspace:choose'),
   svnInfo: (workspacePath) => ipcRenderer.invoke('workspace:svn-info', workspacePath),
@@ -40,7 +40,6 @@ if (window.location.protocol === 'file:' || allowedHostnames.includes(window.loc
   writeWorkspaceFile: (workspacePath, relativePath, content) =>
     ipcRenderer.invoke('workspace:write-file', workspacePath, relativePath, content),
   grepWorkspace: (workspacePath, query, limit) => ipcRenderer.invoke('workspace:grep', workspacePath, query, limit),
-  runLocalToolLoop: (payload) => ipcRenderer.invoke('workspace:local-tool-loop', payload),
   runBuild: (workspacePath, tool, args) => ipcRenderer.invoke('workspace:run-build', workspacePath, tool, args)
   });
 }

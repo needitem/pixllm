@@ -4,16 +4,13 @@ const { app, BrowserWindow, ipcMain } = require('electron');
 const {
   apiApproveRun,
   apiCancelRun,
-  apiChat,
-  cancelChatStream,
   apiHealth,
   apiRejectRun,
   apiResumeRun,
   apiRun,
   apiRuns,
-  startChatStream
 } = require('./server.cjs');
-const { runLocalToolLoop } = require('./local_agent.cjs');
+const { startLocalAgentStream, cancelLocalAgentStream, answerLocalAgentQuestion } = require('./local_agent_service.cjs');
 const { loadBuildInfo } = require('./build_info.cjs');
 const { loadSettings, saveSettings } = require('./settings.cjs');
 const {
@@ -114,7 +111,7 @@ function createRunsWindow(parentWindow) {
 
 app.whenReady().then(() => {
   const win = createWindow();
-  const streamControllers = new Map();
+  const agentStreamControllers = new Map();
   let runsWindow = null;
   const buildInfo = loadBuildInfo();
 
@@ -167,13 +164,14 @@ app.whenReady().then(() => {
     async (_, baseUrl, apiToken, runId, approvalId, note) =>
       apiRejectRun(baseUrl, apiToken, runId, approvalId, note)
   );
-  ipcMain.handle('api:chat', async (_, baseUrl, apiToken, message, model, options) => apiChat(baseUrl, apiToken, message, model, options));
   ipcMain.handle(
-    'api:chat-stream-start',
-    async (event, baseUrl, apiToken, message, model, options) =>
-      startChatStream(event.sender, streamControllers, baseUrl, apiToken, message, model, options)
+    'agent:chat-stream-start',
+    async (event, payload) => startLocalAgentStream(event.sender, agentStreamControllers, payload)
   );
-  ipcMain.handle('api:chat-stream-cancel', async (_, requestId) => cancelChatStream(streamControllers, requestId));
+  ipcMain.handle('agent:chat-stream-cancel', async (_, requestId) => cancelLocalAgentStream(agentStreamControllers, requestId));
+  ipcMain.handle('agent:question-answer', async (_, requestId, questionId, answer) =>
+    answerLocalAgentQuestion(requestId, questionId, answer)
+  );
 
   ipcMain.handle('workspace:choose', async () => {
     const result = await selectWorkspace(win);
@@ -191,10 +189,6 @@ app.whenReady().then(() => {
   ipcMain.handle('workspace:read-file', async (_, workspacePath, relativePath, options) => readWorkspaceFile(workspacePath, relativePath, options));
   ipcMain.handle('workspace:write-file', async (_, workspacePath, relativePath, content) => writeWorkspaceFile(workspacePath, relativePath, content));
   ipcMain.handle('workspace:grep', async (_, workspacePath, query, limit) => grepWorkspace(workspacePath, query, limit));
-  ipcMain.handle(
-    'workspace:local-tool-loop',
-    async (_, payload) => runLocalToolLoop(payload)
-  );
   ipcMain.handle('workspace:run-build', async (_, workspacePath, tool, args) => runBuild(workspacePath, tool, args));
 
   app.on('activate', () => {

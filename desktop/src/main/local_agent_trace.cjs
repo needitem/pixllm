@@ -181,6 +181,22 @@ function summarizeObservation(toolName, observation, maxChars = 16000) {
   if (toolName === 'list_files') {
     return { ok: true, total: payload.total || 0, items: Array.isArray(payload.items) ? payload.items.slice(0, 500) : [] };
   }
+  if (toolName === 'glob' || toolName === 'glob_files') {
+    return {
+      ok: Boolean(payload.ok),
+      pattern: payload.pattern || '',
+      items: Array.isArray(payload.items) ? payload.items.slice(0, 200) : [],
+      error: payload.error || '',
+    };
+  }
+  if (toolName === 'todo_read' || toolName === 'todo_write') {
+    return {
+      ok: Boolean(payload.ok),
+      total: Number(payload.total || 0),
+      items: Array.isArray(payload.items) ? payload.items.slice(0, 100) : [],
+      error: payload.error || '',
+    };
+  }
   if (toolName === 'grep') {
     return { ok: Boolean(payload.ok), query: payload.query || '', items: Array.isArray(payload.items) ? payload.items.slice(0, 20) : [], error: payload.error || '' };
   }
@@ -210,6 +226,53 @@ function summarizeObservation(toolName, observation, maxChars = 16000) {
       lineRange: String(payload.lineRange || ''),
       symbol: String(payload.symbol || ''),
       matchKind: String(payload.matchKind || payload.match_kind || ''),
+    };
+  }
+  if (toolName === 'write' || toolName === 'write_file') {
+    return {
+      ok: Boolean(payload.ok),
+      path: payload.path || '',
+      bytes: Number(payload.bytes || 0),
+      error: payload.error || '',
+    };
+  }
+  if (toolName === 'edit' || toolName === 'replace_in_file') {
+    return {
+      ok: Boolean(payload.ok),
+      path: payload.path || '',
+      occurrences: Number(payload.occurrences || 0),
+      replace_all: Boolean(payload.replace_all || payload.replaceAll),
+      error: payload.error || '',
+    };
+  }
+  if (toolName === 'run_build') {
+    return {
+      ok: Boolean(payload.ok),
+      tool: payload.tool || '',
+      code: Number(payload.code || 0),
+      stdout: String(payload.stdout || '').slice(0, maxChars),
+      stderr: String(payload.stderr || '').slice(0, maxChars),
+      error: payload.error || '',
+    };
+  }
+  if (toolName === 'bash' || toolName === 'run_shell' || toolName === 'powershell') {
+    return {
+      ok: Boolean(payload.ok),
+      command: payload.command || '',
+      code: Number(payload.code || 0),
+      stdout: String(payload.stdout || '').slice(0, maxChars),
+      stderr: String(payload.stderr || '').slice(0, maxChars),
+      error: payload.error || '',
+    };
+  }
+  if (toolName === 'web' || toolName === 'web_fetch') {
+    return {
+      ok: Boolean(payload.ok),
+      url: payload.url || '',
+      status: Number(payload.status || 0),
+      content: String(payload.content || '').slice(0, maxChars),
+      truncated: Boolean(payload.truncated),
+      error: payload.error || '',
     };
   }
   if (toolName === 'symbol_outline') {

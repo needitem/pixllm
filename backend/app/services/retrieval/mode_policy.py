@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import Optional
 
-from .... import rag_config
+from ... import rag_config
 
 
 @dataclass
@@ -88,11 +88,9 @@ def _apply_mode_guards(*, response_type: str, default_mode: str, chosen_mode: st
     chosen = normalize_mode(chosen_mode) or default_mode
     why = reason
 
-    # Keep explicit doc lookup on document retrieval.
     if rt == "doc_lookup" and chosen != "docs":
         return "docs", f"{why}_doc_lookup_guard"
 
-    # For docs-first intents, prevent code-only mode.
     if default_mode == "docs" and chosen == "code":
         return "docs", f"{why}_doc_lookup_guard"
 

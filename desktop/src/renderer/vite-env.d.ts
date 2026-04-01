@@ -33,22 +33,19 @@ declare global {
       ) => Promise<unknown>;
       apiApproveRun: (baseUrl: string, apiToken: string, runId: string, approvalId: string, note: string) => Promise<unknown>;
       apiRejectRun: (baseUrl: string, apiToken: string, runId: string, approvalId: string, note: string) => Promise<unknown>;
-      apiChat: (
-        baseUrl: string,
-        apiToken: string,
-        message: string,
-        model: string,
-        options?: Record<string, unknown>
-      ) => Promise<{ answer?: string; run_id?: string; query_time_ms?: number }>;
-      apiChatStreamStart: (
-        baseUrl: string,
-        apiToken: string,
-        message: string,
-        model: string,
-        options?: Record<string, unknown>
-      ) => Promise<{ requestId: string }>;
-      apiChatStreamCancel: (requestId: string) => Promise<{ ok: boolean; requestId: string }>;
-      onChatStreamEvent: (
+      agentChatStreamStart: (payload: {
+        workspacePath: string;
+        prompt: string;
+        model: string;
+        baseUrl: string;
+        apiToken: string;
+        selectedFilePath?: string;
+        sessionId?: string;
+        historyMessages?: Array<{ role: string; content: string }>;
+      }) => Promise<{ requestId: string }>;
+      agentChatStreamCancel: (requestId: string) => Promise<{ ok: boolean; requestId: string }>;
+      answerAgentQuestion: (requestId: string, questionId: string, answer: string) => Promise<{ ok: boolean; requestId: string; questionId: string }>;
+      onAgentStreamEvent: (
         callback: (payload: {
           requestId: string;
           event: string;
@@ -78,30 +75,6 @@ declare global {
         query: string,
         limit?: number
       ) => Promise<{ ok: boolean; query: string; items: Array<{ path: string; line: number; text: string }>; error?: string }>;
-      runLocalToolLoop: (payload: {
-        workspacePath: string;
-        question: string;
-        selectedFilePath?: string;
-        maxRounds?: number;
-        serverBaseUrl?: string;
-        apiToken?: string;
-        model?: string;
-      }) => Promise<{
-        trace: Array<{
-          round: number;
-          thought: string;
-          tool: string;
-          input: Record<string, unknown>;
-          observation: unknown;
-        }>;
-        summary: string;
-        contextText: string;
-        error?: string;
-        primaryFilePath?: string;
-        primaryFileContent?: string;
-        selectedFiles?: string[];
-        workspaceGraph?: Record<string, unknown>;
-      }>;
       runBuild: (workspacePath: string, tool: string, args: string[]) => Promise<WorkspaceCommandResult>;
     };
   }
@@ -109,6 +82,8 @@ declare global {
   type DesktopSettings = {
     serverBaseUrl: string;
     apiToken: string;
+    llmBaseUrl: string;
+    llmApiToken: string;
     workspacePath: string;
     selectedModel: string;
     recentWorkspaces: string[];

@@ -12,7 +12,7 @@ from .deps import init_state, close_state, state
 from .services.auth.service import auth_is_enabled, extract_api_session_token, read_access_token
 from .routers import (
     auth,
-    chat,
+    llm,
     models,
     search,
     conversations,
@@ -84,7 +84,7 @@ async def validation_exception_handler(_, exc: RequestValidationError):
 
 app.include_router(auth.router, prefix=config.API_PREFIX, tags=["auth"])
 app.include_router(health.router, prefix=config.API_PREFIX, tags=["health"])
-app.include_router(chat.router, prefix=config.API_PREFIX, tags=["chat"])
+app.include_router(llm.router, prefix=config.API_PREFIX, tags=["llm"])
 app.include_router(models.router, prefix=config.API_PREFIX, tags=["models"])
 app.include_router(search.router, prefix=config.API_PREFIX, tags=["search"])
 app.include_router(conversations.router, prefix=config.API_PREFIX, tags=["conversations"])

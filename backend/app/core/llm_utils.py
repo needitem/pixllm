@@ -131,6 +131,65 @@ def extract_stream_delta_text(chunk: Any) -> str:
     return _coerce_stream_text(content)
 
 
+def _normalize_tool_call_item(item: Any) -> Dict[str, Any]:
+    function = getattr(item, "function", None)
+    if function is None and isinstance(item, dict):
+        function = item.get("function")
+    if function is None:
+        function = {}
+    name = getattr(function, "name", None)
+    if name is None and isinstance(function, dict):
+        name = function.get("name")
+    arguments = getattr(function, "arguments", None)
+    if arguments is None and isinstance(function, dict):
+        arguments = function.get("arguments")
+    item_id = getattr(item, "id", None)
+    if item_id is None and isinstance(item, dict):
+        item_id = item.get("id")
+    index = getattr(item, "index", None)
+    if index is None and isinstance(item, dict):
+        index = item.get("index")
+    return {
+        "id": str(item_id or ""),
+        "index": int(index or 0),
+        "function": {
+            "name": str(name or ""),
+            "arguments": str(arguments or ""),
+        },
+    }
+
+
+def extract_stream_delta_tool_calls(chunk: Any) -> List[Dict[str, Any]]:
+    choices = getattr(chunk, "choices", None)
+    if choices is None and isinstance(chunk, dict):
+        choices = chunk.get("choices")
+    if not choices:
+        return []
+
+    choice = choices[0]
+    delta = getattr(choice, "delta", None)
+    if delta is None and isinstance(choice, dict):
+        delta = choice.get("delta")
+    if delta is None:
+        return []
+
+    tool_calls = getattr(delta, "tool_calls", None)
+    if tool_calls is None and isinstance(delta, dict):
+        tool_calls = delta.get("tool_calls")
+    if not tool_calls:
+        return []
+    return [_normalize_tool_call_item(item) for item in list(tool_calls)]
+
+
+def extract_message_tool_calls(message: Any) -> List[Dict[str, Any]]:
+    tool_calls = getattr(message, "tool_calls", None)
+    if tool_calls is None and isinstance(message, dict):
+        tool_calls = message.get("tool_calls")
+    if not tool_calls:
+        return []
+    return [_normalize_tool_call_item(item) for item in list(tool_calls)]
+
+
 async def _maybe_await_callback(callback, *args, **kwargs) -> None:
     if callback is None:
         return
@@ -172,6 +231,7 @@ async def stream_chat_completion_text_with_meta(
             )
             saw_token = False
             finish_reason = ""
+            tool_calls: List[Dict[str, Any]] = []
             for chunk in stream:
                 choices = getattr(chunk, "choices", None)
                 if choices is None and isinstance(chunk, dict):
@@ -184,7 +244,20 @@ async def stream_chat_completion_text_with_meta(
                 if text:
                     saw_token = True
                     _emit("token", text)
-            _emit("done", {"saw_token": saw_token, "finish_reason": finish_reason})
+                for item in extract_stream_delta_tool_calls(chunk):
+                    index = int(item.get("index", 0) or 0)
+                    while len(tool_calls) <= index:
+                        tool_calls.append({"id": "", "function": {"name": "", "arguments": ""}})
+                    target = tool_calls[index]
+                    if item.get("id"):
+                        target["id"] = str(item["id"])
+                    function = item.get("function") if isinstance(item.get("function"), dict) else {}
+                    target_fn = target.setdefault("function", {})
+                    if function.get("name"):
+                        target_fn["name"] = str(function["name"])
+                    if function.get("arguments"):
+                        target_fn["arguments"] = f'{target_fn.get("arguments", "")}{function["arguments"]}'
+            _emit("done", {"saw_token": saw_token, "finish_reason": finish_reason, "tool_calls": tool_calls})
         except Exception as exc:  # pragma: no cover - exercised via callers
             _emit("error", exc)
 
@@ -193,6 +266,7 @@ async def stream_chat_completion_text_with_meta(
 
     parts: List[str] = []
     finish_reason = ""
+    streamed_tool_calls: List[Dict[str, Any]] = []
     while True:
         kind, payload = await queue.get()
         if kind == "token":
@@ -205,12 +279,14 @@ async def stream_chat_completion_text_with_meta(
         if kind == "done":
             if isinstance(payload, dict):
                 finish_reason = str(payload.get("finish_reason") or "").strip().lower()
+                streamed_tool_calls = list(payload.get("tool_calls") or [])
             break
 
     answer = "".join(parts).strip()
-    if answer:
+    if answer or streamed_tool_calls:
         return {
             "text": answer,
+            "tool_calls": streamed_tool_calls,
             "finish_reason": finish_reason,
             "truncated": finish_reason == "length",
         }
@@ -226,13 +302,15 @@ async def stream_chat_completion_text_with_meta(
         **kwargs,
     )
     if not completion.choices:
-        return {"text": "", "finish_reason": "", "truncated": False}
+        return {"text": "", "tool_calls": [], "finish_reason": "", "truncated": False}
     fallback = str(completion.choices[0].message.content or "").strip()
     if fallback:
         await _maybe_await_callback(on_token, fallback)
     completion_finish_reason = extract_completion_finish_reason(completion)
+    fallback_tool_calls = extract_message_tool_calls(completion.choices[0].message)
     return {
         "text": fallback,
+        "tool_calls": fallback_tool_calls,
         "finish_reason": completion_finish_reason,
         "truncated": completion_finish_reason == "length",
     }

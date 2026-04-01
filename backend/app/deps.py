@@ -1,8 +1,7 @@
 import json
 import logging
 from datetime import datetime, timezone
-from typing import AsyncGenerator, Callable, Any, Optional
-from dataclasses import dataclass
+from typing import Optional
 
 import redis.asyncio as redis_async
 from minio import Minio
@@ -97,28 +96,6 @@ class AppState:
 
 
 state = AppState()
-
-@dataclass
-class ChatDependencies:
-    redis: Any
-    minio: Any
-    search_svc: Any
-    embed_model: Any
-    vllm_client: Any
-    orchestrator: Any
-    code_tools: Any
-
-def get_chat_deps() -> ChatDependencies:
-    return ChatDependencies(
-        redis=state.redis,
-        minio=state.minio,
-        search_svc=state.search_svc,
-        embed_model=state.embed_model,
-        vllm_client=state.vllm_client,
-        orchestrator=state.orchestration_policy,
-        code_tools=state.code_tools,
-    )
-
 
 async def init_state():
     if not str(config.MINIO_SECRET_KEY or "").strip():

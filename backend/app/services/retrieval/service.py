@@ -2,8 +2,8 @@ import re
 import time
 from typing import Dict, List
 
-from .... import config, rag_config
-from ...search.filters import apply_module_filter
+from ... import config, rag_config
+from ..search.filters import apply_module_filter
 from .query_rewrite import build_query_rewrite
 
 
@@ -130,7 +130,6 @@ def _normalize_chunk_text(text: str) -> str:
     if not t:
         return ""
     t = re.sub(r"\s+", " ", t)
-    # Keep head/tail to preserve signature and usage lines while reducing near-duplicate overlap chunks.
     if len(t) > 700:
         t = t[:420] + " ... " + t[-220:]
     return t
@@ -163,4 +162,3 @@ def dedupe_results(results: List[Dict], max_per_source: int = 2) -> List[Dict]:
         deduped.append(item)
 
     return deduped
-

@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from ... import config, rag_config
-from ..chat.retrieval.mode_policy import default_mode_for_response_type
+from ..retrieval.mode_policy import default_mode_for_response_type
 from .query_terms import compact_token as _compact_text
 from .query_terms import extract_query_compacts, extract_query_terms
 from .query_terms import split_identifier_parts

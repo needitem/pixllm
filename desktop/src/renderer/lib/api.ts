@@ -82,10 +82,93 @@ export type StreamDonePayload = {
   reasoning_narrative?: string[];
   layer_manifest?: Record<string, unknown>;
   local_overlay?: Record<string, unknown>;
+  local_trace?: Array<Record<string, unknown>>;
+  local_transcript?: Array<Record<string, unknown>>;
+  local_summary?: string;
+  primary_file_path?: string;
+  primary_file_content?: string;
 };
 
 export type StreamCancelledPayload = {
   message?: string;
+};
+
+export type StreamModelPayload = {
+  delta?: string;
+  preview?: string;
+  turn?: number;
+};
+
+export type StreamToolUsePayload = {
+  id?: string;
+  name?: string;
+  input?: Record<string, unknown>;
+  turn?: number;
+};
+
+export type StreamToolResultPayload = {
+  id?: string;
+  name?: string;
+  ok?: boolean;
+  turn?: number;
+};
+
+export type StreamAssistantMessagePayload = {
+  text?: string;
+  turn?: number;
+  toolUses?: number;
+  finishReason?: string;
+};
+
+export type StreamTransitionPayload = {
+  reason?: string;
+  timestamp?: string;
+  turn?: number;
+  attempt?: number;
+  parallel?: boolean;
+  toolUses?: number;
+  message?: string;
+};
+
+export type StreamRequestStartPayload = {
+  sessionId?: string;
+  workspacePath?: string;
+  selectedFilePath?: string;
+  resumed?: boolean;
+};
+
+export type StreamSessionRestoredPayload = {
+  sessionId?: string;
+  workspacePath?: string;
+};
+
+export type StreamToolBatchPayload = {
+  turn?: number;
+  count?: number;
+  summary?: string;
+  parallelCandidate?: boolean;
+  parallel?: boolean;
+  allFailed?: boolean;
+};
+
+export type StreamTerminalPayload = {
+  reason?: string;
+  turn?: number;
+};
+
+export type StreamUserQuestionPayload = {
+  questionId?: string;
+  title?: string;
+  prompt?: string;
+  placeholder?: string;
+  defaultValue?: string;
+  allowEmpty?: boolean;
+};
+
+export type StreamBriefPayload = {
+  title?: string;
+  message?: string;
+  level?: string;
 };
 
 export const fetchHealth = (baseUrl: string, token: string) =>
@@ -112,22 +195,34 @@ export const approveRun = (baseUrl: string, token: string, runId: string, approv
   invokeDesktop<RunApproval>('apiApproveRun', baseUrl, token, runId, approvalId, note);
 export const rejectRun = (baseUrl: string, token: string, runId: string, approvalId: string, note = '') =>
   invokeDesktop<RunApproval>('apiRejectRun', baseUrl, token, runId, approvalId, note);
-export const sendChat = (
-  baseUrl: string,
-  token: string,
-  message: string,
-  model: string,
-  options: Record<string, unknown> = {}
-) => invokeDesktop<unknown>('apiChat', baseUrl, token, message, model, options);
-
-export async function streamChat(
-  baseUrl: string,
-  token: string,
-  message: string,
-  model: string,
-  options: Record<string, unknown>,
+export async function streamLocalAgentChat(
+  payload: {
+    workspacePath: string;
+    prompt: string;
+    model: string;
+    baseUrl: string;
+    apiToken: string;
+    selectedFilePath?: string;
+    sessionId?: string;
+    historyMessages?: Array<{ role: string; content: string }>;
+  },
   handlers: {
     onToken?: (chunk: string) => void;
+    onModel?: (payload?: StreamModelPayload) => void;
+    onRequestStart?: (payload?: StreamRequestStartPayload) => void;
+    onSessionRestored?: (payload?: StreamSessionRestoredPayload) => void;
+    onAssistantMessage?: (payload?: StreamAssistantMessagePayload) => void;
+    onToolUse?: (payload?: StreamToolUsePayload) => void;
+    onToolResult?: (payload?: StreamToolResultPayload) => void;
+    onToolBatchStart?: (payload?: StreamToolBatchPayload) => void;
+    onToolBatchEnd?: (payload?: StreamToolBatchPayload) => void;
+    onTransition?: (payload?: StreamTransitionPayload) => void;
+    onTerminal?: (payload?: StreamTerminalPayload) => void;
+    onUserQuestion?: (
+      payload?: StreamUserQuestionPayload,
+      respond?: (answer: string) => Promise<{ ok: boolean; requestId: string; questionId: string }>
+    ) => void | Promise<void>;
+    onBrief?: (payload?: StreamBriefPayload) => void;
     onStatus?: (payload?: StreamStatusPayload) => void;
     onDone?: (payload?: StreamDonePayload) => void;
     onCancelled?: (payload?: StreamCancelledPayload) => void;
@@ -136,7 +231,7 @@ export async function streamChat(
 ) {
   let activeRequestId = '';
   const unsubscribe = subscribeDesktopEvent<{ requestId: string; event: string; payload: unknown }>(
-    'onChatStreamEvent',
+    'onAgentStreamEvent',
     (event) => {
       if (!activeRequestId || event.requestId !== activeRequestId) return;
 
@@ -149,6 +244,81 @@ export async function streamChat(
               ? payload.content
               : '';
         if (tokenText && handlers.onToken) handlers.onToken(tokenText);
+        return;
+      }
+
+      if (event.event === 'model' && handlers.onModel) {
+        handlers.onModel((event.payload || undefined) as StreamModelPayload | undefined);
+        return;
+      }
+
+      if (event.event === 'request_start' && handlers.onRequestStart) {
+        handlers.onRequestStart((event.payload || undefined) as StreamRequestStartPayload | undefined);
+        return;
+      }
+
+      if (event.event === 'session_restored' && handlers.onSessionRestored) {
+        handlers.onSessionRestored((event.payload || undefined) as StreamSessionRestoredPayload | undefined);
+        return;
+      }
+
+      if (event.event === 'assistant_message' && handlers.onAssistantMessage) {
+        handlers.onAssistantMessage((event.payload || undefined) as StreamAssistantMessagePayload | undefined);
+        return;
+      }
+
+      if (event.event === 'tool_use' && handlers.onToolUse) {
+        handlers.onToolUse((event.payload || undefined) as StreamToolUsePayload | undefined);
+        return;
+      }
+
+      if (event.event === 'tool_result' && handlers.onToolResult) {
+        handlers.onToolResult((event.payload || undefined) as StreamToolResultPayload | undefined);
+        return;
+      }
+
+      if (event.event === 'tool_batch_start' && handlers.onToolBatchStart) {
+        handlers.onToolBatchStart((event.payload || undefined) as StreamToolBatchPayload | undefined);
+        return;
+      }
+
+      if (event.event === 'tool_batch_end' && handlers.onToolBatchEnd) {
+        handlers.onToolBatchEnd((event.payload || undefined) as StreamToolBatchPayload | undefined);
+        return;
+      }
+
+      if (event.event === 'transition' && handlers.onTransition) {
+        handlers.onTransition((event.payload || undefined) as StreamTransitionPayload | undefined);
+        return;
+      }
+
+      if (event.event === 'terminal' && handlers.onTerminal) {
+        handlers.onTerminal((event.payload || undefined) as StreamTerminalPayload | undefined);
+        return;
+      }
+
+      if (event.event === 'user_question' && handlers.onUserQuestion) {
+        const payload = (event.payload || undefined) as StreamUserQuestionPayload | undefined;
+        handlers.onUserQuestion(payload, async (answer) => {
+          if (!activeRequestId) {
+            return {
+              ok: false,
+              requestId: '',
+              questionId: String(payload?.questionId || ''),
+            };
+          }
+          return invokeDesktop<{ ok: boolean; requestId: string; questionId: string }>(
+            'answerAgentQuestion',
+            activeRequestId,
+            String(payload?.questionId || ''),
+            String(answer || '')
+          );
+        });
+        return;
+      }
+
+      if (event.event === 'brief' && handlers.onBrief) {
+        handlers.onBrief((event.payload || undefined) as StreamBriefPayload | undefined);
         return;
       }
 
@@ -188,22 +358,15 @@ export async function streamChat(
   );
 
   try {
-    const { requestId } = await invokeDesktop<{ requestId: string }>(
-      'apiChatStreamStart',
-      baseUrl,
-      token,
-      message,
-      model,
-      options
-    );
+    const { requestId } = await invokeDesktop<{ requestId: string }>('agentChatStreamStart', payload);
     activeRequestId = requestId;
     return {
       requestId,
       cancel: async () => {
         if (!activeRequestId) return { ok: false, requestId: '' };
-        return invokeDesktop<{ ok: boolean; requestId: string }>('apiChatStreamCancel', activeRequestId);
+        return invokeDesktop<{ ok: boolean; requestId: string }>('agentChatStreamCancel', activeRequestId);
       },
-      unsubscribe
+      unsubscribe,
     };
   } catch (error) {
     unsubscribe();
