@@ -1,0 +1,363 @@
+const path = require('node:path');
+
+const TOOL_GROUPS = {
+  always: [
+    'todo_read',
+    'todo_write',
+    'ask_user_question',
+    'brief',
+    'sleep',
+    'tool_search',
+  ],
+  runtime_read: [
+    'terminal_capture',
+    'task_get',
+    'task_list',
+    'task_output',
+  ],
+  workspace_discovery: [
+    'list_files',
+    'glob',
+    'grep',
+    'project_context_search',
+    'find_symbol',
+    'find_callers',
+    'find_references',
+  ],
+  path_read: [
+    'lsp',
+    'read_symbol_span',
+    'symbol_outline',
+    'symbol_neighborhood',
+    'read_file',
+  ],
+  mutation: [
+    'write',
+    'edit',
+    'notebook_edit',
+  ],
+  execution: [
+    'run_build',
+    'bash',
+    'powershell',
+    'task_create',
+    'task_update',
+    'task_stop',
+  ],
+  reference: [
+    'company_reference_search',
+  ],
+  config: [
+    'config',
+  ],
+};
+
+function toStringValue(value) {
+  return String(value || '').trim();
+}
+
+function normalizePath(value) {
+  return toStringValue(value).replace(/\\/g, '/').replace(/^\.\/+/, '');
+}
+
+function uniq(items) {
+  const seen = new Set();
+  const out = [];
+  for (const item of Array.isArray(items) ? items : []) {
+    const normalized = normalizePath(item);
+    if (!normalized) continue;
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(normalized);
+  }
+  return out;
+}
+
+function uniqStrings(items) {
+  const seen = new Set();
+  const out = [];
+  for (const item of Array.isArray(items) ? items : []) {
+    const normalized = toStringValue(item);
+    if (!normalized) continue;
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(normalized);
+  }
+  return out;
+}
+
+function isWorkspaceRelativePath(value) {
+  const raw = normalizePath(value);
+  if (!raw) return false;
+  if (/^[A-Za-z]+:\/\//.test(raw) || /^file:\/\//i.test(raw)) return false;
+  if (path.win32.isAbsolute(raw) || path.posix.isAbsolute(raw)) return false;
+  if (raw.startsWith('../')) return false;
+  return true;
+}
+
+function toWorkspaceRelativePath(workspacePath, candidate) {
+  const raw = toStringValue(candidate).replace(/^['"`]+|['"`]+$/g, '');
+  if (!raw) return '';
+  if (/^[A-Za-z]+:\/\//.test(raw) || /^file:\/\//i.test(raw)) return '';
+  if (path.win32.isAbsolute(raw) || path.posix.isAbsolute(raw)) {
+    const root = toStringValue(workspacePath);
+    if (!root) return '';
+    const relative = path.relative(path.resolve(root), path.resolve(raw));
+    if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) {
+      return '';
+    }
+    return normalizePath(relative);
+  }
+  const normalized = normalizePath(raw);
+  return isWorkspaceRelativePath(normalized) ? normalized : '';
+}
+
+function extractPathCandidates(prompt) {
+  const source = String(prompt || '');
+  const tokens = [];
+  const regex = /([A-Za-z]:\\[^\s'"`]+|(?:\.{0,2}[\\/])?[A-Za-z0-9_@.\-]+(?:[\\/][A-Za-z0-9_@.\-]+)+|[A-Za-z0-9_@.\-]+\.(?:cs|xaml|xaml\.cs|cpp|c|cc|cxx|h|hh|hpp|hxx|py|ts|tsx|js|cjs|mjs|jsx|json|md|txt|xml|sql|ps1|cmd|bat|sh|yml|yaml|toml|ini|ipynb|sln|csproj|vcxproj))/gi;
+  for (const match of source.matchAll(regex)) {
+    const candidate = toStringValue(match[1]).replace(/[),.:;]+$/g, '');
+    if (!candidate) continue;
+    if (/^[A-Za-z]+:\/\//.test(candidate) || /^file:\/\//i.test(candidate)) continue;
+    tokens.push(candidate);
+  }
+  return uniq(tokens);
+}
+
+function matchesAny(source, patterns) {
+  return (Array.isArray(patterns) ? patterns : []).some((pattern) => pattern.test(source));
+}
+
+function parsePromptDirectives(prompt) {
+  const source = toStringValue(prompt).toLowerCase();
+  return {
+    reference: /(?:^|\s)\/reference\b/.test(source),
+    workspace: /(?:^|\s)\/workspace\b/.test(source),
+    hybrid: /(?:^|\s)\/hybrid\b/.test(source),
+    analysis: /(?:^|\s)\/analysis\b/.test(source),
+    change: /(?:^|\s)\/change\b/.test(source),
+    exec: /(?:^|\s)\/exec\b/.test(source),
+    config: /(?:^|\s)\/config\b/.test(source),
+  };
+}
+
+function analyzeIntent(prompt, directives = {}) {
+  const source = toStringValue(prompt).toLowerCase();
+  return {
+    wantsChanges: Boolean(directives.change) || matchesAny(source, [
+      /(fix|change|edit|modify|refactor|implement|add|improve|update|rewrite|create|write|patch)/i,
+      /\uACE0\uCCD0|\uAC1C\uC120|\uC218\uC815|\uAD6C\uD604|\uCD94\uAC00/i,
+    ]),
+    wantsExecution: Boolean(directives.exec) || matchesAny(source, [
+      /(build|test|run|execute|compile|diagnos|lint|verify|benchmark|profile|powershell|shell|command|git|diff)/i,
+      /\uBE4C\uB4DC|\uD14C\uC2A4\uD2B8|\uC2E4\uD589|\uAC80\uC99D/i,
+    ]),
+    wantsAnalysis: Boolean(directives.analysis) || matchesAny(source, [
+      /(analy|compare|review|inspect|investigate|trace|understand|audit)/i,
+      /\uD750\uB984|\uBD84\uC11D|\uBE44\uAD50|\uB9AC\uBDF0|\uD30C\uC545/i,
+    ]),
+    createLikely: matchesAny(source, [
+      /(create|add|new file|new test|scaffold|generate)/i,
+      /\uC0DD\uC131|\uCD94\uAC00|\uD30C\uC77C/i,
+    ]),
+    compareLikely: matchesAny(source, [
+      /(compare|diff|versus|vs)/i,
+      /\uBE44\uAD50|\uCC28\uC774/i,
+    ]),
+  };
+}
+
+function analyzeFocus(prompt, directives = {}) {
+  const source = toStringValue(prompt).toLowerCase();
+  const mentionsCompanyReference = Boolean(directives.reference || directives.hybrid) || matchesAny(source, [
+    /(company|internal|reference|knowledge|engine source|reference source)/i,
+    /\uC0AC\uB0B4|\uB0B4\uBD80|\uCC38\uACE0|\uC9C0\uC2DD|\uC5D4\uC9C4/i,
+  ]);
+  const mentionsConfig = Boolean(directives.config) || /(config|setting|option|base url|api token|endpoint)/i.test(source);
+  return {
+    mentionsCompanyReference,
+    mentionsConfig,
+  };
+}
+
+function addTools(target, items) {
+  for (const item of Array.isArray(items) ? items : []) {
+    target.add(toStringValue(item));
+  }
+}
+
+function deriveEvidencePreference({ intent = {}, focus = {}, directives = {}, hasWorkspacePath = false } = {}) {
+  if (directives.workspace) return 'workspace';
+  if (directives.reference) return 'reference';
+  if (directives.hybrid) return 'hybrid';
+  if (focus.mentionsCompanyReference && hasWorkspacePath) return 'hybrid';
+  if (focus.mentionsCompanyReference) return 'reference';
+  if (intent.compareLikely) return hasWorkspacePath ? 'hybrid' : 'reference';
+  return 'workspace';
+}
+
+function deriveInitialToolNames({
+  intent = {},
+  focus = {},
+  hasWorkspacePath = false,
+  evidencePreference = 'workspace',
+} = {}) {
+  const names = new Set();
+  addTools(names, TOOL_GROUPS.always);
+  addTools(names, TOOL_GROUPS.runtime_read);
+  if (focus.mentionsConfig) {
+    addTools(names, TOOL_GROUPS.config);
+  }
+
+  if (evidencePreference === 'reference') {
+    addTools(names, TOOL_GROUPS.reference);
+    if (hasWorkspacePath) {
+      addTools(names, TOOL_GROUPS.path_read);
+    }
+    if (intent.compareLikely || intent.wantsChanges) {
+      addTools(names, TOOL_GROUPS.workspace_discovery);
+    }
+  } else if (evidencePreference === 'hybrid') {
+    addTools(names, TOOL_GROUPS.reference);
+    addTools(names, TOOL_GROUPS.workspace_discovery);
+    if (hasWorkspacePath) {
+      addTools(names, TOOL_GROUPS.path_read);
+    }
+  } else {
+    if (hasWorkspacePath) {
+      addTools(names, TOOL_GROUPS.path_read);
+    }
+    if (!hasWorkspacePath || intent.wantsAnalysis || intent.compareLikely || intent.wantsChanges || intent.wantsExecution) {
+      addTools(names, TOOL_GROUPS.workspace_discovery);
+    }
+  }
+
+  if (intent.wantsExecution) {
+    addTools(names, TOOL_GROUPS.execution);
+  }
+  return Array.from(names);
+}
+
+function summarizeRequestContext(context = {}) {
+  const lines = [];
+  const intent = context.intent && typeof context.intent === 'object' ? context.intent : {};
+  const directives = context.directives && typeof context.directives === 'object' ? context.directives : {};
+  const labels = [];
+  if (intent.wantsAnalysis) labels.push('analysis');
+  if (intent.wantsChanges) labels.push('change');
+  if (intent.wantsExecution) labels.push('execution');
+  if (intent.compareLikely) labels.push('compare');
+  if (labels.length > 0) {
+    lines.push(`Request intent: ${labels.join(', ')}`);
+  }
+
+  const evidencePreference = toStringValue(context.evidencePreference || 'workspace');
+  if (evidencePreference) {
+    lines.push(`Evidence mode: ${evidencePreference}`);
+  }
+
+  const directiveLabels = Object.entries(directives)
+    .filter(([, enabled]) => Boolean(enabled))
+    .map(([key]) => `/${key}`);
+  if (directiveLabels.length > 0) {
+    lines.push(`Directives: ${directiveLabels.join(', ')}`);
+  }
+
+  const paths = Array.isArray(context.explicitPaths) ? context.explicitPaths : [];
+  if (paths.length > 0) {
+    lines.push(`User-referenced paths: ${paths.slice(0, 8).join(', ')}`);
+  }
+
+  const selected = toStringValue(context.selectedFilePath);
+  if (selected) {
+    lines.push(`Selected file: ${selected}`);
+  }
+
+  if (paths.length > 0 || selected) {
+    lines.push('User-referenced paths and the selected file may be used directly. Discover any other workspace path before reading or editing it.');
+  }
+
+  if (context.prefersReferenceTools) {
+    lines.push('Prefer company_reference_search for company engine or internal reference material before using local file tools.');
+  }
+
+  const initialToolNames = Array.isArray(context.initialToolNames) ? context.initialToolNames : [];
+  if (initialToolNames.length > 0) {
+    lines.push(`Initial tool scope: ${initialToolNames.slice(0, 14).join(', ')}`);
+  }
+
+  return lines.join('\n').trim();
+}
+
+function createRunRequestContext({ prompt = '', workspacePath = '', selectedFilePath = '' } = {}) {
+  const directives = parsePromptDirectives(prompt);
+  const intent = analyzeIntent(prompt, directives);
+  const focus = analyzeFocus(prompt, directives);
+  const explicitPaths = uniq(
+    extractPathCandidates(prompt)
+      .map((candidate) => toWorkspaceRelativePath(workspacePath, candidate))
+      .filter(Boolean),
+  );
+  const normalizedSelectedFilePath = toWorkspaceRelativePath(workspacePath, selectedFilePath) || normalizePath(selectedFilePath);
+  const allowedDirectPaths = uniq([
+    ...explicitPaths,
+    normalizedSelectedFilePath,
+  ]);
+  const hasWorkspacePath = allowedDirectPaths.length > 0;
+  const evidencePreference = deriveEvidencePreference({
+    intent,
+    focus,
+    directives,
+    hasWorkspacePath,
+  });
+  const initialToolNames = uniqStrings(deriveInitialToolNames({
+    intent,
+    focus,
+    hasWorkspacePath,
+    evidencePreference,
+  }));
+  const prefersReferenceTools = focus.mentionsCompanyReference || evidencePreference !== 'workspace';
+
+  return {
+    prompt: toStringValue(prompt),
+    workspacePath: toStringValue(workspacePath),
+    selectedFilePath: normalizedSelectedFilePath,
+    explicitPaths,
+    allowedDirectPaths,
+    intent,
+    focus,
+    directives,
+    analysisOnly: Boolean(intent.wantsAnalysis && !intent.wantsChanges && !intent.wantsExecution),
+    evidencePreference,
+    prefersReferenceTools,
+    initialToolNames,
+    summary: summarizeRequestContext({
+      explicitPaths,
+      selectedFilePath: normalizedSelectedFilePath,
+      intent,
+      directives,
+      evidencePreference,
+      prefersReferenceTools,
+      initialToolNames,
+    }),
+  };
+}
+
+function processUserInput({ prompt = '', workspacePath = '', selectedFilePath = '' } = {}) {
+  return createRunRequestContext({
+    prompt,
+    workspacePath,
+    selectedFilePath,
+  });
+}
+
+module.exports = {
+  processUserInput,
+  toWorkspaceRelativePath,
+  createRunRequestContext,
+  summarizeRequestContext,
+  parsePromptDirectives,
+};

@@ -91,7 +91,7 @@ class SearchService:
         ranked = list(merged.values())
         self._apply_identifier_boost(ranked, query_text)
         self._apply_phrase_boost(ranked, query_text)
-        return sorted(ranked, key=lambda x: x["combined_score"], reverse=True)[:top_k]
+        return self._annotate_rank(sorted(ranked, key=lambda x: x["combined_score"], reverse=True)[:top_k])
 
     def rerank_search(
         self,
@@ -115,23 +115,14 @@ class SearchService:
         if use_reranker and self.reranker and candidates:
             docs = [c.get("payload", {}).get("text", "") for c in candidates]
             ranked = self.reranker.rerank(query, docs, top_k=top_k)
-            return [candidates[idx] for idx, _score in ranked if idx < len(candidates)]
+            return self._annotate_rank([candidates[idx] for idx, _score in ranked if idx < len(candidates)])
 
-        return candidates[:top_k]
+        return self._annotate_rank(candidates[:top_k])
 
     def _score_weights(self, query_text: Optional[str]) -> Tuple[float, float]:
-        q = (query_text or "").lower()
-        symbol_hits = 0
-        if re.search(r"[A-Z][a-z]+[A-Z][A-Za-z0-9_]*", query_text or ""):
-            symbol_hits += 1
-        if any(tok in q for tok in ["::", "_", ".", "(", ")"]):
-            symbol_hits += 1
-        if any(c.isdigit() for c in q):
-            symbol_hits += 1
-
-        if symbol_hits >= 1:
-            return 0.45, 0.55
-        return 0.7, 0.3
+        # Keep score weighting stable and shallow. Search ranking should remain
+        # a retrieval concern, not a high-sensitivity control signal.
+        return 0.55, 0.45
 
     def _apply_identifier_boost(self, results: List[Dict], query_text: Optional[str]) -> None:
         identifiers = self._extract_identifiers(query_text)
@@ -156,7 +147,7 @@ class SearchService:
                     matched += 1
 
             if matched:
-                item["combined_score"] += min(0.24, 0.08 * matched)
+                item["combined_score"] += min(0.06, 0.02 * matched)
 
     def _apply_phrase_boost(self, results: List[Dict], query_text: Optional[str]) -> None:
         phrases = self._extract_phrase_candidates(query_text)
@@ -186,7 +177,7 @@ class SearchService:
                     token_hits += 1
 
             if exact_hits or token_hits:
-                item["combined_score"] += min(0.45, 0.18 * exact_hits + 0.06 * token_hits)
+                item["combined_score"] += min(0.12, 0.06 * exact_hits + 0.02 * token_hits)
 
     def _extract_phrase_candidates(self, query_text: Optional[str]) -> List[str]:
         q = (query_text or "").strip()
@@ -224,3 +215,9 @@ class SearchService:
                 tokens.add(tok.lower())
 
         return sorted(tokens)
+
+    def _annotate_rank(self, results: List[Dict]) -> List[Dict]:
+        for idx, item in enumerate(results or [], 1):
+            if isinstance(item, dict):
+                item["rank"] = idx
+        return results

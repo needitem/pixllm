@@ -1,5 +1,5 @@
 const { randomUUID } = require('node:crypto');
-const { LocalAgentEngine } = require('./core/local_agent_engine.cjs');
+const { QueryEngine } = require('./QueryEngine.cjs');
 
 const ENGINE_REGISTRY = new Map();
 const QUESTION_REGISTRY = new Map();
@@ -21,7 +21,7 @@ function getOrCreateEngine(payload = {}) {
     engine.updateContext(payload);
     return engine;
   }
-  const engine = new LocalAgentEngine(payload);
+  const engine = new QueryEngine(payload);
   ENGINE_REGISTRY.set(key, engine);
   return engine;
 }

@@ -1,96 +1,111 @@
 # 데스크톱 UI 상세 설계
 
-> 목적: PIXLLM 데스크톱을 채팅창이 아니라 실행 콘솔로 설계
+> 목적: 현재 PIXLLM 데스크톱 UI가 실제로 어떤 화면과 상태를 다루는지 정리
 
-## 1. UI 목표
+## 1. 현재 UI 목표
 
-- 답변뿐 아니라 실행 과정을 보여줍니다.
-- 세션, 태스크, 승인, 아티팩트를 같은 표면에서 다룹니다.
-- 사용자가 "왜 이 답이 나왔는지"와 "무슨 작업이 수행됐는지"를 동시에 볼 수 있어야 합니다.
+현재 데스크톱 UI의 목표는 두 가지입니다.
 
-## 2. 기본 레이아웃
+- 로컬 에이전트 대화와 실행 흔적을 같은 화면에서 보여주기
+- backend runs의 task / approval / artifact를 별도 조회면에서 확인하게 하기
 
-```mermaid
-flowchart LR
-    A["Session Rail"] --> B["Main Timeline"]
-    B --> C["Context Panel"]
-    B --> D["Artifact Panel"]
-    B --> E["Terminal / Log Drawer"]
-    B --> F["Approval / Team Drawer"]
-```
+즉 현재 UI는 "실행 콘솔을 지향"하지만, 과거 문서처럼 team/bridge 패널까지 구현된 상태는 아닙니다.
 
-## 3. 화면 영역
+## 2. 현재 화면 구조
 
-### Session Rail
+현재 renderer는 크게 두 모드로 나뉩니다.
 
-- 세션 목록
-- 워크스페이스 선택
-- 실행 중 task 수
-- 최근 remote session 상태
+- `main` 뷰
+- `runs` 뷰
 
-### Main Timeline
+### Main 뷰
 
-- 사용자 메시지
-- assistant 응답
-- tool start/result 이벤트
-- task 진행률
-- approval 요청과 처리 결과
-- verification 요약
+- 설정 및 workspace 컨트롤
+- session rail
+- 대화 타임라인
+- 입력 composer
+- agent stream 상태 표시
 
-### Context Panel
+### Runs 뷰
 
-- 현재 파일과 심볼
-- evidence bundle
-- 소스 참조
-- 모델/실행 모드
+- recent runs 목록
+- 선택한 run의 summary
+- approvals 탭
+- tasks 탭
+- artifacts 탭
 
-### Artifact Panel
+## 3. 현재 실제로 보이는 이벤트
 
-- diff viewer
-- build/test 결과
-- 계획서
-- 리뷰 findings
-- 명령 결과 로그
+로컬 agent 스트림에서 UI가 다루는 주요 이벤트는 아래입니다.
 
-### Approval and Team Drawer
+- `request_start`
+- `session_restored`
+- `status`
+- `model`
+- `tool_use`
+- `tool_result`
+- `transition`
+- `tool_batch_start`
+- `tool_batch_end`
+- `terminal`
+- `user_question`
+- `brief`
+- `token`
+- `done`
+- `cancelled`
+- `error`
 
-- 승인 큐
-- 병렬 worker 상태
-- 파일 ownership
-- remote bridge 상태
+즉 현재 타임라인은 message-only가 아니라 tool / terminal / question 이벤트도 함께 다룹니다.
 
-## 4. 상호작용 규칙
+## 4. 현재 상태 모델
 
-- 위험 작업은 타임라인 안에서도 보이고 approval drawer에도 남깁니다.
-- 최종 답변은 항상 관련 artifact 링크와 함께 보입니다.
-- task가 살아 있는 동안에는 단일 채팅 메시지로 축약하지 않습니다.
-- 실패한 검증은 빨간 배너가 아니라 재실행 가능한 task 상태로 다룹니다.
+현재 UI가 직접 유지하는 핵심 상태는 아래 범주입니다.
 
-## 5. 주요 컴포넌트
+- settings
+- workspace path
+- sessions 목록
+- 선택된 session과 conversation
+- stream request 상태
+- runs 목록
+- 선택된 run detail
+- run approvals / artifacts / tasks
 
-- `PromptComposer`
-- `TimelineStream`
-- `ToolEventRow`
-- `TaskCard`
-- `ArtifactTabs`
-- `ApprovalInbox`
-- `TeamMonitor`
-- `BridgeStatus`
+과거 문서의 `team_members`, `bridge_connections` 같은 상태는 현재 UI 기본 상태가 아닙니다.
 
-## 6. 상태 모델
+## 5. 현재 컴포넌트 현실
 
-UI가 직접 다뤄야 하는 상태는 아래입니다.
+현재 구현은 아직 feature-split 구조가 아닙니다.
 
-- `active_session`
-- `active_turn`
-- `tasks_by_session`
-- `artifacts_by_task`
-- `pending_approvals`
-- `team_members`
-- `bridge_connections`
+실질적인 UI 중심은 아래 파일들입니다.
 
-## 7. 제품 원칙
+- `desktop/src/renderer/App.svelte`
+- `desktop/src/renderer/lib/api.ts`
+- `desktop/src/renderer/lib/bridge.ts`
+- `desktop/src/renderer/lib/store.ts`
 
-- 채팅 UX는 유지하되, 채팅만 남기는 구조로 축소하지 않습니다.
-- 숨겨진 백그라운드 작업보다 드러나는 실행 로그를 선호합니다.
-- 사용자가 승인, 취소, 재시도, 재개를 직접 제어할 수 있어야 합니다.
+즉 문서에서 `TeamMonitor`, `BridgeStatus` 같은 독립 컴포넌트를 현재 구성요소처럼 설명하는 것은 맞지 않습니다.
+
+## 6. 현재 UX의 강점
+
+- session 저장과 재개가 됩니다.
+- 로컬 agent의 stream 이벤트가 즉시 보입니다.
+- backend run approvals와 artifacts를 따로 점검할 수 있습니다.
+- tool result와 terminal 결과가 대화 흐름과 분리되지 않습니다.
+
+## 7. 현재 UX의 한계
+
+- `App.svelte`에 상태와 화면 로직이 많이 모여 있습니다.
+- local trace / tool batch / terminal capture 시각화가 더 정돈될 필요가 있습니다.
+- runs 뷰와 main 뷰 사이의 연결이 아직 느슨합니다.
+- artifact viewer와 diff/terminal 전용 뷰는 더 다듬을 여지가 큽니다.
+
+## 8. 다음 리팩터링 방향
+
+현재 UI 문서가 가리켜야 할 다음 단계는 아래입니다.
+
+1. session rail, timeline, composer, run inspector로 화면 분리
+2. tool / terminal / user question 이벤트 row를 컴포넌트화
+3. approvals / artifacts / tasks 탭 정리
+4. local trace와 run snapshot을 더 명확히 연결
+
+현재 PIXLLM 데스크톱 UI는 `팀/브리지 대시보드`가 아니라 `로컬 세션 타임라인 + run inspector`로 설명하는 것이 정확합니다.

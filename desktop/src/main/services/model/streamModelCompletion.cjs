@@ -234,6 +234,7 @@ async function streamModelCompletion({
   stop = [],
   signal = null,
   onToken = async () => {},
+  onToolCalls = async () => {},
 } = {}) {
   const candidates = buildEndpointCandidates({
     baseUrl,
@@ -333,6 +334,9 @@ async function streamModelCompletion({
               if (typeof fn?.arguments === 'string' && fn.arguments) {
                 openAiToolCalls[slot].arguments += fn.arguments;
               }
+            }
+            if (deltaToolCalls.length > 0) {
+              void onToolCalls(normalizeOpenAiToolCalls(openAiToolCalls));
             }
             if (choice?.finish_reason) {
               donePayload = {

@@ -1,73 +1,82 @@
 # Evidence-First Contract Generalization Plan
 
+> 상태: 미래 계획 문서이지만, 현재 코드와 현재 제품 방향에 맞게 범위를 다시 줄였습니다.
+
 ## 1. 배경
 
-새 운영 모델에서는 질문 문구보다 `실제로 수집된 evidence`, `실행 표면`, `승인 요구`, `태스크 상태`가 더 중요합니다.
+현재 PIXLLM은 이미 일부 evidence-first 성격을 갖고 있습니다.
 
-따라서 계약도 `flow 질문`, `설명 질문` 같은 텍스트 분류가 아니라 아래 구조를 중심으로 일반화해야 합니다.
+- request context가 explicit path와 intent를 뽑습니다
+- tool policy가 grounded path와 read-before-edit를 봅니다
+- final answer guard가 trace에 없는 파일 언급을 막습니다
 
-- 이 턴이 어느 실행 표면에서 처리되는가
-- 어떤 수준의 evidence가 필요한가
-- 파일 변경과 검증이 필요한가
-- 결과를 단순 답변으로 끝낼지 artifact까지 남길지
+다만 결과 계약은 아직 `세션 메시지`, `localTrace`, `runSnapshot`, `task runtime`에 나뉘어 있습니다.
 
 ## 2. 목표
 
-- 모든 턴을 공통 `session / turn / task / agent / artifact / approval` 모델로 표현합니다.
-- 도구 루프, 태스크, 팀 실행, 브리지 실행이 같은 이벤트 계약을 공유하게 합니다.
-- 최종 응답이 문자열 중심이 아니라 `answer + evidence + artifact + verification` 중심이 되게 합니다.
+현재 방향의 목표는 아래입니다.
 
-## 3. 표준 실행 계약
+- 로컬 turn, tool result, terminal capture, run snapshot을 더 일관된 evidence 계약으로 정리
+- 최종 응답이 단순 문자열만이 아니라 trace와 run 상태를 함께 가리키게 만들기
+- renderer와 backend run inspector가 같은 evidence vocabulary를 쓰게 만들기
 
-각 턴은 아래 계약 필드를 가집니다.
+## 3. 현재 범위의 표준 계약
+
+현재 제품 방향에서 표준화할 대상은 아래입니다.
 
 | 필드 | 예시 값 |
 |---|---|
-| `kind` | `direct_answer`, `tool_loop`, `task_execution`, `team_execution`, `remote_execution` |
-| `evidence_policy` | `none`, `minimal`, `grounded`, `verified` |
-| `mutation_policy` | `read_only`, `workspace_edit`, `remote_edit` |
-| `verification_policy` | `none`, `light`, `standard`, `strict` |
-| `result_shape` | `reply_only`, `reply_with_artifacts`, `reply_after_approval` |
+| `kind` | `direct_answer`, `tool_loop`, `local_task`, `run_snapshot` |
+| `evidence_policy` | `none`, `grounded`, `verified` |
+| `mutation_policy` | `read_only`, `workspace_edit`, `command_execution` |
+| `result_shape` | `reply_only`, `reply_with_trace`, `reply_with_run_snapshot`, `reply_with_question` |
 
-## 4. Evidence Pack 표준화
+현재 기준으로는 이 정도가 맞고, `team_execution`, `remote_execution` 같은 계약을 기본값으로 두는 것은 과합니다.
 
-evidence는 아래 묶음으로 정리합니다.
+## 4. Evidence Pack 정리 방향
 
-- `context_evidence`: cwd, selected files, recent history
-- `tool_evidence`: read/search/shell/MCP 결과
-- `task_evidence`: test report, build log, plan, review findings
-- `bridge_evidence`: remote session state, reconnect log
-- `model_evidence`: sources, citations, usage
+현재 정리해야 할 evidence 묶음은 아래입니다.
+
+- `context_evidence`: workspace, selected file, explicit path, recent session state
+- `tool_evidence`: search, read, symbol, edit, shell, build 결과
+- `trace_evidence`: `localTrace`, status events, terminal captures
+- `run_evidence`: backend tasks, approvals, artifacts
+- `model_evidence`: usage, finish reason, grounding된 answer
+
+MCP/open-world evidence는 현재 범위 밖입니다.
 
 ## 5. 적용 순서
 
 ### Phase 1
 
-- turn router가 `kind`를 선택
-- event envelope를 표준화
-- final response에 verification 필드 추가
+- local turn event shape 정리
+- run snapshot shape 정리
+- final response에서 trace/run 근거 연결 강화
 
 ### Phase 2
 
-- task/artifact schema를 공통화
-- tool 결과와 task 결과를 같은 evidence buffer에 적재
-- approval payload를 공통 구조로 통일
+- terminal capture와 tool result의 공통 표현 정리
+- session 저장 포맷과 renderer 표시 포맷 정리
+- approval / artifact 표준 필드 정리
 
 ### Phase 3
 
-- team worker 결과를 동일 계약으로 통합
-- bridge/remote 세션도 동일 이벤트 타입 사용
-- UI가 계약 종류별로 일관된 패널을 렌더링
+- 필요하면 local task와 backend run을 더 직접적으로 연결
+- 필요하면 verification summary를 별도 계약으로 승격
 
-## 6. 비목표
+## 6. 비범위
 
-- 자연어 의미를 완벽하게 분류하는 일
-- 모든 결과를 무조건 장문의 reasoning으로 만드는 일
-- 계약 종류를 세분화해서 다시 거대한 intent taxonomy를 만드는 일
+현재 계획에서 제외하는 것:
+
+- MCP/open-world evidence
+- plugin/skill evidence plane
+- bridge/remote session evidence
+- team worker evidence 통합
 
 ## 7. 성공 기준
 
-- 직접 답변과 태스크 실행이 같은 세션 모델 아래에서 보입니다.
-- 파일 변경 요청은 항상 approval, artifact, verification을 동반합니다.
-- 원격 실행과 병렬 실행도 같은 UI 패턴으로 관찰 가능합니다.
-- 모델 문구가 바뀌어도 계약 해석이 흔들리지 않습니다.
+- 현재 세션의 답변이 어떤 trace와 run 정보 위에 서 있는지 UI에서 추적 가능하다
+- tool result, terminal output, run artifact가 서로 다른 이름으로 중복 표현되지 않는다
+- 현재 없는 team/remote/MCP 개념이 계약 표준의 필수가 아니다
+
+이 계획의 초점은 `확장 실행면 generalization`이 아니라 `현재 single local runtime의 evidence vocabulary 정리`입니다.

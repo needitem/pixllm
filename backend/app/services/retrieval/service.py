@@ -78,20 +78,19 @@ def run_retrieval(search_svc, request, embed_model):
             query_text=candidate_query,
         )
 
-    def _score_value(item: Dict) -> float:
-        return float(item.get("combined_score", item.get("dense_score", 0.0)) or 0.0)
-
     def _run_candidate_searches(active_filters):
         by_id: Dict[str, Dict] = {}
+        ordered: List[Dict] = []
         for candidate_index, candidate_query in enumerate(query_candidates):
             candidate_dense, candidate_sparse = encode_query(embed_model, candidate_query)
             candidate_results = _search(candidate_query, candidate_dense, candidate_sparse, active_filters)
             for result_index, item in enumerate(candidate_results or []):
                 key = str(item.get("id") or f"__candidate_{candidate_index}_{result_index}")
-                existing = by_id.get(key)
-                if existing is None or _score_value(item) > _score_value(existing):
-                    by_id[key] = item
-        return list(by_id.values())
+                if key in by_id:
+                    continue
+                by_id[key] = item
+                ordered.append(item)
+        return ordered
 
     results = _run_candidate_searches(filters)
 
@@ -139,12 +138,14 @@ def dedupe_results(results: List[Dict], max_per_source: int = 2) -> List[Dict]:
     if not results:
         return []
 
-    ranked = sorted(results, key=lambda x: x.get("combined_score", x.get("dense_score", 0.0)), reverse=True)
     per_source: Dict[str, int] = {}
     seen_fingerprints = set()
     deduped: List[Dict] = []
 
-    for item in ranked:
+    # Preserve upstream ordering from the vector search or reranker. Scores may
+    # still inform that ordering upstream, but this stage should not amplify
+    # their importance by re-sorting again.
+    for item in results:
         payload = item.get("payload", {}) if isinstance(item, dict) else {}
         source = str(payload.get("source_file") or payload.get("file_path") or item.get("id") or "")
         source = source.replace("\\", "/")

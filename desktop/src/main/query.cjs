@@ -23,23 +23,6 @@ function safeJsonParse(text) {
   }
 }
 
-function decodeXmlEntities(text) {
-  return String(text || '')
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'")
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&amp;/g, '&');
-}
-
-function parseAttributes(raw) {
-  const attrs = {};
-  for (const match of String(raw || '').matchAll(/([A-Za-z_][A-Za-z0-9_\-]*)\s*=\s*(?:"([^"]*)"|'([^']*)')/g)) {
-    attrs[String(match[1] || '').trim()] = decodeXmlEntities(match[2] || match[3] || '');
-  }
-  return attrs;
-}
-
 function createTextBlock(text) {
   return {
     type: 'text',
@@ -96,48 +79,10 @@ function normalizeAssistantBlocks(value) {
 }
 
 function stripAssistantWrappers(text) {
-  let next = String(text || '').trim();
-  next = next.replace(/^<assistant>\s*/i, '');
-  next = next.replace(/\s*<\/assistant>$/i, '');
-  return next.trim();
-}
-
-function parseToolMarkup(rawText) {
-  const source = stripAssistantWrappers(rawText);
-  const blocks = [];
-  const regex = /<tool_use\b([^>]*)>([\s\S]*?)<\/tool_use>/gi;
-  let cursor = 0;
-  let matched = false;
-  for (const match of source.matchAll(regex)) {
-    matched = true;
-    const start = Number(match.index || 0);
-    const end = start + String(match[0] || '').length;
-    const before = source.slice(cursor, start).trim();
-    if (before) {
-      blocks.push(createTextBlock(before));
-    }
-    const attrs = parseAttributes(match[1] || '');
-    const id = toStringValue(attrs.id || attrs.tool_use_id || attrs.toolUseId || '');
-    const name = toStringValue(attrs.name || attrs.tool || '');
-    const inner = String(match[2] || '').trim();
-    let input = {};
-    const parsed = safeJsonParse(inner);
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      input = parsed;
-    }
-    if (id && name) {
-      blocks.push(createToolUseBlock({ id, name, input }));
-    }
-    cursor = end;
-  }
-  const tail = source.slice(cursor).trim();
-  if (tail) {
-    blocks.push(createTextBlock(tail));
-  }
-  return {
-    matched,
-    blocks,
-  };
+  return String(text || '')
+    .replace(/^<assistant>\s*/i, '')
+    .replace(/\s*<\/assistant>$/i, '')
+    .trim();
 }
 
 function normalizeMessageBlocks(value) {
@@ -187,6 +132,9 @@ function parseAssistantResponse(rawText) {
     for (const toolCall of Array.isArray(rawText.tool_calls) ? rawText.tool_calls : []) {
       const id = toStringValue(toolCall?.id || toolCall?.tool_use_id || '');
       const name = toStringValue(toolCall?.name || toolCall?.tool || '');
+      if (!name) {
+        continue;
+      }
       const argumentText = typeof toolCall?.arguments === 'string' ? toolCall.arguments : '';
       const parsedInput = safeJsonParse(argumentText);
       blocks.push(createToolUseBlock({
@@ -198,34 +146,25 @@ function parseAssistantResponse(rawText) {
     return { ok: blocks.length > 0, blocks };
   }
 
-  const markup = parseToolMarkup(rawText);
-  if (markup.matched || markup.blocks.length > 0) {
-    return { ok: markup.blocks.length > 0, blocks: markup.blocks };
-  }
+  const normalizedText = stripAssistantWrappers(rawText);
+  const parsed = safeJsonParse(normalizedText);
+  if (parsed && typeof parsed === 'object') {
+    if (Array.isArray(parsed.blocks)) {
+      const blocks = normalizeAssistantBlocks(parsed.blocks);
+      return { ok: blocks.length > 0, blocks };
+    }
 
-  const parsed = safeJsonParse(rawText);
-  if (!parsed || typeof parsed !== 'object') {
-    const plainText = stripAssistantWrappers(rawText);
-    return plainText ? { ok: true, blocks: [createTextBlock(plainText)] } : { ok: false, blocks: [] };
-  }
-
-  if (Array.isArray(parsed.blocks)) {
-    const blocks = normalizeAssistantBlocks(parsed.blocks);
+    const answer = toStringValue(parsed.answer || parsed.text || parsed.content);
+    const toolName = toStringValue(parsed.tool || parsed.action);
+    const toolId = toStringValue(parsed.id || parsed.tool_use_id || 'toolu_legacy');
+    const toolInput = parsed.input && typeof parsed.input === 'object' && !Array.isArray(parsed.input) ? parsed.input : {};
+    const blocks = [];
+    if (answer) blocks.push(createTextBlock(answer));
+    if (toolName) blocks.push(createToolUseBlock({ id: toolId, name: toolName, input: toolInput }));
     return { ok: blocks.length > 0, blocks };
   }
 
-  const answer = toStringValue(parsed.answer);
-  const toolName = toStringValue(parsed.tool || parsed.action);
-  const toolId = toStringValue(parsed.id || parsed.tool_use_id || 'toolu_legacy');
-  const toolInput = parsed.input && typeof parsed.input === 'object' && !Array.isArray(parsed.input) ? parsed.input : {};
-  const blocks = [];
-  if (answer) blocks.push(createTextBlock(answer));
-  if (toolName) blocks.push(createToolUseBlock({ id: toolId, name: toolName, input: toolInput }));
-  return { ok: blocks.length > 0, blocks };
-}
-
-function escapeAttribute(value) {
-  return toStringValue(value).replace(/"/g, '&quot;');
+  return normalizedText ? { ok: true, blocks: [createTextBlock(normalizedText)] } : { ok: false, blocks: [] };
 }
 
 function renderBlock(block) {
@@ -235,11 +174,11 @@ function renderBlock(block) {
   }
   if (block.type === 'tool_use') {
     const input = JSON.stringify(block.input || {}, null, 2);
-    return `<tool_use id="${escapeAttribute(block.id)}" name="${escapeAttribute(block.name)}">\n${input}\n</tool_use>`;
+    return `[tool_use ${toStringValue(block.name)}#${toStringValue(block.id)}]\n${input}`;
   }
   if (block.type === 'tool_result') {
-    const errorAttr = block.is_error ? ' is_error="true"' : '';
-    return `<tool_result tool_use_id="${escapeAttribute(block.tool_use_id)}" name="${escapeAttribute(block.name)}"${errorAttr}>\n${String(block.content || '')}\n</tool_result>`;
+    const status = block.is_error ? 'error' : 'ok';
+    return `[tool_result ${toStringValue(block.name)}#${toStringValue(block.tool_use_id)} ${status}]\n${String(block.content || '')}`;
   }
   return '';
 }
@@ -265,25 +204,83 @@ function toolUseBlocks(blocks) {
   return (Array.isArray(blocks) ? blocks : []).filter((block) => block?.type === 'tool_use');
 }
 
-function serializeMessage(message) {
-  return {
-    role: toStringValue(message?.role || 'assistant').toLowerCase() === 'user' ? 'user' : 'assistant',
-    content: serializeBlocks(Array.isArray(message?.content) ? message.content : []),
-  };
+function assistantBlocksToModelMessage(message = {}) {
+  const blocks = Array.isArray(message?.content) ? message.content : [];
+  const text = extractTextFromBlocks(blocks);
+  const toolCalls = blocks
+    .filter((block) => block?.type === 'tool_use')
+    .map((block) => ({
+      id: toStringValue(block.id),
+      type: 'function',
+      function: {
+        name: toStringValue(block.name),
+        arguments: JSON.stringify(block.input || {}),
+      },
+    }))
+    .filter((toolCall) => toolCall.id && toolCall.function.name);
+
+  if (toolCalls.length > 0) {
+    return [{
+      role: 'assistant',
+      content: text || '',
+      tool_calls: toolCalls,
+    }];
+  }
+  if (text) {
+    return [{ role: 'assistant', content: text }];
+  }
+  return [];
+}
+
+function userBlocksToModelMessages(message = {}) {
+  const blocks = Array.isArray(message?.content) ? message.content : [];
+  const text = extractTextFromBlocks(blocks);
+  const toolResults = blocks
+    .filter((block) => block?.type === 'tool_result')
+    .map((block) => ({
+      role: 'tool',
+      tool_call_id: toStringValue(block.tool_use_id),
+      name: toStringValue(block.name),
+      content: typeof block.content === 'string' ? block.content : JSON.stringify(block.content ?? ''),
+    }))
+    .filter((item) => item.tool_call_id || item.name || item.content);
+
+  const messages = [];
+  if (text) {
+    messages.push({ role: 'user', content: text });
+  }
+  messages.push(...toolResults);
+  return messages;
+}
+
+function flattenMessagesForModel(messages = []) {
+  const out = [];
+  for (const message of Array.isArray(messages) ? messages : []) {
+    const role = toStringValue(message?.role).toLowerCase();
+    if (role === 'assistant') {
+      out.push(...assistantBlocksToModelMessage(message));
+      continue;
+    }
+    out.push(...userBlocksToModelMessages(message));
+  }
+  return out;
 }
 
 function buildSystemPrompt({ workspacePath = '', selectedFilePath = '', toolDescriptions = '' } = {}) {
   return [
     'You are the desktop coding engine. You own the tool loop and must decide when to call tools.',
-    'Use the runtime-provided tool calling interface whenever a tool is appropriate.',
+    'Use the runtime-provided function/tool calling interface whenever a tool is appropriate.',
     'Do not invent tool names or parameters. Use only the provided tool definitions.',
-    'Do not emit tool_result blocks manually. The runtime sends tool results back to you.',
-    'When you have enough grounded evidence, reply with plain text only and no <tool_use> blocks.',
-    'Ground every code claim in the tool_result content already shown in the transcript.',
-    'Do not mention file paths, line ranges, or symbols unless they appeared in prior tool results.',
+    'Only the tools listed for this turn are enabled. If a needed tool is unavailable, keep working with the enabled tools or explain the blocker.',
+    'Do not write tool results manually. The runtime sends tool results back to you.',
+    'When you have enough grounded evidence, reply with plain text only and no further tool calls.',
+    'Ground every code claim in the tool results already shown in the transcript.',
+    'Prefer grounding file paths, line ranges, and symbols in prior tool results, but do not block a useful answer solely because that evidence was summarized away.',
     'User-referenced files and the selected file may be used directly. Discover any other path before reading, editing, or naming it.',
+    'Use company_reference_search for company engine source or internal reference docs that live outside the current workspace.',
+    'Treat backend reference evidence as read-only. Do not use local edit or write tools against paths that only came from backend reference results.',
     'If the runtime asks you to continue after an output cutoff, resume directly from the cutoff with no recap or apology.',
-    'If a tool batch failed or was rejected, change strategy. Do not repeat the identical tool batch unless new evidence requires it.',
+    'If a tool batch failed or was rejected, change strategy when it helps, but you may retry or refine prior tool calls when the situation still warrants it.',
     'If you need to edit files, prefer precise edits before full rewrites.',
     workspacePath ? `Workspace: ${workspacePath}` : '',
     selectedFilePath ? `Selected file: ${selectedFilePath}` : '',
@@ -300,7 +297,7 @@ module.exports = {
   normalizeMessageBlocks,
   parseAssistantResponse,
   serializeBlocks,
-  serializeMessage,
+  flattenMessagesForModel,
   extractTextFromBlocks,
   toolUseBlocks,
   buildSystemPrompt,

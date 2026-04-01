@@ -6,41 +6,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from ... import config, rag_config
+from ... import config
 from ...utils.encoding import TEXT_ENCODING_FALLBACKS, decode_bytes
 from ...utils.file_indexing import language_from_name
 from .query_terms import compact_token as _compact_token
 from .query_terms import extract_query_terms as _extract_query_terms
 from .query_terms import extract_query_score_tokens as _query_score_tokens
 from .query_terms import extract_symbol_query_candidates
-_DEFINITION_SCORE_DEFAULTS = {
-    "type_declaration": 8.5,
-    "function_declaration": 8.0,
-    "callable_signature": 5.5,
-    "fallback": 4.0,
-    "type_keyword_bonus": 2.5,
-    "modifier_bonus": 1.5,
-    "new_expression_penalty": 4.0,
-    "member_call_penalty": 4.5,
-    "assignment_penalty": 1.0,
-    "brace_bonus": 0.5,
-    "stem_bonus": 1.5,
-    "long_line_threshold": 220,
-    "long_line_penalty": 0.5,
-}
-_SEARCH_HIT_SCORE_DEFAULTS = {
-    "base": 1.0,
-    "query_exact_hit": 2.0,
-    "query_token_hit": 0.75,
-    "path_token_hit": 0.5,
-    "call_bonus": 0.2,
-    "declaration_bonus": 0.3,
-    "symbol_definition_bonus": 1.2,
-    "token_hit_cap": 4,
-    "path_hit_cap": 3,
-    "long_line_threshold": 160,
-    "long_line_penalty": 0.1,
-}
 
 
 def _strip_companion_suffixes(stem: str) -> str:
@@ -137,9 +109,7 @@ class CodeToolService:
                 {
                     "id": f"code:{payload['file_path']}:{payload['line_start']}",
                     "payload": payload,
-                    "dense_score": 0.0,
-                    "sparse_score": hit.score,
-                    "combined_score": max(0.01, hit.score - idx * 0.01),
+                    "rank": idx + 1,
                 }
             )
             if len(results) >= min(top_k, self.max_results):
@@ -186,9 +156,7 @@ class CodeToolService:
                 {
                     "id": f"symbol:{normalized_symbol}:{payload['file_path']}:{payload['line_start']}",
                     "payload": payload,
-                    "dense_score": 0.0,
-                    "sparse_score": hit.score,
-                    "combined_score": max(0.01, hit.score - idx * 0.01),
+                    "rank": idx + 1,
                 }
             )
 
@@ -304,32 +272,25 @@ class CodeToolService:
         return hits
 
     def _definition_score(self, text: str, symbol: str, path: Path, pattern_kind: str) -> float:
-        weights = rag_config.heuristics_weights("code_definition_score", _DEFINITION_SCORE_DEFAULTS)
         lowered = str(text or "").strip().lower()
         symbol_lower = str(symbol or "").strip().lower()
         score = {
-            "type_declaration": float(weights["type_declaration"]),
-            "function_declaration": float(weights["function_declaration"]),
-            "callable_signature": float(weights["callable_signature"]),
-        }.get(pattern_kind, float(weights["fallback"]))
+            "type_declaration": 4.0,
+            "function_declaration": 3.5,
+            "callable_signature": 2.5,
+        }.get(pattern_kind, 2.0)
 
-        if any(keyword in lowered for keyword in ("class ", "struct ", "interface ", "enum ", "record ")):
-            score += float(weights["type_keyword_bonus"])
-        if any(keyword in lowered for keyword in ("public ", "private ", "protected ", "internal ", "static ", "virtual ", "override ", "async ")):
-            score += float(weights["modifier_bonus"])
-        if f"new {symbol_lower}" in lowered:
-            score -= float(weights["new_expression_penalty"])
-        if f".{symbol_lower}(" in lowered or f"->{symbol_lower}(" in lowered:
-            score -= float(weights["member_call_penalty"])
-        if "=" in lowered and f"{symbol_lower}(" not in lowered:
-            score -= float(weights["assignment_penalty"])
-        if "{" in lowered:
-            score += float(weights["brace_bonus"])
+        if symbol_lower and re.search(rf"\b{re.escape(symbol_lower)}\b", lowered):
+            score += 4.0
         stem = _strip_companion_suffixes(path.stem).lower()
         if symbol_lower == stem or symbol_lower in stem:
-            score += float(weights["stem_bonus"])
-        if len(lowered) > int(weights["long_line_threshold"]):
-            score -= float(weights["long_line_penalty"])
+            score += 1.5
+        if f"new {symbol_lower}" in lowered:
+            score -= 2.5
+        if f".{symbol_lower}(" in lowered or f"->{symbol_lower}(" in lowered:
+            score -= 2.5
+        if len(lowered) > 240:
+            score -= 0.5
         return score
 
     def _merge_hits(self, primary: List[CodeHit], secondary: List[CodeHit]) -> List[CodeHit]:
@@ -449,7 +410,6 @@ class CodeToolService:
         query_text: str = "",
         hit_kind: str = "search",
     ) -> float:
-        weights = rag_config.heuristics_weights("search_hit_score", _SEARCH_HIT_SCORE_DEFAULTS)
         t = (text or "").strip()
         lowered = t.lower()
         path_lower = file_path.as_posix().lower() if file_path is not None else ""
@@ -465,18 +425,14 @@ class CodeToolService:
             if len(token) >= 3 and token in path_lower:
                 path_hits += 1
 
-        score = float(weights["base"])
-        score += min(exact_hits, int(weights["token_hit_cap"])) * float(weights["query_exact_hit"])
-        score += min(token_hits, int(weights["token_hit_cap"])) * float(weights["query_token_hit"])
-        score += min(path_hits, int(weights["path_hit_cap"])) * float(weights["path_token_hit"])
-        if "(" in t and ")" in t:
-            score += float(weights["call_bonus"])
-        if "class " in t or "def " in t or "function " in t:
-            score += float(weights["declaration_bonus"])
+        score = 1.0
+        score += min(exact_hits, 4) * 2.0
+        score += min(token_hits, 4) * 0.75
+        score += min(path_hits, 3) * 0.5
         if hit_kind == "symbol_definition":
-            score += float(weights["symbol_definition_bonus"])
-        if len(t) > int(weights["long_line_threshold"]):
-            score -= float(weights["long_line_penalty"])
+            score += 1.2
+        if len(t) > 180:
+            score -= 0.1
         return score
 
     def _read_window(self, path: Path, line_no: int) -> Tuple[str, int, int]:

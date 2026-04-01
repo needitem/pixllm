@@ -25,6 +25,10 @@ function normalizeInputSchema(schema) {
   };
 }
 
+function normalizeOutputSchema(schema) {
+  return schema && typeof schema === 'object' && !Array.isArray(schema) ? schema : null;
+}
+
 function isPlainObject(value) {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
@@ -205,7 +209,10 @@ function validateWorkspaceRelativePaths(input, keys) {
 }
 
 async function normalizeToolInvocation(tool, input, context) {
-  const rawInput = isPlainObject(input) ? input : {};
+  const rawInput = isPlainObject(input) ? { ...input } : {};
+  if (typeof tool?.backfillObservableInput === 'function') {
+    await tool.backfillObservableInput(rawInput, context);
+  }
   const schema = normalizeInputSchema(tool?.inputSchema);
   const validation = validateValueAgainstSchema(rawInput, schema, 'input');
   if (!validation.ok) {
@@ -241,6 +248,23 @@ async function normalizeToolInvocation(tool, input, context) {
   return { ok: true, input: validation.value };
 }
 
+function validateToolOutput(value, schema) {
+  const safeSchema = schema && typeof schema === 'object' && !Array.isArray(schema) ? schema : null;
+  if (!safeSchema) {
+    return { ok: true, value };
+  }
+  const validation = validateValueAgainstSchema(value, safeSchema, 'output');
+  if (validation.ok) {
+    return validation;
+  }
+  const details = Array.isArray(validation.errors) ? validation.errors.filter(Boolean) : [];
+  return {
+    ok: false,
+    message: details[0] || 'Tool returned an invalid output shape',
+    details,
+  };
+}
+
 function toolMatchesName(tool, name) {
   const normalizedName = toStringValue(name).toLowerCase();
   if (!tool || !normalizedName) {
@@ -265,10 +289,28 @@ function defineLocalTool(definition = {}) {
     workspaceRelativePaths: toStringList(definition.workspaceRelativePaths),
     kind: toStringValue(definition.kind || 'read'),
     inputSchema: normalizeInputSchema(definition.inputSchema),
+    outputSchema: normalizeOutputSchema(definition.outputSchema),
     isEnabled: typeof definition.isEnabled === 'function' ? definition.isEnabled : () => true,
-    isReadOnly: typeof definition.isReadOnly === 'function' ? definition.isReadOnly : () => true,
+    isReadOnly: typeof definition.isReadOnly === 'function' ? definition.isReadOnly : () => false,
     isConcurrencySafe:
-      typeof definition.isConcurrencySafe === 'function' ? definition.isConcurrencySafe : () => true,
+      typeof definition.isConcurrencySafe === 'function' ? definition.isConcurrencySafe : () => false,
+    isDestructive: typeof definition.isDestructive === 'function' ? definition.isDestructive : () => false,
+    interruptBehavior:
+      typeof definition.interruptBehavior === 'function' ? definition.interruptBehavior : () => 'block',
+    checkPermissions:
+      typeof definition.checkPermissions === 'function'
+        ? definition.checkPermissions
+        : async (input) => ({ allow: true, input }),
+    backfillObservableInput:
+      typeof definition.backfillObservableInput === 'function'
+        ? definition.backfillObservableInput
+        : async () => {},
+    getToolUseSummary:
+      typeof definition.getToolUseSummary === 'function' ? definition.getToolUseSummary : () => null,
+    userFacingName:
+      typeof definition.userFacingName === 'function'
+        ? definition.userFacingName
+        : () => toStringValue(definition.name || 'tool'),
     call: typeof definition.call === 'function' ? definition.call : async () => ({ ok: false, error: 'tool_call_not_implemented' }),
     description:
       typeof definition.description === 'function'
@@ -280,8 +322,10 @@ function defineLocalTool(definition = {}) {
 }
 
 module.exports = {
+  buildTool: defineLocalTool,
   toolMatchesName,
   findToolByName,
   defineLocalTool,
   normalizeToolInvocation,
+  validateToolOutput,
 };

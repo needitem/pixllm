@@ -2,9 +2,10 @@ const {
   grepItemsFromTrace,
   listFilesFromTrace,
   readObservationsFromTrace,
+  referencePathsFromTrace,
   symbolOutlinesFromTrace,
   failedSteps,
-} = require('../local_agent_trace.cjs');
+} = require('../queryTrace.cjs');
 
 function toStringValue(value) {
   return String(value || '').trim();
@@ -23,7 +24,7 @@ function normalizedSet(items) {
   return out;
 }
 
-function collectGroundedPaths({ trace = [], fileCache = {}, requestContext = {} } = {}) {
+function collectWorkspaceGroundedPaths({ trace = [], fileCache = {}, requestContext = {} } = {}) {
   const paths = new Set();
   const append = (value) => {
     const normalized = normalizePath(value);
@@ -39,6 +40,15 @@ function collectGroundedPaths({ trace = [], fileCache = {}, requestContext = {} 
   for (const item of symbolOutlinesFromTrace(trace)) append(item?.path);
   for (const key of Object.keys(fileCache && typeof fileCache === 'object' ? fileCache : {})) append(key);
 
+  return Array.from(paths);
+}
+
+function collectGroundedPaths({ trace = [], fileCache = {}, requestContext = {} } = {}) {
+  const paths = new Set(collectWorkspaceGroundedPaths({ trace, fileCache, requestContext }));
+  for (const item of referencePathsFromTrace(trace)) {
+    const normalized = normalizePath(item);
+    if (normalized) paths.add(normalized);
+  }
   return Array.from(paths);
 }
 
@@ -93,17 +103,41 @@ function authorizeToolUse({
   requestContext = {},
   trace = [],
   fileCache = {},
+  context = {},
 } = {}) {
   const toolName = toStringValue(tool?.name || '');
   const normalizedTool = toolName.toLowerCase();
   const intent = requestContext?.intent && typeof requestContext.intent === 'object' ? requestContext.intent : {};
+  const activeToolNames = normalizedSet(
+    Array.isArray(context?.activeToolNames)
+      ? context.activeToolNames
+      : Array.isArray(requestContext?.activeToolNames)
+        ? requestContext.activeToolNames
+        : [],
+  );
+  const workspaceGroundedPaths = normalizedSet(collectWorkspaceGroundedPaths({ trace, fileCache, requestContext }));
   const groundedPaths = normalizedSet(collectGroundedPaths({ trace, fileCache, requestContext }));
   const readPaths = collectReadPaths({ trace, fileCache });
+  const referencePaths = normalizedSet(referencePathsFromTrace(trace));
+  const directPaths = normalizedSet(requestContext?.allowedDirectPaths);
   const pathCandidates = toolPathCandidates(normalizedTool, input).map((value) => normalizePath(value)).filter(Boolean);
-  const unknownPaths = pathCandidates.filter((value) => !groundedPaths.has(value.toLowerCase()));
+  const unknownPaths = pathCandidates.filter((value) => !workspaceGroundedPaths.has(value.toLowerCase()));
   const unreadPaths = pathCandidates.filter((value) => !readPaths.has(value.toLowerCase()));
+  const backendOnlyPaths = pathCandidates.filter((value) => {
+    const normalized = value.toLowerCase();
+    return referencePaths.has(normalized) && !workspaceGroundedPaths.has(normalized) && !directPaths.has(normalized);
+  });
   const hasContext = groundedPaths.size > 0;
   const hasFailures = failedSteps(trace).length > 0;
+
+  if (activeToolNames.size > 0 && !activeToolNames.has(normalizedTool)) {
+    return permissionDenied({
+      toolName,
+      reason: 'tool_not_enabled_for_turn',
+      message: `${toolName} is not enabled for this turn. Use the currently grounded read, discovery, or reference tools first.`,
+      suggestedTools: Array.from(activeToolNames).slice(0, 5),
+    });
+  }
 
   if (normalizedTool === 'config') {
     const action = toStringValue(input.action || 'get').toLowerCase();
@@ -123,15 +157,12 @@ function authorizeToolUse({
     'brief',
     'sleep',
     'tool_search',
-    'task_create',
     'task_get',
-    'task_update',
     'task_list',
-    'task_stop',
     'task_output',
     'terminal_capture',
-    'web_search',
-    'web',
+    'project_context_search',
+    'company_reference_search',
     'list_files',
     'glob',
     'grep',
@@ -144,6 +175,30 @@ function authorizeToolUse({
 
   if (normalizedTool === 'lsp' && classifyLspAction(input.action || input.operation) === 'discovery') {
     return permissionAllowed();
+  }
+
+  if (['task_create', 'task_update', 'task_stop'].includes(normalizedTool)) {
+    if (intent.wantsExecution || intent.wantsChanges || hasContext || hasFailures) {
+      return permissionAllowed();
+    }
+    return permissionDenied({
+      toolName,
+      reason: 'task_runtime_context_required',
+      message: 'Do not create or mutate runtime tasks before the request has explicit execution or change intent.',
+      suggestedTools: ['list_files', 'grep', 'read_file'],
+    });
+  }
+
+  if (
+    backendOnlyPaths.length > 0
+    && ['read_file', 'read_symbol_span', 'symbol_outline', 'symbol_neighborhood', 'lsp', 'write', 'write_file', 'edit', 'replace_in_file', 'notebook_edit'].includes(normalizedTool)
+  ) {
+    return permissionDenied({
+      toolName,
+      reason: 'backend_reference_requires_reference_tool',
+      message: `${backendOnlyPaths[0]} came from backend reference evidence. Use company_reference_search instead of local file tools for company reference sources.`,
+      suggestedTools: ['company_reference_search', 'grep', 'find_symbol'],
+    });
   }
 
   if (['read_file', 'read_symbol_span', 'symbol_outline', 'symbol_neighborhood', 'lsp'].includes(normalizedTool)) {
@@ -222,10 +277,25 @@ function authorizeToolUse({
     });
   }
 
-  return permissionAllowed();
+  return permissionDenied({
+    toolName,
+    reason: 'tool_policy_missing',
+    message: `${toolName} does not have an explicit local permission policy yet. Use grounded discovery or read tools first.`,
+    suggestedTools: ['tool_search', 'list_files', 'grep', 'read_file'],
+  });
+}
+
+function canUseTool(payload = {}) {
+  return authorizeToolUse(payload);
+}
+
+function wrappedCanUseTool(payload = {}) {
+  return canUseTool(payload);
 }
 
 module.exports = {
+  canUseTool,
+  wrappedCanUseTool,
   authorizeToolUse,
   collectGroundedPaths,
 };

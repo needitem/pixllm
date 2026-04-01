@@ -1,104 +1,77 @@
 # PIXLLM Desktop App Plan
 
-## 목표
+> 상태: 이 문서는 현재 구현 위에서의 다음 단계 계획을 정리합니다. 현재 앱은 이미 동작 중이며, 아래 계획은 그 위에 무엇을 더 정리할지에 대한 것입니다.
 
-PIXLLM 데스크톱 앱을 `백엔드 채팅창`이 아니라 `세션 실행 콘솔`로 재설계합니다.
+## 1. 현재 기준 베이스라인
 
-핵심 방향:
+현재 데스크톱 앱은 이미 아래를 제공합니다.
 
-- 앱이 주 실행면입니다.
-- 사용자는 `세션`, `태스크`, `아티팩트`, `승인`, `팀 실행`을 앱 안에서 다룹니다.
-- 백엔드는 모델/데이터/제어 평면으로 남고, 앱은 작업 오케스트레이션의 표면이 됩니다.
+- workspace 선택
+- settings 관리
+- session 생성/재개/저장
+- 로컬 agent 스트리밍 대화
+- tool / terminal / question 이벤트 표시
+- backend runs 조회
+- run detail의 tasks / approvals / artifacts 확인
 
-## 제품 개념
+현재 UI의 실제 중심은 `desktop/src/renderer/App.svelte` 하나와 preload bridge입니다.
 
-앱은 아래 다섯 화면군을 중심으로 구성합니다.
+## 2. 현재 없는 것
 
-- 세션 목록과 재개
-- 중앙 작업 스트림
-- 우측 컨텍스트/아티팩트 패널
-- 하단 터미널/로그 패널
-- 승인/팀 상태 패널
+현재 앱에 없는 것:
 
-## 핵심 사용자 흐름
+- team monitor
+- remote bridge panel
+- MCP/open-world surface
+- 별도 multi-agent orchestration UI
 
-1. 사용자가 워크스페이스를 선택합니다.
-2. 새 세션을 열거나 기존 세션을 재개합니다.
-3. 질문, 편집 요청, 리뷰 요청, 빌드/테스트 요청을 보냅니다.
-4. 앱은 실행 과정을 메시지뿐 아니라 tool/task 이벤트로 보여줍니다.
-5. 필요하면 사용자는 approval inbox에서 승인하거나 거절합니다.
-6. 결과는 최종 답변과 함께 diff, 로그, 테스트 결과, 계획서를 아티팩트로 확인합니다.
+즉 과거 문서처럼 "세션 + 태스크 + 팀 + 브리지"가 모두 구현된 상태는 아닙니다.
 
-## 화면 구성
+## 3. 목표 방향
 
-### 1. Session Rail
+앱의 방향은 여전히 `단순 채팅창`보다 `실행 과정을 볼 수 있는 데스크톱 콘솔`에 가깝습니다.
 
-- 세션 목록
-- 최근 워크스페이스
-- 즐겨찾기된 프로젝트
-- 실행 중 task 배지
+다만 현재 기준에서 우선순위는 아래 순서가 맞습니다.
 
-### 2. Main Timeline
+1. 단일 로컬 에이전트 경로를 더 단단하게 만들기
+2. session / run / approval / artifact 화면을 정리하기
+3. 모놀리식 renderer를 기능 단위로 분리하기
+4. 필요가 입증될 때만 team/remote를 다시 검토하기
 
-- 사용자 메시지
-- assistant 응답
-- tool start/result 이벤트
-- task 진행률
-- approval 요청과 처리 결과
-- verification 요약
+## 4. 단기 계획
 
-### 3. Context Panel
+### Phase 1: 현재 경로 정리
 
-- 현재 파일과 심볼
-- 수집된 evidence bundle
-- source references
-- 모델/실행 모드
+- `App.svelte`를 session, timeline, run inspector, approvals 뷰로 분리
+- 로컬 tool/terminal 이벤트 표현 개선
+- session resume / run snapshot UX 정리
+- grounding 실패, tool denial, task failure 표시 개선
 
-### 4. Artifact Panel
+### Phase 2: 실행 결과 보기 강화
 
-- diff viewer
-- build/test 결과
-- 계획서
-- 리뷰 findings
-- 명령 결과 로그
+- artifact viewer 개선
+- terminal capture 전용 뷰 정리
+- run detail의 tasks / approvals / artifacts 연결 강화
+- local trace 요약 보기 추가
 
-### 5. Team and Bridge Panel
+### Phase 3: 선택적 확장
 
-- 병렬 worker 상태
-- 파일 ownership
-- remote session 상태
-- reconnect / stop 제어
+- 장시간 작업 재개 UX 보강
+- background task 제어 개선
+- team/remote 필요성이 제품적으로 입증되면 그때 별도 계획 수립
 
-## 단계별 계획
+## 5. 명시적 비범위
 
-### Phase 1
+현재 계획에서 제외하는 것:
 
-- 세션 생성/재개
-- 스트리밍 타임라인
-- artifact viewer
-- approval inbox
+- MCP/open-world integration
+- plugin registry surface
+- remote bridge를 전제로 한 UI 설계
+- 구현되지 않은 multi-agent 패널을 현재 기능처럼 문서화하는 일
 
-### Phase 2
+## 6. 성공 기준
 
-- task retry/resume
-- patch apply/reject UX
-- structured terminal panel
-- verification result panel
-
-### Phase 3
-
-- team execution 시각화
-- remote bridge session monitor
-- automation/inbox surface
-
-## 비목표
-
-- 순수 채팅 UX로 회귀하지 않습니다.
-- 웹 프런트엔드를 별도 제품 표면으로 되살리지 않습니다.
-- 모든 작업을 중앙 서버가 먼저 판단하는 구조로 되돌리지 않습니다.
-
-## 성공 기준
-
-- 사용자가 "무슨 작업이 실행됐는지"를 답변 밖에서도 추적할 수 있어야 합니다.
-- 장시간 실행과 파일 변경 결과를 아티팩트로 검토할 수 있어야 합니다.
-- 세션 단위로 재개, retry, review가 가능해야 합니다.
+- 사용자가 현재 세션에서 어떤 tool과 task가 실행됐는지 쉽게 따라갈 수 있어야 합니다.
+- runs 화면에서 approvals, tasks, artifacts를 바로 검토할 수 있어야 합니다.
+- session 저장/재개와 local trace가 일관되게 보여야 합니다.
+- 현재 없는 team/bridge 개념이 UI 문서의 기본 전제가 아니어야 합니다.

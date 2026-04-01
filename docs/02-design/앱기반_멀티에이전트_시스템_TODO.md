@@ -1,81 +1,58 @@
 # 앱기반 멀티 에이전트 시스템 TODO
 
-> 목적: PIXLLM을 `세션 커널 + 도구/태스크 + 팀/브리지` 구조로 옮기기 위한 구현 체크리스트
+> 상태: 현재 코드와 제품 방향을 반영해 backlog를 다시 정리한 문서입니다. 지금 우선순위는 멀티 에이전트가 아니라 단일 로컬 런타임 완성도입니다.
 
-## 0. 개념 전환
+## 1. 이미 현재 코드에 들어간 것
 
-- [ ] `conversation-only` 모델을 `session / turn / task / artifact` 모델로 교체
-- [ ] `intent-heavy` 설명을 `minimal routing + tool loop`로 교체
-- [ ] 데스크톱을 단순 채팅 클라이언트가 아니라 주 실행면으로 고정
+- desktop가 실제 주 실행면입니다
+- session 생성, 저장, 재개가 됩니다
+- `LocalAgentEngine`과 `LocalAgentRuntime`이 분리돼 있습니다
+- request context 추출이 있습니다
+- 중앙 local tool policy가 있습니다
+- grounded final answer 검사와 read-before-edit 규칙이 있습니다
+- background task runtime과 terminal capture가 있습니다
+- backend `/api/v1/runs` 조회 및 approval/action UI가 있습니다
 
-## 1. Session Kernel
+## 2. 단일 로컬 런타임에서 아직 남은 것
 
-- [ ] 세션 생성, 재개, 종료 수명주기 정의
-- [ ] turn 실행 상태 머신 정의
-- [ ] 공통 context builder 구현
-- [ ] minimal router 구현
-- [ ] final response에 verification 구조 포함
+- streaming 중 즉시 tool execution
+- interrupt 시 transcript 복구 정교화
+- local trace, terminal capture, run snapshot의 공통 표현 정리
+- renderer의 `App.svelte` 기능 분리
+- artifact / diff / terminal viewer 보강
+- local path와 backend run path의 역할 문서화 정리
 
-## 2. Tool Plane
+## 3. backend 운영 표면에서 남은 것
 
-- [ ] 파일 읽기/검색/편집 도구 정비
-- [ ] 셸/빌드/테스트 도구를 task 승격 가능한 구조로 정비
-- [ ] MCP, plugin, skill 도구를 공통 registry에 편입
-- [ ] tool result를 표준 evidence schema로 저장
+- run detail과 local session의 연결 강화
+- approval/action 결과를 main session UI에도 더 명확히 반영
+- run task / artifact 데이터의 표준 shape 정리
+- health / runs / approvals 문서와 UI를 더 맞추기
 
-## 3. Task Plane
+## 4. 선택적 미래 과제
 
-- [ ] `local_shell`, `local_agent`, `remote_agent`, `verification` task 정의
-- [ ] task retry/resume/cancel 상태 전이 정의
-- [ ] artifact 저장 구조 정의
-- [ ] approval-required task 계약 정의
+아래는 현재 코드의 기본 경로가 아니라, 필요성이 생길 때만 다시 검토할 항목입니다.
 
-## 4. Team Plane
+- team execution
+- remote execution
+- bridge-connected worker
+- isolated worktree orchestration
 
-- [ ] 병렬 worker 생성 기준 정의
-- [ ] 파일 ownership 규칙 정의
-- [ ] worker 산출물을 artifact와 evidence로 재통합
-- [ ] team status를 UI와 control plane에 모두 노출
+즉 현재 backlog에서 이 항목들은 1순위가 아닙니다.
 
-## 5. Bridge Plane
+## 5. 명시적 비범위
 
-- [ ] remote environment 등록 API 정의
-- [ ] work polling/ack/stop 계약 구현
-- [ ] 세션 재연결과 heartbeat 지원
-- [ ] worktree 또는 isolated workspace 전략 확정
+현재 방향에서 제외하는 것:
 
-## 6. Desktop UI
+- MCP/open-world tool integration
+- plugin registry / plugin trust 설계
+- skill execution plane을 로컬 에이전트 기본 경로로 넣는 일
 
-- [ ] session rail
-- [ ] timeline stream
-- [ ] artifact viewer
-- [ ] approval inbox
-- [ ] team monitor
-- [ ] bridge status panel
+## 6. 완료 기준
 
-## 7. Security and Policy
+이 문서의 가까운 완료 기준은 아래입니다.
 
-- [ ] permission mode 정의
-- [ ] 위험 명령 승인 흐름 구현
-- [ ] plugin trust 정책 정의
-- [ ] remote token과 secret 저장 정책 정의
-
-## 8. Observability
-
-- [ ] session/turn/task/tool correlation id 통일
-- [ ] structured event logging 구현
-- [ ] bridge/task/approval 대시보드 정의
-- [ ] 모델 usage/cost 추적 연결
-
-## 9. Model Plane
-
-- [ ] 기존 LLM 서빙 문서 유지
-- [ ] 기존 임베딩 문서 유지
-- [ ] 모델 변경 없이 오케스트레이션만 교체하는 원칙 고정
-
-## 10. 완료 기준
-
-- [ ] 기술 질문 대부분이 `tool_loop` 경로로 안정 동작
-- [ ] 파일 변경 요청이 `task + approval + artifact + verification`으로 표현됨
-- [ ] 병렬 실행과 원격 실행이 세션 안에서 추적 가능
-- [ ] UI가 답변뿐 아니라 실행 흐름을 일관되게 보여줌
+- 대부분의 기술 질문이 안정적으로 local `tool_loop`에서 처리된다
+- 파일 수정과 실행 요청이 grounding 규칙 안에서 일관되게 동작한다
+- session / run / approval / artifact 흐름이 UI와 문서에서 서로 맞는다
+- 현재 없는 team/remote/MCP 개념이 핵심 설계 문서의 기본 전제가 아니다

@@ -176,6 +176,36 @@ function symbolOutlinesFromTrace(trace) {
     .filter((item) => item.path);
 }
 
+function referencePathsFromTrace(trace) {
+  const paths = [];
+  for (const step of successfulSteps(trace, 'company_reference_search')) {
+    const observation = step?.observation && typeof step.observation === 'object' ? step.observation : {};
+    for (const item of Array.isArray(observation.matches) ? observation.matches : []) {
+      paths.push(item?.path);
+    }
+    for (const item of Array.isArray(observation.windows) ? observation.windows : []) {
+      paths.push(item?.path);
+    }
+    for (const item of Array.isArray(observation.doc_results) ? observation.doc_results : []) {
+      paths.push(item?.file_path);
+    }
+    for (const item of Array.isArray(observation.doc_chunks) ? observation.doc_chunks : []) {
+      paths.push(item?.file_path);
+    }
+    for (const item of Array.isArray(observation.citations) ? observation.citations : []) {
+      paths.push(item?.path);
+    }
+  }
+  return uniq(
+    paths.filter((item) => {
+      const normalized = normalizePath(item);
+      if (!normalized) return false;
+      if (/^(?:https?|file):\/\//i.test(normalized)) return false;
+      return isTraceCandidatePath(normalized);
+    }),
+  );
+}
+
 function summarizeObservation(toolName, observation, maxChars = 16000) {
   const payload = observation || {};
   if (toolName === 'list_files') {
@@ -286,13 +316,55 @@ function summarizeObservation(toolName, observation, maxChars = 16000) {
       message: payload.message || '',
     };
   }
-  if (toolName === 'web' || toolName === 'web_fetch') {
+  if (toolName === 'company_reference_search') {
     return {
       ok: Boolean(payload.ok),
-      url: payload.url || '',
-      status: Number(payload.status || 0),
-      content: String(payload.content || '').slice(0, maxChars),
-      truncated: Boolean(payload.truncated),
+      query: payload.query || '',
+      requested_mode: payload.requested_mode || '',
+      resolved_mode: payload.resolved_mode || '',
+      matches: Array.isArray(payload.matches)
+        ? payload.matches.slice(0, 20).map((item) => ({
+          path: item?.path || '',
+          lineRange: item?.lineRange || item?.line_range || '',
+          line: Number(item?.line || 0),
+          text: String(item?.text || item?.match || '').slice(0, 240),
+          symbol: item?.symbol || '',
+          matchKind: item?.matchKind || item?.match_kind || '',
+        }))
+        : [],
+      windows: Array.isArray(payload.windows)
+        ? payload.windows.slice(0, 6).map((item) => ({
+          path: item?.path || '',
+          lineRange: item?.lineRange || item?.line_range || '',
+          truncated: Boolean(item?.truncated),
+          content: String(item?.content || '').slice(0, Math.min(1800, maxChars)),
+        }))
+        : [],
+      doc_results: Array.isArray(payload.doc_results)
+        ? payload.doc_results.slice(0, 8).map((item) => ({
+          doc_id: item?.doc_id || '',
+          chunk_id: item?.chunk_id || '',
+          file_path: item?.file_path || '',
+          source_url: item?.source_url || '',
+          heading_path: item?.heading_path || '',
+          paragraph_range: item?.paragraph_range || '',
+          text: String(item?.text || '').slice(0, 240),
+        }))
+        : [],
+      doc_chunks: Array.isArray(payload.doc_chunks)
+        ? payload.doc_chunks.slice(0, 6).map((item) => ({
+          doc_id: item?.doc_id || '',
+          chunk_id: item?.chunk_id || '',
+          file_path: item?.file_path || '',
+          source_url: item?.source_url || '',
+          heading_path: item?.heading_path || '',
+          paragraph_range: item?.paragraph_range || '',
+          text: String(item?.text || '').slice(0, 360),
+          truncated: Boolean(item?.truncated),
+        }))
+        : [],
+      citations: Array.isArray(payload.citations) ? payload.citations.slice(0, 12) : [],
+      trace: Array.isArray(payload.trace) ? payload.trace.slice(0, 12) : [],
       error: payload.error || '',
       message: payload.message || '',
     };
@@ -508,6 +580,7 @@ module.exports = {
   readWindowsFromTrace,
   readObservationsFromTrace,
   symbolOutlinesFromTrace,
+  referencePathsFromTrace,
   summarizeObservation,
   extractIdentifiers,
   pickRepresentativeEvidence,

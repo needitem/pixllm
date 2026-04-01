@@ -40,7 +40,6 @@ def normalize_doc_item(item: Dict[str, Any], doc_updated_at: Optional[str] = Non
         "updated_at": payload.get("updated_at") or doc_updated_at,
         "paragraph_range": paragraph_range,
         "text": payload.get("text", ""),
-        "score": item.get("combined_score", item.get("dense_score")),
     }
 
 
@@ -124,7 +123,7 @@ def expand_doc_neighbors_for_seed(
             continue
         candidates.append(item)
 
-    candidates.sort(key=lambda row: (neighbor_rank(seed, row), float(row.get("score") or 0.0)), reverse=True)
+    candidates.sort(key=lambda row: neighbor_rank(seed, row), reverse=True)
     selected = candidates[:per_doc_cap]
     for row in selected:
         cid = doc_chunk_id(row)

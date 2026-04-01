@@ -50,39 +50,6 @@ def default_mode_for_response_type(response_type: str) -> str:
     if rt in _doc_first_types():
         return "docs"
     return "code"
-
-
-def _probe_conflict_cutoff(threshold: float) -> float:
-    return min(0.92, max(0.0, float(threshold)) + 0.15)
-
-
-def _should_probe(default_mode: str, confidence: float, threshold: float, target_mode: str) -> bool:
-    if not rag_config.routing_probe_enabled():
-        return False
-    if confidence < threshold:
-        return True
-    if not target_mode:
-        return False
-    if default_mode == target_mode:
-        return False
-    return confidence < _probe_conflict_cutoff(threshold)
-
-
-def _mode_from_probe(scores: RoutingProbeScores, default_mode: str) -> str:
-    docs = max(0.0, float(scores.docs_score or 0.0))
-    code = max(0.0, float(scores.code_score or 0.0))
-    ratio = max(1.01, float(rag_config.routing_probe_ratio()))
-
-    if docs <= 0 and code <= 0:
-        return default_mode
-
-    if docs >= code * ratio:
-        return "docs"
-    if code >= docs * ratio:
-        return "code"
-    return default_mode if default_mode in {"docs", "code"} else "code"
-
-
 def _apply_mode_guards(*, response_type: str, default_mode: str, chosen_mode: str, reason: str) -> tuple[str, str]:
     rt = str(response_type or "").strip().lower()
     chosen = normalize_mode(chosen_mode) or default_mode
@@ -110,19 +77,10 @@ def arbitrate_tool_mode(
     normalized_target = normalize_mode(target_mode)
     chosen = normalized_target or default_mode
     used_probe = False
-    reason = "default"
-
-    if _should_probe(default_mode, confidence, threshold, normalized_target):
-        if probe_scores is not None:
-            chosen = _mode_from_probe(probe_scores, default_mode)
-            used_probe = True
-            reason = "probe"
-        else:
-            chosen = default_mode
-            reason = "low_confidence_default"
-    elif normalized_target:
-        chosen = normalized_target
-        reason = "classifier_target_mode"
+    _ = confidence
+    _ = threshold
+    _ = probe_scores
+    reason = "classifier_target_mode" if normalized_target else "default"
 
     chosen, reason = _apply_mode_guards(
         response_type=response_type,

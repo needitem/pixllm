@@ -575,8 +575,9 @@ async function listWorkspaceFiles(workspacePath, options = {}) {
 async function readWorkspaceFile(workspacePath, relativePath, maxCharsOrOptions = 12000) {
   try {
     const fullPath = await safeResolve(workspacePath, relativePath);
+    let stat = null;
     try {
-      const stat = await fs.promises.stat(fullPath);
+      stat = await fs.promises.stat(fullPath);
       if (!stat.isFile()) throw new Error();
     } catch {
       return {
@@ -617,7 +618,9 @@ async function readWorkspaceFile(workspacePath, relativePath, maxCharsOrOptions 
       path: String(relativePath || ''),
       content: bounded,
       truncated: bounded.length < content.length,
-      lineRange
+      lineRange,
+      size: Number(stat?.size || 0),
+      mtimeMs: Math.floor(Number(stat?.mtimeMs || 0)),
     };
   } catch (err) {
     return { ok: false, path: String(relativePath || ''), content: '', error: err.message };
@@ -649,12 +652,17 @@ async function writeWorkspaceFile(workspacePath, relativePath, content) {
       // file doesn't exist yet
     }
     
-    await fs.promises.writeFile(fullPath, String(content || ''), 'utf-8');
+    const nextContent = String(content || '');
+    await fs.promises.writeFile(fullPath, nextContent, 'utf-8');
+    const nextStat = await fs.promises.stat(fullPath).catch(() => null);
     return {
       ok: true,
       path: String(relativePath || ''),
       previousLength: previous.length,
-      newLength: String(content || '').length
+      newLength: nextContent.length,
+      bytes: Buffer.byteLength(nextContent, 'utf-8'),
+      size: Number(nextStat?.size || 0),
+      mtimeMs: Math.floor(Number(nextStat?.mtimeMs || 0)),
     };
   } catch (err) {
     return { ok: false, path: String(relativePath || ''), error: err.message };
@@ -1413,4 +1421,5 @@ module.exports = {
   symbolOutlineInWorkspace,
   runBuild,
   runWorkspaceShell,
+  safeResolve,
 };

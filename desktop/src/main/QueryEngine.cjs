@@ -1,23 +1,27 @@
-const { createLocalToolCollection } = require('./local_tools.cjs');
-const { streamModelCompletion } = require('./local_model_client.cjs');
-const { LocalAgentRuntime } = require('./local_agent_runtime.cjs');
+const { createHash } = require('node:crypto');
+const { createLocalToolCollection } = require('./tools.cjs');
+const { streamModelCompletion } = require('./services/model/streamModelCompletion.cjs');
+const { ToolRuntime } = require('./services/tools/ToolRuntime.cjs');
+const { StreamingToolExecutor } = require('./services/tools/StreamingToolExecutor.cjs');
+const { loadProjectContext, buildProjectContextPrompt } = require('./utils/projectContext.cjs');
 const {
   createTextBlock,
+  createToolUseBlock,
   normalizeMessageBlocks,
   parseAssistantResponse,
   serializeBlocks,
-  serializeMessage,
+  flattenMessagesForModel,
   extractTextFromBlocks,
   toolUseBlocks,
   buildSystemPrompt,
   toStringValue,
-} = require('./local_agent_protocol.cjs');
-const { loadAgentState, saveAgentState } = require('./local_agent_state_store.cjs');
-const { listTasks, listTerminalCaptures } = require('./local_task_runtime.cjs');
+} = require('./query.cjs');
+const { loadAgentState, saveAgentState } = require('./state/agentStateStore.cjs');
+const { listTasks, listTerminalCaptures } = require('./tasks/taskRuntime.cjs');
 const {
   readObservationsFromTrace,
   failedSteps,
-} = require('../local_agent_trace.cjs');
+} = require('./queryTrace.cjs');
 
 const MAX_TURNS = 14;
 const MAX_CONSECUTIVE_PARSE_ERRORS = 2;
@@ -30,9 +34,9 @@ const TOOL_RESULT_CHAR_BUDGET = 18000;
 const MODEL_PREVIEW_LIMIT = 180;
 const MAX_FILE_CACHE_ENTRIES = 24;
 const MAX_TRANSITIONS = 64;
-const MAX_REPEATED_TOOL_BATCHES = 2;
-const MAX_NO_PROGRESS_TURNS = 3;
 const MAX_UNGROUNDED_ANSWER_RETRIES = 2;
+const MAX_NO_PROGRESS_RETRIES = 2;
+const MAX_REPEATED_TOOL_BATCHES = 3;
 
 function toSerializableTraceStep(step = {}) {
   return {
@@ -73,6 +77,10 @@ function estimateTokens(text) {
 
 function previewText(text) {
   return toStringValue(String(text || '').replace(/\s+/g, ' ')).slice(-MODEL_PREVIEW_LIMIT);
+}
+
+function hashText(text) {
+  return createHash('sha1').update(String(text || ''), 'utf8').digest('hex');
 }
 
 function messageCharLength(message) {
@@ -202,6 +210,17 @@ function isLengthFinishReason(reason) {
   return /length|max_tokens|max_output_tokens/i.test(toStringValue(reason));
 }
 
+function safeJsonParseObject(text) {
+  const raw = toStringValue(text);
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 function joinAnswerFragments(existingText, nextText) {
   const left = String(existingText || '').trim();
   const right = String(nextText || '').trim();
@@ -213,9 +232,17 @@ function joinAnswerFragments(existingText, nextText) {
   return `${left}\n\n${right}`.trim();
 }
 
-async function describeTools(toolCollection) {
+function toolUseCacheKey(toolUse = {}) {
+  const identifier = toStringValue(toolUse?.id);
+  if (identifier) return identifier;
+  return `${toStringValue(toolUse?.name)}:${stableSerialize(toolUse?.input || {})}`;
+}
+
+async function describeTools(toolCollection, allowedToolNames = []) {
+  const allowed = new Set((Array.isArray(allowedToolNames) ? allowedToolNames : []).map((item) => toStringValue(item)));
   const items = [];
   for (const tool of Array.isArray(toolCollection?.tools) ? toolCollection.tools : []) {
+    if (allowed.size > 0 && !allowed.has(toStringValue(tool?.name))) continue;
     const description = await tool.description();
     const aliases = Array.isArray(tool?.aliases) && tool.aliases.length > 0
       ? ` [aliases: ${tool.aliases.join(', ')}]`
@@ -225,9 +252,11 @@ async function describeTools(toolCollection) {
   return items.join('\n');
 }
 
-async function describeToolsForModel(toolCollection) {
+async function describeToolsForModel(toolCollection, allowedToolNames = []) {
+  const allowed = new Set((Array.isArray(allowedToolNames) ? allowedToolNames : []).map((item) => toStringValue(item)));
   const items = [];
   for (const tool of Array.isArray(toolCollection?.tools) ? toolCollection.tools : []) {
+    if (allowed.size > 0 && !allowed.has(toStringValue(tool?.name))) continue;
     const description = typeof tool?.description === 'function'
       ? await tool.description()
       : toStringValue(tool?.searchHint);
@@ -289,7 +318,7 @@ function initialState({ historyMessages = [] } = {}) {
   };
 }
 
-class LocalAgentEngine {
+class QueryEngine {
   constructor({
     workspacePath = '',
     baseUrl = '',
@@ -318,7 +347,7 @@ class LocalAgentEngine {
       askUserQuestion: async (payload) => this._askUserQuestion(payload),
       sendBrief: async (payload) => this._sendBrief(payload),
     };
-    this.runtime = new LocalAgentRuntime({
+    this.runtime = new ToolRuntime({
       workspacePath: this.workspacePath,
       selectedFilePath: this.selectedFilePath,
       sessionId: this.sessionId,
@@ -335,10 +364,16 @@ class LocalAgentEngine {
           sessionId: this.sessionId,
           runtimeBridge: this.runtimeBridge,
           authorizeToolUse: (payload) => this.runtime.authorizeToolUse(payload),
+          getBackendConfig: () => ({
+            baseUrl: this.serverBaseUrl,
+            apiToken: this.serverApiToken,
+          }),
         })
       : { tools: [], call: async () => ({ ok: false, error: 'workspace_not_available' }) };
     this.runtime.setTools(this.tools);
-    this.toolDescriptions = '';
+    this.toolDescriptionCache = new Map();
+    this.projectContext = null;
+    this.projectContextPrompt = '';
     this.runtimeHandlers = {};
     this.restoredSession = Number(this.state?.totalUsage?.resumed_sessions || 0) > 0;
   }
@@ -558,35 +593,40 @@ class LocalAgentEngine {
     this._persistState();
   }
 
-  _updateProgressSignature(signature, turn) {
+  _updateProgressSignature(signature) {
     const normalized = toStringValue(signature);
-    if (!normalized) return false;
+    if (!normalized) return 0;
     if (normalized === toStringValue(this.state.lastProgressSignature)) {
       this.state.noProgressTurns += 1;
     } else {
       this.state.noProgressTurns = 0;
       this.state.lastProgressSignature = normalized;
     }
-    if (this.state.noProgressTurns >= MAX_NO_PROGRESS_TURNS) {
-      this.state.totalUsage.stop_hooks += 1;
-      this.state.terminalReason = 'stop_hook_no_progress';
-      this._recordTransition('stop_hook_no_progress', {
-        turn,
-        noProgressTurns: this.state.noProgressTurns,
-      });
-      return true;
-    }
-    return false;
+    return Number(this.state.noProgressTurns || 0);
   }
 
-  async _describeTools() {
-    if (!this.toolDescriptions) {
-      this.toolDescriptions = await describeTools(this.tools);
-    }
-    return this.toolDescriptions;
+  _activeToolNames(turn = 1) {
+    return this.runtime.activeToolNames({ turn });
   }
 
-  async _callModel(messages, { signal = null, onModelToken = async () => {}, modelTools = [] } = {}) {
+  async _describeTools(allowedToolNames = []) {
+    const key = (Array.isArray(allowedToolNames) ? allowedToolNames : [])
+      .map((item) => toStringValue(item))
+      .filter(Boolean)
+      .sort()
+      .join('|') || '*';
+    if (!this.toolDescriptionCache.has(key)) {
+      this.toolDescriptionCache.set(key, await describeTools(this.tools, allowedToolNames));
+    }
+    return this.toolDescriptionCache.get(key);
+  }
+
+  async _callModel(messages, {
+    signal = null,
+    onModelToken = async () => {},
+    onToolCalls = async () => {},
+    modelTools = [],
+  } = {}) {
     let lastError = null;
     for (let attempt = 0; attempt <= MAX_MODEL_RETRIES; attempt += 1) {
         try {
@@ -607,8 +647,12 @@ class LocalAgentEngine {
             this.state.totalUsage.streamed_chars += String(delta || '').length;
             await onModelToken({
               delta: String(delta || ''),
+              aggregate: String(aggregate || ''),
               preview: previewText(aggregate),
             });
+          },
+          onToolCalls: async (toolCalls) => {
+            await onToolCalls(Array.isArray(toolCalls) ? toolCalls : []);
           },
         });
         this._addUsage(result?.usage);
@@ -631,6 +675,94 @@ class LocalAgentEngine {
     throw lastError || new Error('model_completion_failed');
   }
 
+  _createStreamingToolPrefetch({
+    turn = 0,
+    signal = null,
+    onToolUse = async () => {},
+    onToolResult = async () => {},
+    getAssistantText = () => '',
+  } = {}) {
+    return new StreamingToolExecutor({
+      turn,
+      signal,
+      runtime: this.runtime,
+      onToolUse,
+      onToolResult,
+      getAssistantText,
+      parseToolInput: safeJsonParseObject,
+      toolUseKey,
+    });
+  }
+
+  async _recoverStreamingToolPrefetch({
+    streamingPrefetch = null,
+    turn = 0,
+    assistantText = '',
+    reason = 'stream_interrupted',
+  } = {}) {
+    if (!streamingPrefetch || typeof streamingPrefetch.snapshotToolUses !== 'function') {
+      return { toolUses: [], toolExecutions: [] };
+    }
+    const recoveredToolUses = streamingPrefetch.snapshotToolUses();
+    const recoveredExecutions = typeof streamingPrefetch.drainUnclaimed === 'function'
+      ? await streamingPrefetch.drainUnclaimed({
+          assistantText,
+          reason,
+        })
+      : [];
+    if (recoveredToolUses.length === 0 && recoveredExecutions.length === 0) {
+      return { toolUses: [], toolExecutions: [] };
+    }
+
+    const assistantBlocks = [];
+    if (toStringValue(assistantText)) {
+      assistantBlocks.push(createTextBlock(assistantText));
+    }
+    assistantBlocks.push(
+      ...recoveredToolUses.map((toolUse) => createToolUseBlock({
+        id: toolUse?.id,
+        name: toolUse?.name,
+        input: toolUse?.input || {},
+      })),
+    );
+    if (assistantBlocks.length > 0) {
+      this.state.messages.push({
+        role: 'assistant',
+        content: assistantBlocks,
+      });
+    }
+
+    const toolResultBlocks = recoveredExecutions
+      .map((item) => item?.resultBlock)
+      .filter(Boolean);
+    if (toolResultBlocks.length > 0) {
+      this.state.messages.push({
+        role: 'user',
+        content: toolResultBlocks,
+      });
+    }
+
+    this._recordTranscript({
+      kind: 'streaming_tool_recovery',
+      turn,
+      reason,
+      toolUses: recoveredToolUses.length,
+      toolResults: recoveredExecutions.length,
+    });
+    this._recordTransition('streaming_tool_recovery', {
+      turn,
+      reason,
+      toolUses: recoveredToolUses.length,
+      toolResults: recoveredExecutions.length,
+    });
+    streamingPrefetch.discard();
+    this._persistState();
+    return {
+      toolUses: recoveredToolUses,
+      toolExecutions: recoveredExecutions,
+    };
+  }
+
   _updateFileCache(toolName, observation) {
     if (!observation) return;
     const normalizedToolName = toStringValue(toolName);
@@ -649,16 +781,26 @@ class LocalAgentEngine {
     if (!pathValue || !content) return;
     const entries = Object.entries(this.state.fileCache && typeof this.state.fileCache === 'object' ? this.state.fileCache : {});
     const nextCache = Object.fromEntries(entries.slice(-(MAX_FILE_CACHE_ENTRIES - 1)));
+    const fullRead = normalizedToolName === 'read_file' && observation.truncated !== true;
     nextCache[pathValue] = {
       lineRange: toStringValue(observation.lineRange),
       updatedAt: new Date().toISOString(),
       content,
+      contentHash: fullRead ? hashText(toStringValue(observation.content)) : '',
+      fullRead,
+      size: Number(observation.size || 0),
+      mtimeMs: Number(observation.mtimeMs || 0),
     };
     this.state.fileCache = nextCache;
   }
 
   _messageBudgetState() {
-    const serialized = this._modelMessages('').map((message) => String(message.content || '')).join('\n\n');
+    const runtimeContext = this._runtimeContextMessage();
+    const serialized = [
+      this.projectContextPrompt,
+      runtimeContext,
+      ...this.state.messages.map((message) => serializeBlocks(Array.isArray(message?.content) ? message.content : [])),
+    ].filter(Boolean).join('\n\n');
     return {
       chars: serialized.length,
       approxTokens: estimateTokens(serialized),
@@ -669,6 +811,10 @@ class LocalAgentEngine {
     const lines = [];
     if (toStringValue(this.runtime?.contextSummary())) {
       lines.push(toStringValue(this.runtime.contextSummary()));
+    }
+    const activeToolNames = this._activeToolNames(Number(this.state.currentTurn || 1));
+    if (activeToolNames.length > 0) {
+      lines.push(`Enabled tools this turn: ${activeToolNames.slice(0, 16).join(', ')}`);
     }
     if (toStringValue(this.state.pendingToolUseSummary)) {
       lines.push(`Pending tool-use summary: ${toStringValue(this.state.pendingToolUseSummary)}`);
@@ -690,8 +836,9 @@ class LocalAgentEngine {
     const runtimeContext = this._runtimeContextMessage();
     return [
       { role: 'system', content: systemPrompt },
+      ...(this.projectContextPrompt ? [{ role: 'system', content: this.projectContextPrompt }] : []),
       ...(runtimeContext ? [{ role: 'system', content: runtimeContext }] : []),
-      ...this.state.messages.map((message) => serializeMessage(message)),
+      ...flattenMessagesForModel(this.state.messages),
     ];
   }
 
@@ -730,16 +877,34 @@ class LocalAgentEngine {
         prompt: toStringValue(runContext?.prompt || prompt),
         selectedFilePath: toStringValue(runContext?.selectedFilePath || this.selectedFilePath),
         explicitPaths: Array.isArray(runContext?.explicitPaths) ? runContext.explicitPaths.slice(0, 8) : [],
+        evidencePreference: toStringValue(runContext?.evidencePreference),
+        initialToolNames: Array.isArray(runContext?.initialToolNames) ? runContext.initialToolNames.slice(0, 20) : [],
       });
+      try {
+        this.projectContext = await loadProjectContext({
+          workspacePath: this.workspacePath,
+          selectedFilePath: toStringValue(runContext?.selectedFilePath || this.selectedFilePath),
+          explicitPaths: Array.isArray(runContext?.explicitPaths) ? runContext.explicitPaths : [],
+        });
+        this.projectContextPrompt = buildProjectContextPrompt(this.projectContext);
+        if (this.projectContextPrompt) {
+          this._recordTranscript({
+            kind: 'project_context_loaded',
+            summary: toStringValue(this.projectContext?.summary),
+          });
+          this._recordTransition('project_context_loaded', {
+            summary: toStringValue(this.projectContext?.summary),
+          });
+        }
+      } catch (error) {
+        this.projectContext = null;
+        this.projectContextPrompt = '';
+        this._recordTranscript({
+          kind: 'project_context_error',
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
       this._persistState();
-
-      const toolDescriptions = await this._describeTools();
-      const modelTools = await describeToolsForModel(this.tools);
-      const systemPrompt = buildSystemPrompt({
-        workspacePath: this.workspacePath,
-        selectedFilePath: this.selectedFilePath,
-        toolDescriptions,
-      });
 
       let parseErrors = 0;
       for (let turn = 1; turn <= MAX_TURNS; turn += 1) {
@@ -792,22 +957,51 @@ class LocalAgentEngine {
           }
         }
 
+        const activeToolNames = this._activeToolNames(turn);
+        const toolDescriptions = await this._describeTools(activeToolNames);
+        const modelTools = await describeToolsForModel(this.tools, activeToolNames);
+        const systemPrompt = buildSystemPrompt({
+          workspacePath: this.workspacePath,
+          selectedFilePath: this.selectedFilePath,
+          toolDescriptions,
+        });
+
         await onStatus({
           phase: 'model',
           message: turn === 1 ? 'Thinking...' : `Continuing reasoning (turn ${turn})...`,
         });
 
         let completion;
+        let streamedAssistantText = '';
+        const streamingPrefetch = this._createStreamingToolPrefetch({
+          turn,
+          signal,
+          onToolUse,
+          onToolResult,
+          getAssistantText: () => streamedAssistantText,
+        });
         try {
           completion = await this._callModel(this._modelMessages(systemPrompt), {
             signal,
             modelTools,
-            onModelToken: async (payload) => onModelToken({
-              ...payload,
-              turn,
-            }),
+            onToolCalls: async (toolCalls) => {
+              streamingPrefetch.sync(toolCalls);
+            },
+            onModelToken: async (payload) => {
+              streamedAssistantText = toStringValue(payload?.aggregate || payload?.preview || '');
+              await onModelToken({
+                ...payload,
+                turn,
+              });
+            },
           });
         } catch (error) {
+          await this._recoverStreamingToolPrefetch({
+            streamingPrefetch,
+            turn,
+            assistantText: streamedAssistantText,
+            reason: signal?.aborted ? 'cancelled' : 'model_error',
+          });
           const message = error instanceof Error ? error.message : String(error);
           if (/context|maximum context|prompt too long|token/i.test(message)) {
             const reactive = compactMessages(this.state.messages);
@@ -860,7 +1054,7 @@ class LocalAgentEngine {
             this.state.maxOutputTokensRecoveryCount += 1;
             this.state.maxOutputTokensOverride = 0;
             this._pushMetaUserMessage(
-              'Output token limit hit while your previous reply was incomplete. Continue directly by completing the interrupted answer or tool tags. No recap or apology.',
+              'Output token limit hit while your previous reply was incomplete. Continue directly by completing the interrupted answer or pending tool call. No recap or apology.',
               { turn, attempt: this.state.maxOutputTokensRecoveryCount },
             );
             this._recordTransition('truncated_assistant_recovery', {
@@ -884,7 +1078,7 @@ class LocalAgentEngine {
             break;
           }
           this._pushMetaUserMessage(
-            'Your previous reply was malformed. Reply with plain assistant text and optional <tool_use id="..." name="...">{"input":"json"}</tool_use> tags only.',
+            'Your previous reply was malformed. Reply with plain assistant text and use the provided tool-calling interface for any tool use.',
             { turn },
           );
           this._persistState();
@@ -895,9 +1089,32 @@ class LocalAgentEngine {
         const assistantBlocks = parsed.blocks;
         const assistantText = extractTextFromBlocks(assistantBlocks);
         const toolUses = toolUseBlocks(assistantBlocks);
+        if (toolUses.length === 0) {
+          const recoveredStreaming = await this._recoverStreamingToolPrefetch({
+            streamingPrefetch,
+            turn,
+            assistantText,
+            reason: 'streaming_partial_tool_calls',
+          });
+          if (recoveredStreaming.toolUses.length > 0) {
+            this._persistState();
+            continue;
+          }
+        }
         const progressSignature = `${assistantText}::${toolBatchSignature(toolUses)}`;
-        if (this._updateProgressSignature(progressSignature, turn)) {
-          break;
+        const noProgressTurns = this._updateProgressSignature(progressSignature);
+        if (noProgressTurns >= MAX_NO_PROGRESS_RETRIES) {
+          this._pushMetaUserMessage(
+            'You are repeating the same reasoning without making progress. Change strategy, use different tools, or answer with the blocker directly.',
+            { turn, noProgressTurns },
+          );
+          this._recordTransition('no_progress_retry', { turn, noProgressTurns });
+          this._persistState();
+          if (noProgressTurns > MAX_NO_PROGRESS_RETRIES) {
+            this.state.terminalReason = 'no_progress';
+            break;
+          }
+          continue;
         }
         this.state.messages.push({ role: 'assistant', content: assistantBlocks });
         this._recordTransition('assistant_message', { turn, toolUses: toolUses.length });
@@ -948,11 +1165,29 @@ class LocalAgentEngine {
           this.state.repeatedToolBatchSignature = '';
           this.state.repeatedToolBatchCount = 0;
           const runTrace = this.state.trace.slice(traceStartIndex);
-          if (!this.runtime.ensureGroundedFinalAnswer(finalAnswer, {
+          const grounded = this.runtime.ensureGroundedFinalAnswer(finalAnswer, {
             trace: runTrace,
             turn,
-            maxRetries: MAX_UNGROUNDED_ANSWER_RETRIES,
-          })) {
+          });
+          if (!grounded?.ok) {
+            this._pushMetaUserMessage(
+              `Your previous answer referenced ungrounded sources: ${(Array.isArray(grounded?.mentions) ? grounded.mentions : []).join(', ')}. Revise the answer using only paths or sources already shown in tool results, or say the missing detail is unverified.`,
+              {
+                turn,
+                retryCount: Number(grounded?.retryCount || 0),
+                mentions: Array.isArray(grounded?.mentions) ? grounded.mentions.slice(0, 8) : [],
+              },
+            );
+            this._recordTransition('ungrounded_answer_retry', {
+              turn,
+              retryCount: Number(grounded?.retryCount || 0),
+              count: Array.isArray(grounded?.mentions) ? grounded.mentions.length : 0,
+            });
+            this._persistState();
+            if (Number(grounded?.retryCount || 0) > MAX_UNGROUNDED_ANSWER_RETRIES) {
+              this.state.terminalReason = 'ungrounded_answer';
+              break;
+            }
             continue;
           }
           this.state.terminalReason = 'final_answer';
@@ -984,7 +1219,7 @@ class LocalAgentEngine {
         if (toolUses.length === 0) {
           this.state.totalUsage.parse_retries += 1;
           this._pushMetaUserMessage(
-            'You must either provide a final text answer or include at least one <tool_use> block.',
+            'You must either provide a final text answer or issue at least one valid tool call.',
             { turn },
           );
           this._recordTransition('missing_tool_use_or_answer', { turn });
@@ -996,30 +1231,12 @@ class LocalAgentEngine {
         this.state.maxOutputTokensRecoveryCount = 0;
         this.state.maxOutputTokensOverride = 0;
         this.state.ungroundedAnswerRetries = 0;
-
         const batchSignature = toolBatchSignature(toolUses);
         if (batchSignature && batchSignature === this.state.repeatedToolBatchSignature) {
           this.state.repeatedToolBatchCount += 1;
         } else {
           this.state.repeatedToolBatchSignature = batchSignature;
-          this.state.repeatedToolBatchCount = 1;
-        }
-        if (this.state.repeatedToolBatchCount > MAX_REPEATED_TOOL_BATCHES) {
-          this._pushMetaUserMessage(
-            'The previous tool request is repeating. Do not call the identical tool batch again. Use different tools, narrow the request, or answer with the blocker.',
-            { turn, count: this.state.repeatedToolBatchCount },
-          );
-          this._recordTransition('repeated_tool_batch_recovery', {
-            turn,
-            count: this.state.repeatedToolBatchCount,
-          });
-          if (this.state.repeatedToolBatchCount > MAX_REPEATED_TOOL_BATCHES + 1) {
-            this.state.terminalReason = 'repeated_tool_batch_budget';
-            this._persistState();
-            break;
-          }
-          this._persistState();
-          continue;
+          this.state.repeatedToolBatchCount = batchSignature ? 1 : 0;
         }
 
         const {
@@ -1038,7 +1255,10 @@ class LocalAgentEngine {
           onToolBatchStart,
           onToolBatchEnd,
           onStatus,
+          prefetchedExecutions: streamingPrefetch.prefetchedExecutions,
+          streamingExecutor: streamingPrefetch,
         });
+        streamingPrefetch.discard();
 
         this.state.messages.push({
           role: 'user',
@@ -1054,6 +1274,25 @@ class LocalAgentEngine {
             turn,
             toolUses: toolUses.length,
           });
+        }
+
+        if (this.state.repeatedToolBatchCount >= MAX_REPEATED_TOOL_BATCHES) {
+          this._pushMetaUserMessage(
+            'You have repeated the same tool batch too many times. Use different tools, narrow the target, or explain the blocker instead of re-running the same batch.',
+            {
+              turn,
+              repeatedToolBatchCount: this.state.repeatedToolBatchCount,
+              batchSignature,
+            },
+          );
+          this._recordTransition('repeated_tool_batch_retry', {
+            turn,
+            repeatedToolBatchCount: this.state.repeatedToolBatchCount,
+          });
+          if (this.state.repeatedToolBatchCount > MAX_REPEATED_TOOL_BATCHES) {
+            this.state.terminalReason = 'repeated_tool_batch';
+            break;
+          }
         }
 
         this._recordTransition('next_turn', {
@@ -1078,7 +1317,13 @@ class LocalAgentEngine {
       const failed = failedSteps(runTrace)[0];
       const fallbackAnswer = failed
         ? `The desktop agent stopped after tool failures. Last error: ${toStringValue(failed?.observation?.error)}`
-        : 'The desktop agent reached its turn budget before producing a final answer.';
+        : this.state.terminalReason === 'no_progress'
+          ? 'The desktop agent stopped because it was repeating the same reasoning without making progress.'
+          : this.state.terminalReason === 'repeated_tool_batch'
+            ? 'The desktop agent stopped because it repeated the same tool batch without converging.'
+            : this.state.terminalReason === 'ungrounded_answer'
+              ? 'The desktop agent stopped because it could not produce a grounded final answer from the collected evidence.'
+              : 'The desktop agent reached its turn budget before producing a final answer.';
       if (!toStringValue(this.state.terminalReason)) {
         this.state.terminalReason = failed ? 'tool_failure' : 'turn_budget';
       }
@@ -1111,5 +1356,6 @@ class LocalAgentEngine {
 }
 
 module.exports = {
-  LocalAgentEngine,
+  QueryEngine,
+  LocalAgentEngine: QueryEngine,
 };

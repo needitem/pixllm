@@ -2,7 +2,7 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from ... import config, rag_config
+from ... import config
 from ..retrieval.mode_policy import default_mode_for_response_type
 from .query_terms import compact_token as _compact_text
 from .query_terms import extract_query_compacts, extract_query_terms
@@ -16,30 +16,6 @@ _MEMBER_CALL_RE = re.compile(r"(?:\.|->)[A-Za-z_][A-Za-z0-9_]*\s*\(")
 _MEMBER_ASSIGN_RE = re.compile(r"(?:\.|->)?[A-Za-z_][A-Za-z0-9_]*\s*=")
 _DEFINITION_HINT_RE = re.compile(r"\b(?:class|struct|interface|enum|record|namespace|module|typedef|def|function)\b")
 _USAGE_CODE_EXTENSIONS = (".cs", ".cpp", ".c", ".h", ".hpp", ".cc", ".hh", ".py", ".ts", ".tsx", ".js", ".jsx", ".java", ".kt")
-_USAGE_MATCH_SCORE_DEFAULTS = {
-    "source_extension_bonus": 1.0,
-    "query_path_overlap": 1.2,
-    "query_text_overlap": 1.4,
-    "preferred_symbol_path_bonus": 4.0,
-    "preferred_symbol_text_bonus": 3.5,
-    "preferred_symbol_invocation_bonus": 2.5,
-    "preferred_symbol_new_bonus": 1.5,
-    "call_activity_bonus": 0.45,
-    "member_call_activity_bonus": 0.6,
-    "assignment_activity_bonus": 0.3,
-    "base_result_score_bonus": 0.25,
-    "definition_penalty": 1.0,
-    "test_path_penalty": 2.5,
-    "generated_path_penalty": 1.5,
-}
-_USAGE_MATCH_CAP_DEFAULTS = {
-    "query_path_overlap": 4,
-    "query_text_overlap": 5,
-    "call_count": 4,
-    "member_call_count": 4,
-    "assignment_count": 3,
-    "base_result_score": 6,
-}
 
 
 def clamp_int(value: int, low: int, high: int) -> int:
@@ -161,35 +137,29 @@ def usage_match_evidence(
         "member_call_count": float(len(_MEMBER_CALL_RE.findall(match_text))),
         "assignment_count": float(len(_MEMBER_ASSIGN_RE.findall(match_text))),
         "has_definition_hint": 1.0 if _DEFINITION_HINT_RE.search(lowered_text) else 0.0,
-        "base_result_score": float(item.get("base_score") or item.get("score") or 0.0),
     }
 
 
-def usage_match_score(
+def _usage_match_rank_key(
     item: Dict[str, Any],
     *,
     query_text: str = "",
     preferred_symbol: str = "",
-) -> float:
-    weights = rag_config.heuristics_weights("usage_match_score", _USAGE_MATCH_SCORE_DEFAULTS)
-    caps = rag_config.heuristics_weights("usage_match_caps", _USAGE_MATCH_CAP_DEFAULTS)
+) -> Tuple[int, int, int, int, int, int, int, int, int, int, int]:
     evidence = usage_match_evidence(item, query_text=query_text, preferred_symbol=preferred_symbol)
+    path = normalize_usage_path(str(item.get("path") or ""))
     return (
-        evidence["is_markup_backing_path"] * 0.0
-        + evidence["is_source_extension"] * float(weights["source_extension_bonus"])
-        + min(evidence["query_path_overlap"], float(caps["query_path_overlap"])) * float(weights["query_path_overlap"])
-        + min(evidence["query_text_overlap"], float(caps["query_text_overlap"])) * float(weights["query_text_overlap"])
-        + evidence["preferred_symbol_in_path"] * float(weights["preferred_symbol_path_bonus"])
-        + evidence["preferred_symbol_in_text"] * float(weights["preferred_symbol_text_bonus"])
-        + evidence["preferred_symbol_invocation"] * float(weights["preferred_symbol_invocation_bonus"])
-        + evidence["preferred_symbol_new_expression"] * float(weights["preferred_symbol_new_bonus"])
-        + min(evidence["call_count"], float(caps["call_count"])) * float(weights["call_activity_bonus"])
-        + min(evidence["member_call_count"], float(caps["member_call_count"])) * float(weights["member_call_activity_bonus"])
-        + min(evidence["assignment_count"], float(caps["assignment_count"])) * float(weights["assignment_activity_bonus"])
-        + min(evidence["base_result_score"], float(caps["base_result_score"])) * float(weights["base_result_score_bonus"])
-        - evidence["has_definition_hint"] * float(weights["definition_penalty"])
-        - evidence["is_test_path"] * float(weights["test_path_penalty"])
-        - evidence["is_generated_path"] * float(weights["generated_path_penalty"])
+        int(bool(evidence["preferred_symbol_invocation"])),
+        int(bool(evidence["preferred_symbol_in_text"])),
+        int(bool(evidence["preferred_symbol_in_path"])),
+        int(min(evidence["query_text_overlap"], 5.0)),
+        int(min(evidence["query_path_overlap"], 4.0)),
+        int(bool(evidence["is_source_extension"])),
+        -int(bool(evidence["has_definition_hint"])),
+        -int(bool(evidence["is_test_path"])),
+        -int(bool(evidence["is_generated_path"])),
+        int(min(evidence["member_call_count"], 4.0) + min(evidence["call_count"], 4.0)),
+        -len(path),
     )
 
 
@@ -201,8 +171,7 @@ def prioritize_usage_matches(
     ranked = list(matches or [])
     ranked.sort(
         key=lambda item: (
-            usage_match_score(item, query_text=query_text, preferred_symbol=preferred_symbol),
-            -len(str(item.get("path") or "")),
+            _usage_match_rank_key(item, query_text=query_text, preferred_symbol=preferred_symbol),
         ),
         reverse=True,
     )

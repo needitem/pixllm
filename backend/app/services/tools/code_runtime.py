@@ -152,14 +152,6 @@ def code_tool_results_to_rows(
         line_start = payload.get("line_start") or 1
         line_end = payload.get("line_end") or line_start
         row: Dict[str, Any] = {"path": path_str, "line_range": f"{line_start}-{line_end}", "match": payload.get("text", "")}
-        score = item.get("combined_score")
-        if score is None:
-            score = item.get("sparse_score")
-        try:
-            if score is not None:
-                row["base_score"] = float(score)
-        except (TypeError, ValueError):
-            pass
         if payload.get("match_kind"):
             row["match_kind"] = payload.get("match_kind")
         if payload.get("symbol"):

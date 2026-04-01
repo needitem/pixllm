@@ -10,7 +10,7 @@ const {
   apiRun,
   apiRuns,
 } = require('./server.cjs');
-const { startLocalAgentStream, cancelLocalAgentStream, answerLocalAgentQuestion } = require('./local_agent_service.cjs');
+const { startLocalAgentStream, cancelLocalAgentStream, answerLocalAgentQuestion } = require('./queryEngineService.cjs');
 const { loadBuildInfo } = require('./build_info.cjs');
 const { loadSettings, saveSettings } = require('./settings.cjs');
 const {

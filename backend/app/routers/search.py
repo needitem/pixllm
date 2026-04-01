@@ -50,7 +50,7 @@ async def search(
     page_results = results[start:end]
 
     payloads = []
-    for r in page_results:
+    for idx, r in enumerate(page_results, start=start + 1):
         md = r.get("payload", {})
         payloads.append({
             "file_path": md.get("file_path"),
@@ -61,7 +61,7 @@ async def search(
             "line_start": md.get("line_start"),
             "line_end": md.get("line_end"),
             "snippet": (md.get("text", "")[:200] + "...") if md.get("text") else "",
-            "score": r.get("combined_score", r.get("dense_score")),
+            "rank": r.get("rank") or idx,
         })
     return ok({
         "results": payloads,

@@ -2,299 +2,130 @@
 
 Date: 2026-04-01
 
-Compared repositories:
-
-- Claude Code clone: `D:\Pixoneer_Source\_external\claude-code`
-- PIXLLM repo: `D:\Pixoneer_Source\PIX_RAG_Source`
-
 ## Scope
 
-This comparison is based on the checked-out repository contents, not marketing claims.
+This comparison is based on the source trees currently available in this repository.
 
-Primary files inspected on the Claude Code side:
+Compared paths:
 
-- `D:\Pixoneer_Source\_external\claude-code\README.md`
-- `D:\Pixoneer_Source\_external\claude-code\.claude-plugin\marketplace.json`
-- `D:\Pixoneer_Source\_external\claude-code\plugins\README.md`
-- `D:\Pixoneer_Source\_external\claude-code\plugins\feature-dev\README.md`
-- `D:\Pixoneer_Source\_external\claude-code\plugins\code-review\README.md`
+- Claude Code source map: `D:\Pixoneer_Source\PIX_RAG_Source\claude-code-sourcemap\restored-src\src`
+- PIXLLM source: `D:\Pixoneer_Source\PIX_RAG_Source`
 
-Primary files inspected on the PIXLLM side:
+Primary Claude Code files inspected:
 
-- `D:\Pixoneer_Source\PIX_RAG_Source\README.md`
-- `D:\Pixoneer_Source\PIX_RAG_Source\AGENTS.md`
-- `D:\Pixoneer_Source\PIX_RAG_Source\desktop\package.json`
-- `D:\Pixoneer_Source\PIX_RAG_Source\backend\requirements-agent.txt`
-- `D:\Pixoneer_Source\PIX_RAG_Source\desktop\src\main\local_agent_runner.cjs`
-- `D:\Pixoneer_Source\PIX_RAG_Source\backend\app\services\chat\question_contract.py`
-- `D:\Pixoneer_Source\PIX_RAG_Source\backend\app\services\chat\results.py`
+- `claude-code-sourcemap/restored-src/src/QueryEngine.ts`
+- `claude-code-sourcemap/restored-src/src/query.ts`
+- `claude-code-sourcemap/restored-src/src/tools.ts`
+
+Primary PIXLLM files inspected:
+
+- `desktop/src/main/local_agent_service.cjs`
+- `desktop/src/main/core/local_agent_engine.cjs`
+- `desktop/src/main/core/local_agent_runtime.cjs`
+- `desktop/src/main/core/local_request_context.cjs`
+- `desktop/src/main/core/local_tool_policy.cjs`
+- `desktop/src/main/core/local_tools.cjs`
+- `desktop/src/main/core/local_model_client.cjs`
+- `backend/app/routers/runs.py`
+- `backend/app/routers/tool_runtime.py`
 
 ## High-Level Conclusion
 
-These repositories are related in theme, but they are not the same kind of repository.
+PIXLLM has moved closer to Claude Code in structure, but the similarity is still partial.
 
-- `anthropics/claude-code` is primarily a distribution and workflow repository around Claude Code plugins, commands, agents, hooks, and examples.
-- `PIX_RAG_Source` is primarily an application repository containing an actual desktop client, backend service, retrieval/orchestration code, deployment scripts, and test suites.
+Current PIXLLM strengths:
 
-In short:
+- explicit pre-loop request context
+- central local tool permission gate
+- grounded final answer checks
+- structured local tool batch execution
 
-- Claude Code repo: product ecosystem layer
-- PIXLLM repo: product implementation layer
+Current PIXLLM gaps relative to Claude Code:
 
-## What Claude Code Repository Actually Contains
+- no streaming-time tool execution
+- no unified runtime across desktop and backend
+- no built-in MCP/open-world path in the local agent loop
+- no integrated team/sub-agent execution in the local agent path
 
-From the checked-out files, the Claude Code repository is dominated by:
+## What Claude Code Does Differently
 
-- plugin manifests and marketplace metadata
-- markdown documentation for commands and agent workflows
-- shell and setup scripts
-- examples and plugin scaffolding
+Claude Code still keeps more of the control loop inside one engine:
 
-Observed top-level directories:
+- `processUserInput` before the main loop
+- `wrappedCanUseTool` for centralized permission checks
+- streaming `tool_use` handling during generation
+- interrupt cleanup with synthetic `tool_result`
+- unified tool inventory in `tools.ts`
 
-- `.claude`
-- `.claude-plugin`
-- `plugins`
-- `scripts`
-- `examples`
-- `Script`
+That means Claude Code is closer to a single integrated runtime than PIXLLM is today.
 
-Observed git-tracked extension mix:
+## What PIXLLM Now Implements
 
-- `.md`: 100
-- `.json`: 26
-- `.sh`: 18
-- `.yml`: 17
-- `.py`: 12
-- `.ts`: 5
+PIXLLM desktop local agent currently has:
 
-Notably, there is no obvious core application source tree at the root such as:
+- `LocalAgentService` as the stream/event surface
+- `LocalAgentEngine` as the turn loop
+- `LocalAgentRuntime` as the local orchestration layer
+- `LocalToolCollection` as the tool registry
+- `local_request_context` for explicit path and intent extraction
+- `local_tool_policy` for path and execution gating
 
-- `src/`
-- `app/`
-- `backend/`
-- `desktop/`
-- `package.json`
-- `pyproject.toml`
+This is a real improvement over the older `engine only + tool collection` shape.
 
-This strongly suggests that the repository does not expose the full Claude Code product implementation. It exposes the extension/workflow surface around the product.
+## Important Remaining Differences
 
-That is an inference from repository structure, not a claim about Anthropic’s internal codebase.
+### 1. Runtime split
 
-## What PIXLLM Repository Actually Contains
+PIXLLM still has a split between:
 
-The PIXLLM repository contains a runnable product stack:
+- desktop local agent runtime
+- backend runs/tool-api/policy services
 
-- Electron desktop app in `desktop/`
-- FastAPI backend in `backend/`
-- orchestration and retrieval code in `backend/app/services/chat/`
-- local workspace overlay collection in `desktop/src/main/`
-- deployment scripts in `backend/scripts/`
-- tests in `backend/tests/`
+Claude Code keeps more of this inside one engine/runtime layer.
 
-Observed git-tracked extension mix:
+### 2. Tool timing
 
-- `.py`: 129
-- `.md`: 48
-- `.cjs`: 12
-- `.ts`: 6
+PIXLLM streams model text, collects `tool_calls`, and executes them after completion.
 
-Observed runtime manifests:
+Claude Code can act on tool usage while the stream is still in progress.
 
-- `desktop/package.json`
-- `backend/requirements-agent.txt`
+### 3. Open-world scope
 
-This is a much more implementation-heavy repository than the Claude Code repo clone.
+Claude Code includes MCP/open-world extension surfaces in its core tool model.
 
-## Similarities
+PIXLLM local agent path currently does not.
 
-There are still meaningful similarities.
+### 4. Recovery depth
 
-### 1. Both are agent-oriented coding systems
+PIXLLM has repeated batch prevention, interrupted tool results, and grounded answer retry, but Claude Code still has the more complete interrupt/transcript recovery model.
 
-Claude Code plugin docs show:
+## What PIXLLM Should Learn from Claude Code
 
-- specialized agents
-- slash-command workflows
-- review and feature-development automation
+1. Keep tool orchestration as close to the engine loop as possible.
+2. Preserve one central permission contract for every tool call.
+3. Move toward streaming-time tool execution.
+4. Reduce duplication between local runtime and backend runtime.
 
-PIXLLM also has:
+## What PIXLLM Should Not Copy Blindly
 
-- contract-driven chat planning
-- local overlay collection
-- flow/review/read/failure answer shaping
-- agent-style orchestration rules in `AGENTS.md`
+PIXLLM does not need to adopt every Claude Code concept.
 
-### 2. Both care about workflow packaging
+- MCP/open-world integration is intentionally out of scope for the current local path.
+- Team/remote abstractions should not be documented as current features until they are implemented.
 
-Claude Code packages workflows as:
+## Current Recommended Roadmap
 
-- plugins
-- commands
-- agents
-- hooks
-- MCP config
-
-PIXLLM packages workflow behavior as:
-
-- repository instructions in `AGENTS.md`
-- local skills in `.codex/skills/`
-- backend routing contracts
-- desktop-side local tool loop
-
-### 3. Both emphasize review and structured development
-
-Claude Code’s `feature-dev` and `code-review` plugins explicitly formalize:
-
-- exploration
-- architecture design
-- implementation
-- review
-
-PIXLLM is moving in the same direction through:
-
-- `question_contract.py`
-- `results.py`
-- `local_agent_runner.cjs`
-- test-backed routing behavior
-
-## Main Differences
-
-### 1. Terminal product vs desktop+backend system
-
-Claude Code, based on the repository and README, is terminal-first and plugin-driven.
-
-PIXLLM is a client-server application:
-
-- desktop UI
-- backend API
-- remote services such as Redis, Qdrant, MinIO, and LLM endpoints
-
-This is the single biggest architectural difference.
-
-### 2. Extension-first repo vs implementation-first repo
-
-Claude Code repo appears optimized for:
-
-- install/setup
-- plugin ecosystem
-- command/agent authoring
-- examples
-
-PIXLLM repo is optimized for:
-
-- grounded retrieval implementation
-- actual prompt/routing/runtime behavior
-- app packaging and deployment
-- testable server responses
-
-### 3. Plugin standardization
-
-Claude Code has a clean plugin packaging model:
-
-- `.claude-plugin/plugin.json`
-- marketplace metadata
-- standard folder conventions for `commands/`, `agents/`, `skills/`, `hooks/`
-
-PIXLLM has workflow customizations, but they are less productized as a general plugin interface.
-
-Current PIXLLM customization layers are more repository-native:
-
-- `AGENTS.md`
-- `.codex/skills/`
-- backend routing code
-- desktop local overlay code
-
-This means PIXLLM is powerful internally, but less standardized as a reusable extension platform.
-
-### 4. Review workflow shape
-
-Claude Code’s code-review plugin is PR-centric and multi-agent:
-
-- it assumes GitHub PR context
-- it launches parallel reviewers
-- it uses confidence thresholds
-- it is designed to post or emit review findings
-
-PIXLLM’s current review behavior is workspace-overlay-centric:
-
-- it reasons over selected file content and local spans
-- it can render deterministic review output
-- it is not primarily shaped around PR metadata and GitHub workflow by default
-
-### 5. Distribution model
-
-Claude Code repo points users toward:
-
-- install scripts
-- package manager installation
-- a prebuilt product binary/CLI experience
-
-PIXLLM expects:
-
-- backend deployment
-- Docker compose stack
-- Electron build or dev server
-
-PIXLLM is therefore closer to “deployable internal platform” than “single installable CLI product”.
-
-## Practical Implications
-
-If the goal is to become more like Claude Code’s public repository surface, the missing pieces on the PIXLLM side are mostly around packaging and ecosystem, not raw orchestration.
-
-### Areas where PIXLLM is already stronger
-
-- actual grounded retrieval implementation is present in-repo
-- desktop/local-overlay integration is present in-repo
-- backend answer contracts are present in-repo
-- deployment and runtime stack are present in-repo
-- behavior can be tested end-to-end inside this repository
-
-### Areas where Claude Code repo is stronger
-
-- cleaner extension packaging model
-- clearer marketplace/distribution story
-- workflow modules are easier to discover
-- commands/agents/plugins are easier to reuse across projects
-- repository is easier to understand at a glance
-
-## Recommended Direction if We Want to Learn From Claude Code
-
-The useful lessons are structural, not architectural mimicry.
-
-### Keep
-
-- PIXLLM’s desktop + backend architecture
-- grounded overlay evidence model
-- contract-based answer shaping
-- server-side verification and tests
-
-### Borrow
-
-- explicit plugin manifest format
-- standardized folders for commands/agents/hooks/skills
-- marketplace-style index for installable workflow packs
-- easier discoverability for review, feature-dev, compare, debug workflows
-
-### Do Not Copy Blindly
-
-- terminal-only assumptions
-- PR-only review assumptions
-- a plugin-heavy surface without first stabilizing internal contracts
-
-PIXLLM is not missing “more prompts”. It is missing a cleaner product surface for the workflows it already implements.
+1. Unify desktop local runtime and backend tool/runtime policy.
+2. Add streaming tool execution.
+3. Keep expanding `LocalAgentRuntime` instead of spreading orchestration logic back across multiple files.
+4. Only add team/remote/MCP layers after the single-agent runtime is stable.
 
 ## Bottom Line
 
-The two repos overlap in intent, but not in layer.
+Current PIXLLM is best described as:
 
-- Claude Code repo is mostly the open workflow/plugin shell around a coding agent product.
-- PIXLLM repo is mostly the concrete implementation of a grounded coding assistant product.
+- a desktop-first grounded coding assistant
+- with a strengthened single local agent runtime
+- plus optional backend operational APIs
 
-So the right comparison is not:
-
-- “why don’t we look like this repo?”
-
-It is:
-
-- “which parts of their packaging model should we add on top of our implementation-heavy stack?”
+It is not yet a full Claude Code-style unified agent platform, but it now has enough structure that the next refactors can move in that direction cleanly.
