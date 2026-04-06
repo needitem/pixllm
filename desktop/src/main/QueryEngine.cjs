@@ -95,12 +95,47 @@ function summarizeMessage(message) {
   return `${role}: ${content}`;
 }
 
+function contentWithoutToolResponses(content = '') {
+  return toStringValue(String(content || '').replace(/<tool_response>\s*[\s\S]*?<\/tool_response>/gi, ' '));
+}
+
+function hasSubstantiveUserQueryMessage(messages = []) {
+  return (Array.isArray(messages) ? messages : []).some((message) => {
+    if (toStringValue(message?.role).toLowerCase() !== 'user') {
+      return false;
+    }
+    const content = contentWithoutToolResponses(toStringValue(message?.content));
+    return Boolean(content);
+  });
+}
+
+function findFirstSubstantiveUserMessage(messages = []) {
+  return (Array.isArray(messages) ? messages : []).find((message) => {
+    if (toStringValue(message?.role).toLowerCase() !== 'user') {
+      return false;
+    }
+    const content = serializeBlocks(Array.isArray(message?.content) ? message.content : []);
+    return Boolean(contentWithoutToolResponses(content));
+  }) || null;
+}
+
+function cloneMessage(message = null) {
+  if (!message || typeof message !== 'object') {
+    return null;
+  }
+  return {
+    role: toStringValue(message.role).toLowerCase() === 'user' ? 'user' : 'assistant',
+    content: normalizeMessageBlocks(message.content),
+  };
+}
+
 function compactMessages(messages) {
   const safeMessages = Array.isArray(messages) ? [...messages] : [];
   const totalChars = safeMessages.reduce((sum, item) => sum + messageCharLength(item), 0);
   if (totalChars <= MESSAGE_CHAR_BUDGET || safeMessages.length <= 10) {
     return { messages: safeMessages, compacted: false };
   }
+  const firstUserMessage = cloneMessage(findFirstSubstantiveUserMessage(safeMessages));
   const head = safeMessages.slice(0, Math.max(0, safeMessages.length - 8));
   const tail = safeMessages.slice(-8);
   const summary = head
@@ -108,15 +143,29 @@ function compactMessages(messages) {
     .filter(Boolean)
     .join('\n')
     .slice(0, 8000);
+  const nextMessages = [];
+  if (firstUserMessage) {
+    nextMessages.push(firstUserMessage);
+  }
+  nextMessages.push({
+    role: 'assistant',
+    content: [createTextBlock(`[Compacted transcript]\n${summary}`)],
+  });
+  for (const item of tail) {
+    const cloned = cloneMessage(item);
+    if (!cloned) continue;
+    if (
+      firstUserMessage
+      && cloned.role === 'user'
+      && serializeBlocks(cloned.content) === serializeBlocks(firstUserMessage.content)
+    ) {
+      continue;
+    }
+    nextMessages.push(cloned);
+  }
   return {
     compacted: true,
-    messages: [
-      {
-        role: 'assistant',
-        content: [createTextBlock(`[Compacted transcript]\n${summary}`)],
-      },
-      ...tail,
-    ],
+    messages: nextMessages,
   };
 }
 
@@ -840,9 +889,24 @@ class QueryEngine {
       toStringValue(this.projectContextPrompt),
       toStringValue(runtimeContext),
     ].filter(Boolean).join('\n\n');
+    const flattenedMessages = flattenMessagesForModel(this.state.messages);
+    if (!hasSubstantiveUserQueryMessage(flattenedMessages)) {
+      const fallbackPrompt = toStringValue(this.runtime?.requestContext?.prompt);
+      if (fallbackPrompt) {
+        const parts = [`User request:\n${fallbackPrompt}`];
+        const selectedFilePath = toStringValue(this.runtime?.requestContext?.selectedFilePath || this.selectedFilePath);
+        if (selectedFilePath) {
+          parts.push(`Current selected file: ${selectedFilePath}`);
+        }
+        flattenedMessages.unshift({
+          role: 'user',
+          content: parts.join('\n\n'),
+        });
+      }
+    }
     return [
       { role: 'system', content: mergedSystemPrompt },
-      ...flattenMessagesForModel(this.state.messages),
+      ...flattenedMessages,
     ];
   }
 
