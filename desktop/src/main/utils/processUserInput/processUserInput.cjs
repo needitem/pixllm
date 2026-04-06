@@ -89,6 +89,18 @@ function uniqStrings(items) {
   return out;
 }
 
+function detectLanguageProfile(prompt = '') {
+  const source = toStringValue(prompt);
+  const hasHangul = /[\u3131-\u318E\uAC00-\uD7A3]/.test(source);
+  const hasLatin = /[A-Za-z]/.test(source);
+  return {
+    primaryLanguage: hasHangul ? (hasLatin ? 'mixed' : 'ko') : (hasLatin ? 'en' : 'unknown'),
+    hasHangul,
+    hasLatin,
+    avoidLanguageSwitch: hasHangul,
+  };
+}
+
 function isWorkspaceRelativePath(value) {
   const raw = normalizePath(value);
   if (!raw) return false;
@@ -159,7 +171,7 @@ function analyzeIntent(prompt, directives = {}) {
     wantsAnalysis: Boolean(directives.analysis) || matchesAny(source, [
       /\b(analy(?:s|z)|compare|review|inspect|investigate|trace|understand|audit|explain|summari(?:s|z)e|search|find|locat(?:e|ion)|look up|open|read)\b/i,
       /\b(flow|implementation|codebase|workspace|symbol|reference)\b/i,
-      /\uD750\uB984|\uBD84\uC11D|\uBE44\uAD50|\uB9AC\uBDF0|\uD30C\uC545|\uC124\uBA85|\uC694\uC57D|\uCC3E|\uAC80\uC0C9|\uC5F4\uC5B4|\uC77D/i,
+      /\uC5B4\uB514\uC11C|\uC5B4\uB514\uC5D0|\uC704\uCE58|\uD750\uB984|\uBD84\uC11D|\uBE44\uAD50|\uB9AC\uBDF0|\uD30C\uC545|\uC124\uBA85|\uC694\uC57D|\uCC3E|\uAC80\uC0C9|\uC5F4\uC5B4|\uC77D/i,
     ]),
     createLikely: matchesAny(source, [
       /\b(create|add|new file|new test|scaffold|generate)\b/i,
@@ -293,6 +305,32 @@ function summarizeRequestContext(context = {}) {
     lines.push(`Evidence mode: ${evidencePreference}`);
   }
 
+  const languageProfile = context.languageProfile && typeof context.languageProfile === 'object'
+    ? context.languageProfile
+    : {};
+  const primaryLanguage = toStringValue(languageProfile.primaryLanguage);
+  if (primaryLanguage) {
+    lines.push(`User language: ${primaryLanguage}`);
+  }
+  if (languageProfile.avoidLanguageSwitch) {
+    lines.push('Do not ask the user to switch to English. Continue in the user language and translate Korean technical phrases into likely English code-search terms when needed.');
+  }
+
+  const searchHints = Array.isArray(context.searchHints) ? context.searchHints.filter(Boolean) : [];
+  if (searchHints.length > 0) {
+    lines.push(`Search hint terms: ${searchHints.slice(0, 8).join(', ')}`);
+  }
+
+  const symbolHints = Array.isArray(context.symbolHints) ? context.symbolHints.filter(Boolean) : [];
+  if (symbolHints.length > 0) {
+    lines.push(`Symbol hint terms: ${symbolHints.slice(0, 6).join(', ')}`);
+  }
+
+  const rewriteNotes = toStringValue(context.rewriteNotes);
+  if (rewriteNotes) {
+    lines.push(`Rewrite notes: ${rewriteNotes}`);
+  }
+
   const directiveLabels = Object.entries(directives)
     .filter(([, enabled]) => Boolean(enabled))
     .map(([key]) => `/${key}`);
@@ -327,6 +365,7 @@ function summarizeRequestContext(context = {}) {
 }
 
 function createRunRequestContext({ prompt = '', workspacePath = '', selectedFilePath = '' } = {}) {
+  const languageProfile = detectLanguageProfile(prompt);
   const directives = parsePromptDirectives(prompt);
   const intent = analyzeIntent(prompt, directives);
   const focus = analyzeFocus(prompt, directives);
@@ -367,16 +406,24 @@ function createRunRequestContext({ prompt = '', workspacePath = '', selectedFile
     intent,
     focus,
     directives,
+    languageProfile,
     evidencePreference,
     prefersReferenceTools,
+    searchHints: [],
+    symbolHints: [],
+    rewriteNotes: '',
     initialToolNames,
     summary: summarizeRequestContext({
       explicitPaths,
       selectedFilePath: normalizedSelectedFilePath,
       intent,
       directives,
+      languageProfile,
       evidencePreference,
       prefersReferenceTools,
+      searchHints: [],
+      symbolHints: [],
+      rewriteNotes: '',
       initialToolNames,
     }),
   };

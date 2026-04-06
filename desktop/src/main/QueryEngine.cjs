@@ -1,6 +1,7 @@
 const { createHash } = require('node:crypto');
 const { createLocalToolCollection } = require('./tools.cjs');
 const { streamModelCompletion } = require('./services/model/streamModelCompletion.cjs');
+const { rewritePromptForSearch } = require('./services/model/QwenQueryRewrite.cjs');
 const { ToolRuntime } = require('./services/tools/ToolRuntime.cjs');
 const { StreamingToolExecutor } = require('./services/tools/StreamingToolExecutor.cjs');
 const { loadProjectContext, buildProjectContextPrompt } = require('./utils/projectContext.cjs');
@@ -871,6 +872,62 @@ class QueryEngine {
     return result;
   }
 
+  async _rewriteSearchHints(runContext, { signal = null } = {}) {
+    const requestContext = runContext && typeof runContext === 'object' ? runContext : {};
+    const languageProfile = requestContext.languageProfile && typeof requestContext.languageProfile === 'object'
+      ? requestContext.languageProfile
+      : {};
+    const intent = requestContext.intent && typeof requestContext.intent === 'object'
+      ? requestContext.intent
+      : {};
+    const shouldRewrite = Boolean(languageProfile.hasHangul)
+      && (
+        intent.wantsAnalysis
+        || intent.wantsChanges
+        || intent.wantsExecution
+        || requestContext.prefersReferenceTools
+      );
+    if (!shouldRewrite) {
+      return requestContext;
+    }
+
+    const rewritten = await rewritePromptForSearch({
+      baseUrl: this.llmBaseUrl || this.baseUrl || this.serverBaseUrl,
+      apiToken: this.llmApiToken || this.apiToken || this.serverApiToken,
+      fallbackBaseUrl: this.serverBaseUrl,
+      fallbackApiToken: this.serverApiToken,
+      model: this.model,
+      prompt: toStringValue(requestContext.prompt),
+      signal,
+    });
+    const searchTerms = Array.isArray(rewritten?.searchTerms) ? rewritten.searchTerms : [];
+    const symbolHints = Array.isArray(rewritten?.symbolHints) ? rewritten.symbolHints : [];
+    const rewriteNotes = toStringValue(rewritten?.notes);
+    if (searchTerms.length === 0 && symbolHints.length === 0 && !rewriteNotes) {
+      return requestContext;
+    }
+
+    const updatedContext = this.runtime.updateRequestContextHints({
+      searchHints: searchTerms,
+      symbolHints,
+      rewriteNotes,
+    }) || requestContext;
+
+    this._recordTranscript({
+      kind: 'query_rewrite_hints',
+      promptPreview: previewText(requestContext.prompt),
+      searchHints: searchTerms.slice(0, 8),
+      symbolHints: symbolHints.slice(0, 6),
+      notes: rewriteNotes,
+    });
+    this._recordTransition('query_rewrite_hints', {
+      searchHints: searchTerms.length,
+      symbolHints: symbolHints.length,
+    });
+    this._persistState();
+    return updatedContext;
+  }
+
   async run({
     prompt = '',
     onStatus = async () => {},
@@ -892,10 +949,11 @@ class QueryEngine {
     this.runtimeHandlers = { onTransition, onUserQuestion, onBrief };
 
     try {
-      const runContext = this.runtime.beginRun({
+      let runContext = this.runtime.beginRun({
         prompt,
         selectedFilePath: this.selectedFilePath,
       });
+      runContext = await this._rewriteSearchHints(runContext, { signal });
       const userBlocks = buildUserBlocks(
         toStringValue(runContext?.prompt || prompt),
         toStringValue(runContext?.selectedFilePath || this.selectedFilePath),
@@ -908,6 +966,8 @@ class QueryEngine {
         explicitPaths: Array.isArray(runContext?.explicitPaths) ? runContext.explicitPaths.slice(0, 8) : [],
         evidencePreference: toStringValue(runContext?.evidencePreference),
         initialToolNames: Array.isArray(runContext?.initialToolNames) ? runContext.initialToolNames.slice(0, 20) : [],
+        searchHints: Array.isArray(runContext?.searchHints) ? runContext.searchHints.slice(0, 8) : [],
+        symbolHints: Array.isArray(runContext?.symbolHints) ? runContext.symbolHints.slice(0, 6) : [],
       });
       try {
         this.projectContext = await loadProjectContext({
@@ -1076,6 +1136,8 @@ class QueryEngine {
           recovery_context: {
             user_prompt: toStringValue(runContext?.prompt || prompt),
             active_tool_names: activeToolNames,
+            search_hints: Array.isArray(runContext?.searchHints) ? runContext.searchHints : [],
+            symbol_hints: Array.isArray(runContext?.symbolHints) ? runContext.symbolHints : [],
           },
         });
         if (!parsed.ok) {

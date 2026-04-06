@@ -1,4 +1,4 @@
-const { processUserInput } = require('../../utils/processUserInput/processUserInput.cjs');
+const { processUserInput, summarizeRequestContext } = require('../../utils/processUserInput/processUserInput.cjs');
 const { canUseTool: authorizeLocalToolUse, collectGroundedPaths } = require('../../hooks/useCanUseTool.cjs');
 const { findUngroundedSourceMentions } = require('../../query/sourceGuard.cjs');
 const { evaluateFinalAnswerPolicy } = require('../../query/finalizationPolicy.cjs');
@@ -82,6 +82,21 @@ function stableSerialize(value) {
     return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableSerialize(value[key])}`).join(',')}}`;
   }
   return JSON.stringify(value ?? null);
+}
+
+function uniqueHintStrings(items = [], limit = 8) {
+  const seen = new Set();
+  const output = [];
+  for (const item of Array.isArray(items) ? items : []) {
+    const normalized = toStringValue(item);
+    if (!normalized) continue;
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    output.push(normalized);
+    if (output.length >= limit) break;
+  }
+  return output;
 }
 
 function toolUseKey(toolUse = {}) {
@@ -174,6 +189,21 @@ class ToolRuntime {
 
   contextSummary() {
     return toStringValue(this.requestContext?.summary);
+  }
+
+  updateRequestContextHints({
+    searchHints = [],
+    symbolHints = [],
+    rewriteNotes = '',
+  } = {}) {
+    if (!this.requestContext || typeof this.requestContext !== 'object') {
+      return null;
+    }
+    this.requestContext.searchHints = uniqueHintStrings(searchHints, 8);
+    this.requestContext.symbolHints = uniqueHintStrings(symbolHints, 6);
+    this.requestContext.rewriteNotes = toStringValue(rewriteNotes).slice(0, 240);
+    this.requestContext.summary = summarizeRequestContext(this.requestContext);
+    return this.requestContext;
   }
 
   groundedSourcePaths(trace = []) {

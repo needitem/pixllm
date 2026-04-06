@@ -647,6 +647,21 @@ function choosePreferredToolName(activeToolNames, candidates = []) {
   return '';
 }
 
+function normalizeHintStrings(values = [], limit = 8) {
+  const seen = new Set();
+  const output = [];
+  for (const item of Array.isArray(values) ? values : []) {
+    const normalized = toStringValue(item);
+    if (!normalized) continue;
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    output.push(normalized);
+    if (output.length >= limit) break;
+  }
+  return output;
+}
+
 function extractQuotedPhrase(prompt) {
   const source = toStringValue(prompt);
   const quoted = source.match(/[\"']([^\"']{2,120})[\"']/);
@@ -689,15 +704,21 @@ function extractSymbolCandidate(prompt) {
   return '';
 }
 
-function buildSearchQueryFromPrompt(prompt) {
+function buildSearchQueryFromPrompt(prompt, recoveryContext = {}) {
   const source = toStringValue(prompt);
   if (!source) return '';
   const quoted = extractQuotedPhrase(source);
   if (quoted) return quoted;
   const explicitPath = extractExplicitFilePath(source);
   if (explicitPath && !/readme\.md/i.test(explicitPath)) return explicitPath;
+  const hintedSearchTerms = normalizeHintStrings(recoveryContext?.search_hints, 6);
+  if (hintedSearchTerms.length > 0) {
+    return hintedSearchTerms.join(' ').slice(0, 120);
+  }
   const symbol = extractSymbolCandidate(source);
   if (symbol) return symbol;
+  const hintedSymbol = normalizeHintStrings(recoveryContext?.symbol_hints, 4)[0];
+  if (hintedSymbol) return hintedSymbol;
   const stopwords = new Set([
     'a', 'an', 'and', 'are', 'be', 'candidate', 'candidates', 'check', 'code', 'codebase', 'current',
     'exact', 'explain', 'file', 'files', 'find', 'flow', 'for', 'how', 'if', 'in', 'inspect', 'is',
@@ -725,7 +746,8 @@ function buildSearchQueryFromPrompt(prompt) {
 
 function promptWantsDiscovery(prompt) {
   const source = toStringValue(prompt).toLowerCase();
-  return /\b(find|search|look for|where|list|inspect|open|read|show|summarize|flow|path|initiali[sz]e|register)\b/.test(source);
+  return /\b(find|search|look for|where|list|inspect|open|read|show|summarize|flow|path|initiali[sz]e|register)\b/.test(source)
+    || /(\uCC3E|\uAC80\uC0C9|\uC5B4\uB514\uC11C|\uC5B4\uB514\uC5D0|\uC704\uCE58|\uD750\uB984|\uC124\uBA85|\uC5F4\uC5B4|\uC77D|\uCD08\uAE30\uD654|\uB4F1\uB85D)/.test(source);
 }
 
 function shouldAttemptPromptRecovery({ assistantText = '', reasoningText = '', userPrompt = '' } = {}) {
@@ -739,6 +761,9 @@ function shouldAttemptPromptRecovery({ assistantText = '', reasoningText = '', u
   if (/(don't have access|do not have access|don't see any codebase|do not see any codebase|need more context|need more information|could you please clarify|provide more context|share the codebase|upload the relevant files|i need more information|i need more context)/i.test(combined)) {
     return true;
   }
+  if (/(\uC601\uC5B4|\uB2E4\uC2DC\s*\uC9C8\uBB38|\uD14D\uC2A4\uD2B8\s*\uC778\uCF54\uB529|\uAE68\uC84C|\uC81C\uB300\uB85C\s*\uD45C\uC2DC|\uC54C\s*\uC218\s*\uC5C6)/.test(combined)) {
+    return true;
+  }
   return /\b(i(?:'ll| will)|let me|i need to|i should)\s+(search|look|find|inspect|read|check|open)\b/i.test(combined);
 }
 
@@ -747,8 +772,9 @@ function inferPromptRecoveryToolCall(recoveryContext = {}) {
   if (!userPrompt) return null;
   const activeToolNames = buildActiveToolNameSet(recoveryContext);
   const explicitFilePath = extractExplicitFilePath(userPrompt);
-  const symbol = extractSymbolCandidate(userPrompt);
-  const searchQuery = buildSearchQueryFromPrompt(userPrompt);
+  const symbolHints = normalizeHintStrings(recoveryContext?.symbol_hints, 4);
+  const symbol = symbolHints[0] || extractSymbolCandidate(userPrompt);
+  const searchQuery = buildSearchQueryFromPrompt(userPrompt, recoveryContext);
 
   if (explicitFilePath && choosePreferredToolName(activeToolNames, ['read_file'])) {
     return {
@@ -1123,6 +1149,8 @@ function buildSystemPrompt({
   return [
     'You are the desktop coding engine for a Qwen-based local coding agent.',
     'You own the tool loop. Decide whether to answer directly or call tools.',
+    'The user may write in Korean. Never ask the user to switch to English.',
+    'Answer in the user language when possible. When searching code, translate Korean technical phrases into likely English code terms or identifiers yourself.',
     '# Tools',
     'You have access to the following tools in OpenAI-compatible function schema form:',
     toolCatalog || '{"type":"function","function":{"name":"no_tools","description":"No tools are enabled for this turn.","parameters":{"type":"object","properties":{},"additionalProperties":false}}}',
