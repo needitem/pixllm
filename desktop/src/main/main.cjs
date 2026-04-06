@@ -51,11 +51,12 @@ configureCachePaths();
 
 function createShellWindow(options = {}) {
   const win = new BrowserWindow({
-    width: 1480,
-    height: 960,
-    minWidth: 1180,
-    minHeight: 760,
+    width: 1520,
+    height: 980,
+    minWidth: 1040,
+    minHeight: 720,
     backgroundColor: '#0f1720',
+    autoHideMenuBar: true,
     ...options,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
@@ -98,10 +99,10 @@ function createWindow() {
 
 function createRunsWindow(parentWindow) {
   const win = createShellWindow({
-    width: 1180,
-    height: 900,
-    minWidth: 980,
-    minHeight: 720,
+    width: 1240,
+    height: 920,
+    minWidth: 920,
+    minHeight: 680,
     title: 'PIXLLM Runs',
     parent: parentWindow
   });

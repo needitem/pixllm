@@ -197,6 +197,24 @@
   $: workspaceName = getWorkspaceName(settings.workspacePath);
   $: workspaceOptions = buildWorkspaceOptions(settings.workspacePath, settings.recentWorkspaces);
   $: selectedSession = sessions.find((session) => session.id === selectedSessionId) || null;
+  $: workspaceFileCount = workspaceFiles.length;
+  $: workspaceDirtyCount = extractChangedPaths(workspaceStatus).length;
+  $: workspaceDiffCount = extractChangedPaths(workspaceDiff).length;
+  $: changedWorkspacePaths = extractChangedPaths(workspaceStatus).slice(0, 5);
+  $: selectedSessionTimestamp = formatDateTime(
+    selectedSession?.updatedAt || selectedSession?.createdAt || ''
+  );
+  $: focusFilePath = selectedFilePath.trim() ? selectedFilePath : localPrimaryFilePath;
+  $: focusFileLabel = focusFilePath ? getPathTail(focusFilePath, 3) : 'No focused file';
+  $: workspaceStateLabel = summarizeWorkspaceState(
+    settings.workspacePath,
+    workspaceDirtyCount,
+    workspaceDiffCount
+  );
+  $: connectionHostLabel = compactEndpoint(settings.serverBaseUrl);
+  $: appBuildLabel = appInfo
+    ? `v${appInfo.version}${appInfo.isPackaged ? '' : ' · dev'}`
+    : 'Desktop shell';
   $: pendingApprovalCount = runApprovals.filter(
     (approval) => String(approval.status || '').toLowerCase() === 'pending'
   ).length;
@@ -204,6 +222,11 @@
     /running|queued|pending|progress|waiting/i.test(String(task.status || ''))
   ).length;
   $: hasConversation = conversation.length > 0;
+  $: assistantStateLabel = busy
+    ? 'Response in progress'
+    : hasConversation
+      ? 'Conversation ready'
+      : 'Awaiting your first prompt';
   $: executionMessage =
     resolveExecutionMessage(conversation, selectedExecutionMessageId);
   $: executionItems = executionMessage ? buildExecutionInspectorItems(executionMessage) : [];
@@ -242,6 +265,51 @@
     if (!workspacePath) return 'No workspace selected';
     const parts = workspacePath.replace(/\\/g, '/').split('/').filter(Boolean);
     return parts[parts.length - 1] || workspacePath;
+  }
+
+  function getPathTail(pathValue: string, segments = 2): string {
+    const parts = String(pathValue || '')
+      .replace(/\\/g, '/')
+      .split('/')
+      .filter(Boolean);
+    if (parts.length <= segments) return parts.join('/');
+    return `.../${parts.slice(-segments).join('/')}`;
+  }
+
+  function compactEndpoint(value: string): string {
+    return String(value || '')
+      .replace(/^https?:\/\//i, '')
+      .replace(/\/api\/?$/i, '')
+      .trim();
+  }
+
+  function formatDateTime(value: string | Date | null | undefined): string {
+    if (!value) return 'Not available';
+    const date = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(date.getTime())) {
+      return String(value);
+    }
+    return `${date.toLocaleDateString([], {
+      month: 'short',
+      day: 'numeric'
+    })} ${date.toLocaleTimeString([], {
+      hour: '2-digit',
+      minute: '2-digit'
+    })}`;
+  }
+
+  function summarizeWorkspaceState(
+    workspacePath: string,
+    dirtyCount: number,
+    diffCount: number
+  ): string {
+    if (!workspacePath) return 'Choose a workspace to start a tracked session.';
+    if (dirtyCount === 0 && diffCount === 0) return 'Workspace is clean and ready for a new run.';
+    if (dirtyCount > 0 && diffCount > 0) {
+      return `${dirtyCount} tracked changes across ${diffCount} files.`;
+    }
+    if (dirtyCount > 0) return `${dirtyCount} tracked changes detected.`;
+    return `${diffCount} files included in the latest diff snapshot.`;
   }
 
   function buildWorkspaceOptions(currentWorkspace: string, recentWorkspaces: string[]): string[] {
@@ -1936,91 +2004,184 @@
       <button class="sidebar-backdrop" aria-label="Close workspace panel" on:click={closeSidebar}></button>
     {/if}
     <aside class="left-pane">
-      <section class="card workspace-panel">
-        <div class="section-row">
-          <div class="section-title">Workspaces</div>
-          <button class="primary" on:click={addWorkspace}>Add</button>
-        </div>
-
-        {#if workspaceOptions.length > 0}
-          <div class="workspace-switcher">
-            {#each workspaceOptions as workspacePath}
-              <div class={`workspace-cluster ${settings.workspacePath === workspacePath ? 'selected' : ''}`}>
-                <button
-                  class={`workspace-item ${settings.workspacePath === workspacePath ? 'selected' : ''}`}
-                  on:click={() => activateWorkspace(workspacePath)}
-                  title={workspacePath}
-                >
-                  <div class="workspace-item-line">
-                    <strong class="workspace-item-title">{getWorkspaceName(workspacePath)}</strong>
-                    <span class="workspace-item-separator" aria-hidden="true">-</span>
-                    <span class="workspace-item-path">{workspacePath}</span>
-                  </div>
-                </button>
-
-                {#if settings.workspacePath === workspacePath}
-                  <div class="workspace-session-rail">
-                    <div class="section-row sessions-head nested">
-                      <div class="section-title">Sessions</div>
-                      <button class="secondary" on:click={createSession} disabled={!settings.workspacePath}>
-                        New
-                      </button>
-                    </div>
-
-                    {#if sessions.length > 0}
-                      <div class="session-list">
-                        {#each sessions as session}
-                          <button
-                            class={`session-item ${selectedSessionId === session.id ? 'selected' : ''}`}
-                            on:click={() => loadSession(session.id)}
-                            title={session.title}
-                          >
-                            <div class="session-item-line">
-                              <strong class="session-item-title">{session.title}</strong>
-                            </div>
-                          </button>
-                        {/each}
-                      </div>
-                    {:else}
-                      <div class="empty-state">No sessions yet for this workspace.</div>
-                    {/if}
-                  </div>
-                {/if}
+      <div class="sidebar-stack">
+        <section class="card sidebar-brand-card">
+          <div class="brand-row">
+            <div class="brand-mark">PX</div>
+            <div class="brand-copy">
+              <div class="eyebrow">PIXLLM Desktop</div>
+              <div class="brand-title">Workspace cockpit</div>
+              <div class="muted">
+                Sessions, run telemetry, and workspace context in one focused desktop console.
               </div>
-            {/each}
+            </div>
           </div>
-        {:else}
-          <div class="empty-state">Add one or more workspaces to start.</div>
-        {/if}
-      </section>
+
+          <div class="summary-strip sidebar-summary-strip">
+            <div class="stat-card">
+              <span>Sessions</span>
+              <strong>{sessions.length}</strong>
+            </div>
+            <div class="stat-card">
+              <span>Changes</span>
+              <strong>{workspaceDirtyCount}</strong>
+            </div>
+            <div class="stat-card">
+              <span>Files</span>
+              <strong>{workspaceFileCount}</strong>
+            </div>
+          </div>
+        </section>
+
+        <section class="card workspace-panel">
+          <div class="section-row">
+            <div>
+              <div class="section-title">Workspaces</div>
+              <div class="muted small">Switch context without losing your session history.</div>
+            </div>
+            <button class="primary" on:click={addWorkspace}>Add</button>
+          </div>
+
+          {#if workspaceOptions.length > 0}
+            <div class="workspace-switcher">
+              {#each workspaceOptions as workspacePath}
+                <div class={`workspace-cluster ${settings.workspacePath === workspacePath ? 'selected' : ''}`}>
+                  <button
+                    class={`workspace-item ${settings.workspacePath === workspacePath ? 'selected' : ''}`}
+                    on:click={() => activateWorkspace(workspacePath)}
+                    title={workspacePath}
+                  >
+                    <div class="workspace-item-top">
+                      <span class={`workspace-badge ${settings.workspacePath === workspacePath ? 'active' : ''}`}>
+                        {settings.workspacePath === workspacePath ? 'Active' : 'Workspace'}
+                      </span>
+                      <strong class="workspace-item-title">{getWorkspaceName(workspacePath)}</strong>
+                    </div>
+                    <div class="workspace-item-path">{workspacePath}</div>
+                  </button>
+
+                  {#if settings.workspacePath === workspacePath}
+                    <div class="workspace-session-rail">
+                      <div class="section-row sessions-head nested">
+                        <div>
+                          <div class="section-title">Sessions</div>
+                          <div class="muted small">{selectedSession ? selectedSessionTimestamp : 'No active session'}</div>
+                        </div>
+                        <button class="secondary" on:click={createSession} disabled={!settings.workspacePath}>
+                          New
+                        </button>
+                      </div>
+
+                      {#if sessions.length > 0}
+                        <div class="session-list">
+                          {#each sessions as session}
+                            <button
+                              class={`session-item ${selectedSessionId === session.id ? 'selected' : ''}`}
+                              on:click={() => loadSession(session.id)}
+                              title={session.title}
+                            >
+                              <div class="session-item-main">
+                                <strong class="session-item-title">{session.title}</strong>
+                                <span class="session-item-time">
+                                  {formatDateTime(session.updatedAt || session.createdAt)}
+                                </span>
+                              </div>
+                            </button>
+                          {/each}
+                        </div>
+                      {:else}
+                        <div class="empty-state">No sessions yet for this workspace.</div>
+                      {/if}
+                    </div>
+                  {/if}
+                </div>
+              {/each}
+            </div>
+          {:else}
+            <div class="empty-state">Add one or more workspaces to start.</div>
+          {/if}
+        </section>
+
+        <section class="card sidebar-footer-card">
+          <div class="section-row">
+            <div>
+              <div class="section-title">System</div>
+              <div class="muted small">{appBuildLabel}</div>
+            </div>
+            <div class={`pill ${toneClass(healthStatus)}`}>API {healthStatus}</div>
+          </div>
+
+          <div class="sidebar-meta-list">
+            <div class="sidebar-meta-item">
+              <span>Model</span>
+              <strong>{settings.selectedModel || 'Not set'}</strong>
+            </div>
+            <div class="sidebar-meta-item">
+              <span>Endpoint</span>
+              <strong>{connectionHostLabel || 'No server configured'}</strong>
+            </div>
+            <div class="sidebar-meta-item">
+              <span>Data root</span>
+              <strong>{appInfo ? getPathTail(appInfo.dataRoot, 4) : 'Loading shell info'}</strong>
+            </div>
+          </div>
+        </section>
+      </div>
     </aside>
 
     <main class="main-pane">
-      <section class="card hero">
-        <div class="section-row hero-head hero-head-compact">
-          <div class="hero-side">
-            <div class="hero-pills">
-              <div class={`pill ${toneClass(healthStatus)}`}>{healthStatus}</div>
-              <div class="pill neutral">{workspaceName}</div>
+      <div class="main-surface">
+        <section class="card hero hero-shell">
+          <div class="hero-banner">
+            <div class="hero-copy">
+              <div class="eyebrow">Workspace Console</div>
+              <div class="hero-title-row">
+                <h1>{workspaceName}</h1>
+                <div class={`pill ${toneClass(healthStatus)}`}>{healthStatus}</div>
+              </div>
+              <p class="hero-description">{workspaceStateLabel}</p>
             </div>
+
             <div class="hero-actions">
               <button class="secondary" on:click={toggleSidebar}>
-                {sidebarOpen ? 'Hide workspace panel' : 'Show workspace panel'}
+                {sidebarOpen ? 'Hide sidebar' : 'Show sidebar'}
               </button>
-              <button class="secondary" on:click={() => desktop.openRunsWindow()}>Open runs</button>
+              <button class="secondary" on:click={() => desktop.openRunsWindow()}>Runs</button>
               <button class="secondary" on:click={() => (showConnectionEditor = !showConnectionEditor)}>
-                {showConnectionEditor ? 'Hide connection' : 'Connection'}
+                {showConnectionEditor ? 'Close connection' : 'Connection'}
               </button>
             </div>
           </div>
-        </div>
+
+          <div class="hero-metrics">
+            <article class="metric-card accent">
+              <span>Current session</span>
+              <strong>{selectedSession?.title || 'Create or select a session'}</strong>
+              <small>{selectedSession ? selectedSessionTimestamp : 'Ready for a fresh thread'}</small>
+            </article>
+            <article class="metric-card">
+              <span>Tracked changes</span>
+              <strong>{workspaceDirtyCount}</strong>
+              <small>{workspaceDiffCount} files in diff snapshot</small>
+            </article>
+            <article class="metric-card">
+              <span>Workspace files</span>
+              <strong>{workspaceFileCount}</strong>
+              <small>{focusFileLabel}</small>
+            </article>
+            <article class="metric-card">
+              <span>Connection</span>
+              <strong>{settings.selectedModel || 'No model selected'}</strong>
+              <small>{connectionHostLabel || 'No server configured'}</small>
+            </article>
+          </div>
 
         {#if showConnectionEditor}
-          <div class="connection-inline">
+          <div class="connection-inline connection-panel">
             <div class="connection-summary">
               <div class={`pill ${toneClass(healthStatus)}`}>API {healthStatus}</div>
-              <div class="muted small">{settings.serverBaseUrl}</div>
-              <div class="muted small">Model: {settings.selectedModel}</div>
+              <div class="muted small">{settings.serverBaseUrl || 'No server URL configured'}</div>
+              <div class="muted small">Model: {settings.selectedModel || 'Not set'}</div>
             </div>
             <div class="connection-grid">
               <label class="field">
@@ -2061,112 +2222,211 @@
           </div>
         {/if}
 
-        <div class="chat-stage">
-          <div class="conversation-shell">
-            <div class="section-row">
-              <span>Conversation</span>
-              <span class="muted small">{hasConversation ? `${conversation.length} messages` : 'No messages yet'}</span>
-            </div>
+          <div class="studio-grid">
+            <section class="conversation-shell panel conversation-panel">
+              <div class="panel-head">
+                <div>
+                  <div class="section-title">Conversation</div>
+                  <div class="muted small">{assistantStateLabel}</div>
+                </div>
+                <div class="panel-head-meta">
+                  <span class="pill neutral">{hasConversation ? `${conversation.length} messages` : 'No messages'}</span>
+                  {#if selectedSession}
+                    <span class="pill neutral">{selectedSession.title}</span>
+                  {/if}
+                </div>
+              </div>
 
-            <div class="conversation-list" bind:this={conversationScroller}>
-              {#if hasConversation}
-                {#each conversation as message (message.id)}
-                  <article class={`message-card ${message.role} ${message.state || 'done'}`}>
-                    <div class="message-head">
-                      <div class="message-head-main">
-                        <span class="message-role">{message.role === 'user' ? 'You' : 'Codex'}</span>
-                        {#if message.runId}
-                          <span class="message-badge">run {message.runId}</span>
-                        {/if}
-                        {#if message.state && message.role === 'assistant'}
-                          <span class={`message-badge ${message.state}`}>{message.state}</span>
-                        {/if}
+              <div class="conversation-list" bind:this={conversationScroller}>
+                {#if hasConversation}
+                  {#each conversation as message (message.id)}
+                    <article class={`message-card ${message.role} ${message.state || 'done'}`}>
+                      <div class="message-head">
+                        <div class="message-head-main">
+                          <span class="message-role">{message.role === 'user' ? 'You' : 'Codex'}</span>
+                          {#if message.runId}
+                            <span class="message-badge">run {message.runId}</span>
+                          {/if}
+                          {#if message.state && message.role === 'assistant'}
+                            <span class={`message-badge ${message.state}`}>{message.state}</span>
+                          {/if}
+                        </div>
+                        <span class="message-time">{message.timestamp.toLocaleTimeString()}</span>
                       </div>
-                      <span class="message-time">{message.timestamp.toLocaleTimeString()}</span>
-                    </div>
-                    {#if message.status}
-                      <div class="message-status">
-                        <span class="status-dot"></span>
-                        <span>{message.status}</span>
-                      </div>
-                    {/if}
-                    {#if message.role === 'assistant' && hasVisibleExecutionItems(message)}
-                      <div class={`execution-shell ${isExecutionMessageExpanded(message.id) ? 'expanded' : ''}`}>
-                        <button class="execution-toggle" on:click={() => toggleExecutionMessage(message.id)}>
-                          <div class="execution-toggle-main">
-                            <span class="section-title">Execution Log</span>
-                            <span class="muted small">{summarizeExecutionMessage(message)}</span>
-                          </div>
-                          <div class="execution-toggle-side">
-                            {#if message.runId}
-                              <span class="pill neutral">run {message.runId}</span>
-                            {/if}
-                            <span class="execution-count">{getVisibleExecutionItems(message).length}</span>
-                            <span class={`execution-chevron ${isExecutionMessageExpanded(message.id) ? 'open' : ''}`}></span>
-                          </div>
-                        </button>
+                      {#if message.status}
+                        <div class="message-status">
+                          <span class="status-dot"></span>
+                          <span>{message.status}</span>
+                        </div>
+                      {/if}
+                      {#if message.role === 'assistant' && hasVisibleExecutionItems(message)}
+                        <div class={`execution-shell ${isExecutionMessageExpanded(message.id) ? 'expanded' : ''}`}>
+                          <button class="execution-toggle" on:click={() => toggleExecutionMessage(message.id)}>
+                            <div class="execution-toggle-main">
+                              <span class="section-title">Execution Log</span>
+                              <span class="muted small">{summarizeExecutionMessage(message)}</span>
+                            </div>
+                            <div class="execution-toggle-side">
+                              {#if message.runId}
+                                <span class="pill neutral">run {message.runId}</span>
+                              {/if}
+                              <span class="execution-count">{getVisibleExecutionItems(message).length}</span>
+                              <span class={`execution-chevron ${isExecutionMessageExpanded(message.id) ? 'open' : ''}`}></span>
+                            </div>
+                          </button>
 
-                        {#if isExecutionMessageExpanded(message.id)}
-                          <div class="activity-panel">
-                            <div class="activity-head">
-                              <div class="activity-title-row">
-                                <span class="muted small">Select a step to inspect raw input and output.</span>
+                          {#if isExecutionMessageExpanded(message.id)}
+                            <div class="activity-panel">
+                              <div class="activity-head">
+                                <div class="activity-title-row">
+                                  <span class="muted small">Select a step to inspect raw input and output.</span>
+                                </div>
+                              </div>
+                              <div class="activity-list">
+                                {#each getVisibleExecutionItems(message) as item, index (item.id)}
+                                  <div class="activity-entry">
+                                    <button
+                                      class={`activity-item ${selectedExecutionMessageId === message.id && selectedExecutionItemId === item.id ? 'active' : ''}`}
+                                      on:click={() => toggleExecutionItem(message.id, item.id)}
+                                    >
+                                      <div class="activity-item-meta">
+                                        <span class="activity-item-index">{index + 1}</span>
+                                        <span class={`pill ${item.tone}`}>{item.badge}</span>
+                                      </div>
+                                      <div class="activity-item-content">
+                                        <div class="activity-item-title">{item.title}</div>
+                                        <div class="activity-item-subtitle">{item.subtitle}</div>
+                                      </div>
+                                    </button>
+                                    {#if selectedExecutionMessageId === message.id && selectedExecutionItemId === item.id}
+                                      <div class="activity-result">
+                                        {#if item.note && item.note !== item.subtitle}
+                                          <div class="details-note">{item.note}</div>
+                                        {/if}
+                                        <details class="activity-raw">
+                                          <summary>Execution result</summary>
+                                          <pre>{stringifyDetail(item.detail)}</pre>
+                                        </details>
+                                      </div>
+                                    {/if}
+                                  </div>
+                                {/each}
                               </div>
                             </div>
-                            <div class="activity-list">
-                              {#each getVisibleExecutionItems(message) as item, index (item.id)}
-                                <div class="activity-entry">
-                                  <button
-                                    class={`activity-item ${selectedExecutionMessageId === message.id && selectedExecutionItemId === item.id ? 'active' : ''}`}
-                                    on:click={() => toggleExecutionItem(message.id, item.id)}
-                                  >
-                                    <div class="activity-item-meta">
-                                      <span class="activity-item-index">{index + 1}</span>
-                                      <span class={`pill ${item.tone}`}>{item.badge}</span>
-                                    </div>
-                                    <div class="activity-item-content">
-                                      <div class="activity-item-title">{item.title}</div>
-                                      <div class="activity-item-subtitle">{item.subtitle}</div>
-                                    </div>
-                                  </button>
-                                  {#if selectedExecutionMessageId === message.id && selectedExecutionItemId === item.id}
-                                    <div class="activity-result">
-                                      {#if item.note && item.note !== item.subtitle}
-                                        <div class="details-note">{item.note}</div>
-                                      {/if}
-                                      <details class="activity-raw">
-                                        <summary>Execution result</summary>
-                                        <pre>{stringifyDetail(item.detail)}</pre>
-                                      </details>
-                                    </div>
-                                  {/if}
-                                </div>
-                              {/each}
-                            </div>
-                          </div>
-                        {/if}
-                      </div>
-                    {/if}
-                    {#if message.content || message.role === 'user' || message.state !== 'streaming'}
-                      <div class="message-body">{message.content || (message.role === 'assistant' ? '...' : '')}</div>
-                    {/if}
-                  </article>
-                {/each}
-              {:else}
-                <div class="empty-state">Send a prompt to start a threaded conversation.</div>
-              {/if}
-            </div>
+                          {/if}
+                        </div>
+                      {/if}
+                      {#if message.content || message.role === 'user' || message.state !== 'streaming'}
+                        <div class="message-body">{message.content || (message.role === 'assistant' ? '...' : '')}</div>
+                      {/if}
+                    </article>
+                  {/each}
+                {:else}
+                  <div class="empty-state conversation-empty">
+                    Start with a prompt about the current workspace, a failing build, or a file you want changed.
+                  </div>
+                {/if}
+              </div>
+            </section>
+
+            <aside class="insight-rail">
+              <section class="panel insight-panel">
+                <div class="panel-head">
+                  <div>
+                    <div class="section-title">Workspace Snapshot</div>
+                    <div class="muted small">{workspaceStateLabel}</div>
+                  </div>
+                </div>
+
+                <div class="insight-list">
+                  <div class="insight-row">
+                    <span>Path</span>
+                    <strong class="path-emphasis" title={settings.workspacePath || 'No workspace selected'}>
+                      {settings.workspacePath ? getPathTail(settings.workspacePath, 5) : 'No workspace selected'}
+                    </strong>
+                  </div>
+                  <div class="insight-row">
+                    <span>Active session</span>
+                    <strong>{selectedSession?.title || 'No active session'}</strong>
+                  </div>
+                  <div class="insight-row">
+                    <span>Last session update</span>
+                    <strong>{selectedSession ? selectedSessionTimestamp : 'Waiting for the first session'}</strong>
+                  </div>
+                  <div class="insight-row">
+                    <span>Focused file</span>
+                    <strong>{focusFileLabel}</strong>
+                  </div>
+                </div>
+
+                <div class="insight-subsection">
+                  <div class="section-title">Changed Files</div>
+                  {#if changedWorkspacePaths.length > 0}
+                    <div class="file-chip-list">
+                      {#each changedWorkspacePaths as changedPath}
+                        <span class="file-chip">{getPathTail(changedPath, 3)}</span>
+                      {/each}
+                    </div>
+                  {:else}
+                    <div class="empty-state compact-empty">No tracked file changes yet.</div>
+                  {/if}
+                </div>
+              </section>
+
+              <section class="panel insight-panel secondary-panel">
+                <div class="panel-head">
+                  <div>
+                    <div class="section-title">System Detail</div>
+                    <div class="muted small">Connection, build, and runtime shell.</div>
+                  </div>
+                </div>
+
+                <div class="insight-list">
+                  <div class="insight-row">
+                    <span>Endpoint</span>
+                    <strong>{connectionHostLabel || 'No server configured'}</strong>
+                  </div>
+                  <div class="insight-row">
+                    <span>Model</span>
+                    <strong>{settings.selectedModel || 'No model selected'}</strong>
+                  </div>
+                  <div class="insight-row">
+                    <span>Build</span>
+                    <strong>{appBuildLabel}</strong>
+                  </div>
+                  <div class="insight-row">
+                    <span>Data root</span>
+                    <strong title={appInfo?.dataRoot || 'Loading shell info'}>
+                      {appInfo ? getPathTail(appInfo.dataRoot, 4) : 'Loading shell info'}
+                    </strong>
+                  </div>
+                </div>
+
+                {#if healthMessage}
+                  <div class="error-box compact-error">{healthMessage}</div>
+                {/if}
+              </section>
+            </aside>
           </div>
 
-        </div>
+          <section class="composer-dock panel composer-panel">
+            <div class="panel-head composer-head">
+              <div>
+                <div class="section-title">Prompt Composer</div>
+                <div class="muted small">
+                  Workspace context is attached automatically. Ask for fixes, reviews, or implementation work.
+                </div>
+              </div>
+              <div class="panel-head-meta">
+                <span class="pill neutral">Context on</span>
+              </div>
+            </div>
 
-        <div class="composer-dock compact">
           <label class="field composer">
-            <span>Prompt</span>
             <textarea
               bind:value={chatInput}
               rows="3"
-              placeholder="Ask about the current workspace, build failures, run state, or next actions."
+              placeholder="Describe the change you want, the file you care about, or the problem to fix."
               on:keydown={handleComposerKeydown}
             ></textarea>
           </label>
@@ -2190,8 +2450,9 @@
               {/if}
             </button>
           </div>
-        </div>
-      </section>
+          </section>
+        </section>
+      </div>
     </main>
   </div>
 {/if}
@@ -3374,6 +3635,435 @@
     color: rgba(188, 201, 216, 0.62);
   }
 
+  .workbench {
+    grid-template-columns: minmax(304px, 368px) minmax(0, 1fr);
+  }
+
+  .left-pane,
+  .main-pane {
+    padding: 28px;
+  }
+
+  .left-pane {
+    overflow: auto;
+    border-right: 1px solid rgba(148, 163, 184, 0.1);
+    background:
+      linear-gradient(180deg, rgba(9, 16, 28, 0.96) 0%, rgba(6, 12, 22, 0.92) 100%);
+  }
+
+  .main-pane {
+    overflow: auto;
+    padding-left: 20px;
+  }
+
+  .main-surface,
+  .sidebar-stack {
+    display: grid;
+    gap: 18px;
+    min-width: 0;
+  }
+
+  .main-surface {
+    width: min(100%, 1520px);
+    margin: 0 auto;
+  }
+
+  .card {
+    gap: 16px;
+    padding: 20px;
+    border-radius: 28px;
+    border: 1px solid rgba(148, 163, 184, 0.14);
+    background:
+      linear-gradient(180deg, rgba(15, 23, 38, 0.94) 0%, rgba(10, 17, 30, 0.98) 100%);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.05),
+      0 28px 70px rgba(2, 6, 12, 0.34);
+  }
+
+  .hero.hero-shell {
+    width: 100%;
+    height: auto;
+    grid-template-rows: none;
+    gap: 18px;
+  }
+
+  .sidebar-brand-card,
+  .sidebar-footer-card,
+  .workspace-panel {
+    align-content: start;
+  }
+
+  .brand-row {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 14px;
+    align-items: start;
+  }
+
+  .brand-mark {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 52px;
+    height: 52px;
+    border-radius: 18px;
+    background:
+      linear-gradient(135deg, rgba(20, 184, 166, 0.95) 0%, rgba(56, 189, 248, 0.92) 100%);
+    color: #03141b;
+    font-size: 18px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    box-shadow: 0 20px 36px rgba(20, 184, 166, 0.2);
+  }
+
+  .brand-copy {
+    display: grid;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .brand-title {
+    font-size: 24px;
+    font-weight: 800;
+    letter-spacing: -0.04em;
+    color: #f8fbff;
+  }
+
+  .sidebar-summary-strip {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .workspace-switcher,
+  .session-list,
+  .sidebar-meta-list,
+  .insight-list {
+    display: grid;
+    gap: 10px;
+  }
+
+  .workspace-panel .section-row {
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+
+  .workspace-panel .empty-state {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+  }
+
+  .workspace-item,
+  .session-item {
+    gap: 10px;
+    padding: 14px 16px;
+    border-radius: 20px;
+    background:
+      linear-gradient(180deg, rgba(17, 24, 39, 0.9) 0%, rgba(11, 18, 31, 0.92) 100%);
+    transition:
+      border-color 160ms ease,
+      background-color 160ms ease,
+      box-shadow 160ms ease;
+  }
+
+  .workspace-item-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    min-width: 0;
+  }
+
+  .workspace-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 74px;
+    padding: 6px 10px;
+    border-radius: 999px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: rgba(214, 225, 238, 0.72);
+    border: 1px solid rgba(148, 163, 184, 0.12);
+    background: rgba(148, 163, 184, 0.08);
+  }
+
+  .workspace-badge.active {
+    color: #d8fffb;
+    border-color: rgba(20, 184, 166, 0.2);
+    background: rgba(20, 184, 166, 0.14);
+  }
+
+  .workspace-item-title {
+    max-width: none;
+    flex: 1 1 auto;
+  }
+
+  .workspace-item-path {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    line-height: 1.55;
+  }
+
+  .workspace-session-rail {
+    gap: 10px;
+    margin-left: 10px;
+    padding-left: 16px;
+  }
+
+  .session-item-main {
+    display: grid;
+    gap: 4px;
+    min-width: 0;
+  }
+
+  .session-item-time {
+    font-size: 11px;
+    color: rgba(188, 201, 216, 0.6);
+  }
+
+  .sidebar-meta-item,
+  .insight-row {
+    display: grid;
+    gap: 6px;
+    padding: 14px 16px;
+    border-radius: 18px;
+    border: 1px solid rgba(148, 163, 184, 0.12);
+    background: rgba(8, 14, 24, 0.76);
+  }
+
+  .sidebar-meta-item span,
+  .insight-row span,
+  .metric-card span {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: rgba(188, 201, 216, 0.64);
+  }
+
+  .sidebar-meta-item strong,
+  .insight-row strong {
+    font-size: 14px;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+    color: #f5f9ff;
+  }
+
+  .hero-banner {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 20px;
+    flex-wrap: wrap;
+  }
+
+  .hero-copy {
+    display: grid;
+    gap: 12px;
+    max-width: 860px;
+  }
+
+  .hero-title-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+
+  .hero-title-row h1 {
+    margin: 0;
+    font-size: clamp(28px, 3vw, 42px);
+    line-height: 1.04;
+    letter-spacing: -0.05em;
+    color: #f8fbff;
+  }
+
+  .hero-description {
+    margin: 0;
+    max-width: 820px;
+    font-size: 15px;
+    line-height: 1.7;
+    color: rgba(214, 225, 238, 0.74);
+  }
+
+  .hero-actions {
+    justify-content: flex-end;
+  }
+
+  .hero-metrics {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 14px;
+  }
+
+  .metric-card {
+    display: grid;
+    gap: 8px;
+    min-height: 128px;
+    padding: 18px;
+    border-radius: 22px;
+    border: 1px solid rgba(148, 163, 184, 0.12);
+    background:
+      linear-gradient(180deg, rgba(12, 19, 32, 0.94) 0%, rgba(8, 14, 24, 0.92) 100%);
+  }
+
+  .metric-card.accent {
+    border-color: rgba(20, 184, 166, 0.18);
+    background:
+      linear-gradient(135deg, rgba(20, 184, 166, 0.18) 0%, rgba(14, 165, 233, 0.14) 100%),
+      linear-gradient(180deg, rgba(12, 19, 32, 0.96) 0%, rgba(8, 14, 24, 0.94) 100%);
+  }
+
+  .metric-card strong {
+    font-size: 22px;
+    line-height: 1.15;
+    letter-spacing: -0.03em;
+    color: #f8fbff;
+  }
+
+  .metric-card small {
+    font-size: 12px;
+    line-height: 1.55;
+    color: rgba(188, 201, 216, 0.66);
+  }
+
+  .panel {
+    display: grid;
+    gap: 14px;
+    min-height: 0;
+    padding: 18px 20px;
+    border-radius: 24px;
+    border: 1px solid rgba(148, 163, 184, 0.12);
+    background: rgba(9, 15, 26, 0.72);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  }
+
+  .panel-head,
+  .panel-head-meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    flex-wrap: wrap;
+    min-width: 0;
+  }
+
+  .studio-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.65fr) minmax(320px, 0.95fr);
+    gap: 18px;
+    min-height: clamp(420px, 54vh, 680px);
+  }
+
+  .conversation-panel {
+    grid-template-rows: auto minmax(0, 1fr);
+    height: 100%;
+  }
+
+  .conversation-shell,
+  .composer-dock {
+    padding: 18px 20px;
+    border-radius: 24px;
+    border: 1px solid rgba(148, 163, 184, 0.12);
+    background: rgba(9, 15, 26, 0.72);
+  }
+
+  .conversation-list {
+    padding-right: 6px;
+  }
+
+  .conversation-empty {
+    display: grid;
+    align-content: center;
+    min-height: 160px;
+    line-height: 1.7;
+  }
+
+  .insight-rail {
+    display: grid;
+    gap: 16px;
+    min-height: 0;
+  }
+
+  .insight-panel,
+  .composer-panel {
+    align-content: start;
+  }
+
+  .insight-subsection {
+    display: grid;
+    gap: 10px;
+  }
+
+  .file-chip-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .file-chip {
+    display: inline-flex;
+    align-items: center;
+    max-width: 100%;
+    padding: 8px 12px;
+    border-radius: 999px;
+    border: 1px solid rgba(148, 163, 184, 0.12);
+    background: rgba(15, 23, 42, 0.9);
+    font-size: 12px;
+    color: rgba(233, 242, 253, 0.82);
+    overflow-wrap: anywhere;
+  }
+
+  .path-emphasis {
+    overflow-wrap: anywhere;
+  }
+
+  .compact-empty,
+  .compact-error {
+    padding: 12px 14px;
+    border-radius: 16px;
+  }
+
+  .message-card {
+    gap: 12px;
+    padding: 18px 20px;
+    max-width: min(900px, 94%);
+    border-radius: 22px;
+    box-shadow: 0 16px 28px rgba(3, 7, 18, 0.22);
+  }
+
+  .message-card.assistant {
+    background:
+      linear-gradient(180deg, rgba(12, 18, 31, 0.9) 0%, rgba(8, 13, 23, 0.92) 100%);
+  }
+
+  .message-card.user {
+    background:
+      linear-gradient(135deg, rgba(20, 184, 166, 0.16) 0%, rgba(14, 165, 233, 0.12) 100%),
+      linear-gradient(180deg, rgba(10, 17, 28, 0.94) 0%, rgba(7, 12, 22, 0.96) 100%);
+  }
+
+  .composer-dock .composer textarea {
+    min-height: 96px;
+    max-height: 180px;
+    border-radius: 20px;
+    background: rgba(7, 13, 22, 0.76);
+  }
+
+  .composer-actions {
+    gap: 16px;
+  }
+
+  .composer-send {
+    width: 48px;
+    min-width: 48px;
+    height: 48px;
+    min-height: 48px;
+  }
+
   @media (max-width: 1360px) {
     .workbench {
       grid-template-columns: minmax(0, 1fr);
@@ -3484,6 +4174,84 @@
     .composer-actions,
     .execution-toggle-side {
       justify-content: space-between;
+    }
+  }
+
+  @media (max-width: 1520px) {
+    .hero-metrics {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
+  @media (max-width: 1360px) {
+    .main-surface {
+      width: 100%;
+    }
+
+    .studio-grid {
+      grid-template-columns: 1fr;
+      min-height: 0;
+    }
+
+    .insight-rail {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .hero-actions,
+    .panel-head-meta {
+      justify-content: flex-start;
+    }
+  }
+
+  @media (max-width: 1080px) {
+    .left-pane,
+    .main-pane {
+      padding: 20px;
+    }
+
+    .hero-metrics,
+    .insight-rail {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  @media (max-width: 720px) {
+    .brand-row {
+      grid-template-columns: 1fr;
+    }
+
+    .brand-mark {
+      width: 46px;
+      height: 46px;
+      border-radius: 16px;
+      font-size: 16px;
+    }
+
+    .card,
+    .panel,
+    .conversation-shell,
+    .composer-dock {
+      padding: 16px;
+      border-radius: 22px;
+    }
+
+    .hero-title-row h1 {
+      font-size: 28px;
+    }
+
+    .workspace-item-top {
+      flex-direction: column;
+      align-items: flex-start;
+    }
+
+    .sidebar-summary-strip,
+    .hero-metrics {
+      grid-template-columns: 1fr;
+    }
+
+    .composer-actions {
+      flex-direction: column;
+      align-items: stretch;
     }
   }
 </style>
