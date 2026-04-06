@@ -5,7 +5,7 @@ const MAX_FILE_BYTES = 64 * 1024;
 const MAX_CONTENT_CHARS = 12_000;
 const MAX_DISCOVERED_FILES = 500;
 const MAX_PROMPT_LIST_ITEMS = 40;
-const MEMORY_FILENAMES = ['CLAUDE.md', 'MEMORY.md'];
+const MEMORY_FILENAMES = ['AGENTS.md', 'CLAUDE.md', 'MEMORY.md'];
 
 function isPathInside(rootPath, candidatePath) {
   const relative = path.relative(rootPath, candidatePath);
@@ -230,7 +230,9 @@ async function collectAncestorMemoryFiles(rootPath, inputPath, paths) {
 async function collectWorkspaceMemoryFiles(rootPath, selectedFilePath, explicitPaths) {
   const paths = [];
   const rootFiles = [
+    path.join(rootPath, '.codex', 'AGENTS.md'),
     path.join(rootPath, '.claude', 'CLAUDE.md'),
+    path.join(rootPath, 'AGENTS.md'),
     path.join(rootPath, 'CLAUDE.md'),
     path.join(rootPath, 'MEMORY.md'),
   ];

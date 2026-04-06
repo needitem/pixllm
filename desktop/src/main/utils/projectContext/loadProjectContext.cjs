@@ -16,6 +16,71 @@ const {
   toWorkspaceRelativePath,
 } = require('./shared.cjs');
 
+const SETTINGS_PATHS = [
+  path.join('.claude', 'settings.json'),
+  path.join('.claude', 'settings.local.json'),
+  path.join('.codex', 'settings.json'),
+  path.join('.codex', 'settings.local.json'),
+];
+const SKILL_DIRS = [
+  path.join('.claude', 'skills'),
+  path.join('.codex', 'skills'),
+];
+const COMMAND_DIRS = [
+  path.join('.claude', 'commands'),
+  path.join('.codex', 'commands'),
+];
+const AGENT_DIRS = [
+  path.join('.claude', 'agents'),
+  path.join('.codex', 'agents'),
+  path.join('.codex', 'prompts'),
+];
+const ROOT_MEMORY_FILE_NAMES = new Set(['AGENTS.MD', 'CLAUDE.MD', 'MEMORY.MD']);
+
+function pathWithinBase(candidatePath, basePath) {
+  const normalizedCandidate = path.resolve(candidatePath).toLowerCase();
+  const normalizedBase = path.resolve(basePath).toLowerCase();
+  return normalizedCandidate === normalizedBase || normalizedCandidate.startsWith(`${normalizedBase}${path.sep}`);
+}
+
+function resolveCollectionBase(rootPath, relativeDirs, filePath) {
+  for (const relativeDir of Array.isArray(relativeDirs) ? relativeDirs : []) {
+    const basePath = path.join(rootPath, relativeDir);
+    if (pathWithinBase(filePath, basePath)) {
+      return basePath;
+    }
+  }
+  return path.dirname(filePath);
+}
+
+function isRootContextFile(rootPath, filePath) {
+  const normalizedRoot = path.resolve(rootPath);
+  const normalizedFile = path.resolve(filePath);
+  const parentDir = path.dirname(normalizedFile);
+  if (parentDir.toLowerCase() === normalizedRoot.toLowerCase()) {
+    return ROOT_MEMORY_FILE_NAMES.has(path.basename(normalizedFile).toUpperCase());
+  }
+  return [
+    path.join(normalizedRoot, '.claude'),
+    path.join(normalizedRoot, '.codex'),
+  ].some((basePath) => pathWithinBase(normalizedFile, basePath));
+}
+
+async function collectMarkdownFilesFromRoots(rootPath, relativeDirs, options = {}) {
+  const results = [];
+  const seen = new Set();
+  for (const relativeDir of Array.isArray(relativeDirs) ? relativeDirs : []) {
+    const items = await collectMarkdownFiles(rootPath, relativeDir, options);
+    for (const filePath of items) {
+      const key = String(filePath || '').toLowerCase();
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      results.push(filePath);
+    }
+  }
+  return results;
+}
+
 async function discoverProjectContextItems(rootPath) {
   const items = [];
   const seen = new Set();
@@ -29,14 +94,11 @@ async function discoverProjectContextItems(rootPath) {
 
   const memoryFiles = await collectWorkspaceMemoryFiles(rootPath, null, []);
   for (const filePath of memoryFiles) {
-    const item = await readMemoryEntry(rootPath, filePath, filePath.startsWith(path.join(rootPath, '.claude')) ? 'root' : 'ancestor');
+    const item = await readMemoryEntry(rootPath, filePath, isRootContextFile(rootPath, filePath) ? 'root' : 'ancestor');
     pushItem(item);
   }
 
-  const settingsFiles = [
-    path.join(rootPath, '.claude', 'settings.json'),
-    path.join(rootPath, '.claude', 'settings.local.json'),
-  ];
+  const settingsFiles = SETTINGS_PATHS.map((relativePath) => path.join(rootPath, relativePath));
   for (const filePath of settingsFiles) {
     const item = await readSettingsFile(rootPath, filePath);
     if (!item) continue;
@@ -52,11 +114,12 @@ async function discoverProjectContextItems(rootPath) {
     });
   }
 
-  const skillFiles = await collectMarkdownFiles(rootPath, path.join('.claude', 'skills'), {
+  const skillFiles = await collectMarkdownFilesFromRoots(rootPath, SKILL_DIRS, {
     allowedNames: ['SKILL.md'],
   });
   for (const filePath of skillFiles) {
-    const relDir = path.relative(path.join(rootPath, '.claude', 'skills'), path.dirname(filePath));
+    const baseDir = resolveCollectionBase(rootPath, SKILL_DIRS, filePath);
+    const relDir = path.relative(baseDir, path.dirname(filePath));
     const content = await readTextFileLimited(filePath);
     const parsed = parseMarkdownFrontmatter(content);
     pushItem({
@@ -71,9 +134,10 @@ async function discoverProjectContextItems(rootPath) {
     });
   }
 
-  const commandFiles = await collectMarkdownFiles(rootPath, path.join('.claude', 'commands'));
+  const commandFiles = await collectMarkdownFilesFromRoots(rootPath, COMMAND_DIRS);
   for (const filePath of commandFiles) {
-    const rel = path.relative(path.join(rootPath, '.claude', 'commands'), filePath);
+    const baseDir = resolveCollectionBase(rootPath, COMMAND_DIRS, filePath);
+    const rel = path.relative(baseDir, filePath);
     const content = await readTextFileLimited(filePath);
     const parsed = parseMarkdownFrontmatter(content);
     pushItem({
@@ -88,9 +152,10 @@ async function discoverProjectContextItems(rootPath) {
     });
   }
 
-  const agentFiles = await collectMarkdownFiles(rootPath, path.join('.claude', 'agents'));
+  const agentFiles = await collectMarkdownFilesFromRoots(rootPath, AGENT_DIRS);
   for (const filePath of agentFiles) {
-    const rel = path.relative(path.join(rootPath, '.claude', 'agents'), filePath);
+    const baseDir = resolveCollectionBase(rootPath, AGENT_DIRS, filePath);
+    const rel = path.relative(baseDir, filePath);
     const content = await readTextFileLimited(filePath);
     const parsed = parseMarkdownFrontmatter(content);
     pushItem({
@@ -131,7 +196,7 @@ async function loadProjectContext(options = {}) {
     const content = await readTextFileLimited(resolved);
     memoryFiles.push({
       category: 'memory',
-      scope: resolved.startsWith(path.join(workspacePath, '.claude')) ? 'root' : 'ancestor',
+      scope: isRootContextFile(workspacePath, resolved) ? 'root' : 'ancestor',
       name: path.basename(resolved),
       path: toWorkspaceRelativePath(workspacePath, resolved),
       sourcePath: resolved,
@@ -141,10 +206,7 @@ async function loadProjectContext(options = {}) {
   }
 
   const settingsFiles = [];
-  const settingsPaths = [
-    path.join(workspacePath, '.claude', 'settings.json'),
-    path.join(workspacePath, '.claude', 'settings.local.json'),
-  ];
+  const settingsPaths = SETTINGS_PATHS.map((relativePath) => path.join(workspacePath, relativePath));
   for (const filePath of settingsPaths) {
     const item = await readSettingsFile(workspacePath, filePath);
     if (item) {
@@ -159,12 +221,13 @@ async function loadProjectContext(options = {}) {
     }
   }
 
-  const skillFiles = await collectMarkdownFiles(workspacePath, path.join('.claude', 'skills'), {
+  const skillFiles = await collectMarkdownFilesFromRoots(workspacePath, SKILL_DIRS, {
     allowedNames: ['SKILL.md'],
   });
   const skills = [];
   for (const filePath of skillFiles) {
-    const relDir = path.relative(path.join(workspacePath, '.claude', 'skills'), path.dirname(filePath));
+    const baseDir = resolveCollectionBase(workspacePath, SKILL_DIRS, filePath);
+    const relDir = path.relative(baseDir, path.dirname(filePath));
     const content = await readTextFileLimited(filePath);
     const parsed = parseMarkdownFrontmatter(content);
     skills.push({
@@ -178,10 +241,11 @@ async function loadProjectContext(options = {}) {
     });
   }
 
-  const commandFiles = await collectMarkdownFiles(workspacePath, path.join('.claude', 'commands'));
+  const commandFiles = await collectMarkdownFilesFromRoots(workspacePath, COMMAND_DIRS);
   const commands = [];
   for (const filePath of commandFiles) {
-    const rel = path.relative(path.join(workspacePath, '.claude', 'commands'), filePath);
+    const baseDir = resolveCollectionBase(workspacePath, COMMAND_DIRS, filePath);
+    const rel = path.relative(baseDir, filePath);
     const content = await readTextFileLimited(filePath);
     const parsed = parseMarkdownFrontmatter(content);
     commands.push({
@@ -196,10 +260,11 @@ async function loadProjectContext(options = {}) {
     });
   }
 
-  const agentFiles = await collectMarkdownFiles(workspacePath, path.join('.claude', 'agents'));
+  const agentFiles = await collectMarkdownFilesFromRoots(workspacePath, AGENT_DIRS);
   const agents = [];
   for (const filePath of agentFiles) {
-    const rel = path.relative(path.join(workspacePath, '.claude', 'agents'), filePath);
+    const baseDir = resolveCollectionBase(workspacePath, AGENT_DIRS, filePath);
+    const rel = path.relative(baseDir, filePath);
     const content = await readTextFileLimited(filePath);
     const parsed = parseMarkdownFrontmatter(content);
     agents.push({

@@ -96,12 +96,55 @@ function summarizeTraceEvidence({ trace = [], describeTool = () => null } = {}) 
     successfulToolNames: uniqueStrings(successfulToolNames),
     candidatePaths: extractCandidatePaths(successfulSteps),
     evidenceKinds: Array.from(evidenceKinds),
+    successfulStepCount: successfulSteps.length,
+    failedStepCount: Math.max(0, (Array.isArray(trace) ? trace : []).length - successfulSteps.length),
     hasDiscoveryEvidence: evidenceKinds.has('discovery'),
     hasInspectionEvidence: evidenceKinds.has('inspection'),
     hasReferenceEvidence: evidenceKinds.has('reference'),
     hasMutationEvidence: evidenceKinds.has('mutation'),
     hasExecutionEvidence: evidenceKinds.has('execution'),
   };
+}
+
+function answerAcknowledgesMissingVerification(answer = '') {
+  const source = toStringValue(answer).toLowerCase();
+  if (!source) return false;
+  return [
+    /\bunverified\b/,
+    /\bnot verified\b/,
+    /\bcould not verify\b/,
+    /\bcould not be verified\b/,
+    /\bunable to verify\b/,
+    /\bcannot be verified\b/,
+    /\bmissing reference\b/,
+    /\bnot found in the workspace\b/,
+    /\bnot found in the reference\b/,
+    /\bunknown\b/,
+    /\bunclear\b/,
+    /\bblocker\b/,
+    /\bneed the sdk docs\b/,
+    /\bneed the library docs\b/,
+    /\uD655\uC778\uD558\uC9C0\s*\uBABB/,
+    /\uAC80\uC99D\uD558\uC9C0\s*\uBABB/,
+    /\uCC3E\uC9C0\s*\uBABB/,
+    /\uC5C6\uC5B4\uC11C/,
+    /\uBD88\uBA85\uD655/,
+    /\uCD94\uC815/,
+  ].some((pattern) => pattern.test(source));
+}
+
+function requestNeedsReferenceEvidence(requestContext = {}) {
+  return Boolean(
+    requestContext?.prefersReferenceTools
+    || ['reference', 'hybrid'].includes(toStringValue(requestContext?.evidencePreference).toLowerCase()),
+  );
+}
+
+function requestNeedsGroundedChangeEvidence(requestContext = {}) {
+  const intent = requestContext?.intent && typeof requestContext.intent === 'object'
+    ? requestContext.intent
+    : {};
+  return Boolean(intent.wantsChanges || intent.wantsAnalysis);
 }
 
 function evaluateFinalAnswerPolicy({
@@ -112,12 +155,49 @@ function evaluateFinalAnswerPolicy({
   turn = 0,
 } = {}) {
   const summary = summarizeTraceEvidence({ trace, describeTool });
+  const acknowledgesMissingVerification = answerAcknowledgesMissingVerification(finalAnswer);
+  const hasGroundedChangeEvidence =
+    summary.hasDiscoveryEvidence
+    || summary.hasInspectionEvidence
+    || summary.hasReferenceEvidence
+    || summary.hasMutationEvidence;
+  const usedTools = Array.isArray(trace) && trace.length > 0;
+
+  if (requestNeedsReferenceEvidence(requestContext) && !summary.hasReferenceEvidence && !acknowledgesMissingVerification) {
+    return {
+      ok: false,
+      reason: 'reference_evidence_required',
+      blockingMessage: 'Do not finalize reference-dependent claims without successful reference evidence. Re-run the reference lookup or state that the detail could not be verified.',
+      details: {
+        turn,
+        finalAnswerPreview: toStringValue(finalAnswer).slice(0, 240),
+        acknowledgesMissingVerification,
+        ...summary,
+      },
+    };
+  }
+
+  if (requestNeedsGroundedChangeEvidence(requestContext) && usedTools && !hasGroundedChangeEvidence && !acknowledgesMissingVerification) {
+    return {
+      ok: false,
+      reason: 'grounded_evidence_required',
+      blockingMessage: 'Do not finalize a technical implementation answer from failed or execution-only tool attempts. Inspect source, write the file directly, or state that the requested API/library could not be verified.',
+      details: {
+        turn,
+        finalAnswerPreview: toStringValue(finalAnswer).slice(0, 240),
+        acknowledgesMissingVerification,
+        ...summary,
+      },
+    };
+  }
+
   return {
     ok: true,
     reason: '',
     details: {
       turn,
       finalAnswerPreview: toStringValue(finalAnswer).slice(0, 240),
+      acknowledgesMissingVerification,
       ...summary,
     },
   };
