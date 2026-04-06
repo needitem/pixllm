@@ -1,6 +1,6 @@
 # Claude Code vs PIXLLM
 
-Date: 2026-04-01
+Date: 2026-04-06
 
 ## Scope
 
@@ -23,25 +23,27 @@ Primary PIXLLM files inspected:
 
 - `desktop/src/main/QueryEngine.cjs`
 - `desktop/src/main/query.cjs`
-- `desktop/src/main/Tool.cjs`
-- `desktop/src/main/tools.cjs`
+- `desktop/src/main/services/model/QwenAdapter.cjs`
+- `desktop/src/main/services/model/QwenQueryRewrite.cjs`
 - `desktop/src/main/services/tools/ToolRuntime.cjs`
 - `desktop/src/main/services/tools/StreamingToolExecutor.cjs`
 - `desktop/src/main/utils/processUserInput/processUserInput.cjs`
+- `desktop/src/main/query/nextSpeakerCheck.cjs`
 - `desktop/src/main/hooks/useCanUseTool.cjs`
 - `desktop/src/main/services/tools/BackendToolClient.cjs`
 - `backend/app/services/tools/doc_runtime.py`
 
 ## High-Level Conclusion
 
-PIXLLM is much closer to Claude Code than it was before the refactor, but it is still not the same runtime model.
+PIXLLM is no longer trying to be a Claude-native transport clone. The current runtime deliberately keeps the Claude-style desktop loop shape, but it is now Qwen-first at the model I/O layer.
 
 Current PIXLLM strengths:
 
 - desktop-centered single agent loop
 - explicit pre-loop request context
+- Qwen textual tool-call adapter and tolerant parser
+- Korean/mixed prompt rewrite hints without hardcoded term maps
 - deny-by-default central tool policy
-- per-tool modules for core file and shell tools
 - streaming-time tool prefetch with drain/recovery
 - backend evidence integration through a bounded read-only tool
 
@@ -68,6 +70,8 @@ Current PIXLLM desktop runtime is best described as:
 
 - `QueryEngine.cjs` for the main loop
 - `processUserInput.cjs` for pre-loop request shaping
+- `QwenQueryRewrite.cjs` for bilingual search-hint rewriting
+- `QwenAdapter.cjs` for textual tool-call parsing and transcript flattening
 - `ToolRuntime.cjs` for tool authorization and batch execution
 - `StreamingToolExecutor.cjs` for streaming prefetch and recovery
 - `tools/*` for actual tool implementations
@@ -77,23 +81,37 @@ This is no longer the older `LocalAgentEngine + LocalAgentRuntime + core/local_*
 
 ## Important Remaining Differences
 
-### 1. Streaming tool loop depth
+### 1. Transport model
+
+Claude Code assumes Anthropic `tool_use` / `tool_result` block semantics.
+
+PIXLLM currently assumes:
+
+- OpenAI-compatible transport
+- Qwen textual `<tool_call>` / `<tool_response>` protocol
+- tolerant recovery for malformed JSON-like payloads
+
+This is an intentional divergence driven by the current model family, not an accidental mismatch.
+
+### 2. Streaming tool loop depth
 
 PIXLLM can start tool executions during streaming, but still consumes results on the next batch/turn boundary.
 
 Claude Code is closer to a real streaming executor that can feed completed `tool_result` blocks back into the same loop immediately.
 
-### 2. Pre-loop depth
+### 3. Pre-loop depth
 
-PIXLLM computes intent, directives, explicit path, evidence mode, and initial tool scope.
+PIXLLM computes intent, directives, explicit path, evidence mode, language profile, rewrite hints, and initial tool scope.
 
 Claude Code still handles more in pre-processing: attachments, images, slash commands, hooks, mentions, model/effort changes, and richer tool allowlists.
 
-### 3. Per-tool completeness
+### 4. Continuation strategy
 
-PIXLLM now has stronger fail-closed defaults and several real tool modules, but Claude Code still has deeper contracts on a per-tool basis.
+Claude Code relies more heavily on the model and integrated loop semantics to continue once `tool_use` appears.
 
-### 4. Backend role
+PIXLLM adds a Qwen-oriented `nextSpeakerCheck` layer so prose-only intermediate answers can continue without introducing a heavy finalization contract.
+
+### 5. Backend role
 
 PIXLLM intentionally keeps backend as an evidence and control plane, not as a second agent loop.
 
@@ -108,6 +126,7 @@ This is a product choice, not just a missing feature.
 
 ## What PIXLLM Should Not Copy Blindly
 
+- Claude-native block transport should not be copied if the active model family is Qwen.
 - MCP/open-world integration is intentionally out of scope for the current product path.
 - Remote bridge and team worker abstractions should not be documented as current features.
 - Backend should remain a bounded evidence plane unless the product explicitly decides to build a second execution loop.
@@ -119,5 +138,6 @@ Current PIXLLM is best described as:
 - a desktop-first grounded coding assistant
 - with one local agent loop
 - plus backend evidence and control services
+- and a Qwen-specific adapter layer on the model boundary
 
-It is now structurally closer to Claude Code, but still intentionally narrower in scope.
+It is structurally closer to Claude Code than before, but it now intentionally diverges at the transport and parser layer to fit Qwen.

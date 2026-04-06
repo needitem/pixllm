@@ -1,68 +1,43 @@
 # Qwen Tool-Calling Evaluation
 
-Date: 2026-04-02
+Date: 2026-04-06
 
-## Goal
+## Status
 
-Keep the overall Claude Code loop shape, but evaluate whether the current model behaves similarly enough under that loop.
+이 문서는 현재 설계 문서가 아니라, 2026-04-02 시점의 stopgap 실험을 기록한 참고 문서다.
 
-The concrete failure to explain was:
+현재 runtime은 이 문서의 권고를 그대로 따르지 않는다. 이후 구현은 아래 방향으로 바뀌었다.
+
+- `tool_choice=required` 중심 stopgap에서 벗어남
+- `QwenAdapter` 기반 textual tool protocol 수용
+- malformed tool-call recovery 강화
+- `QwenQueryRewrite` 기반 한국어/mixed prompt search hint 추가
+- `nextSpeakerCheck` 기반 continuation 추가
+- 공식 `Qwen/Qwen3.5-27B` 기본 설정으로 전환
+
+즉 이 문서는 `왜 Qwen 전용 adapter가 필요했는지`를 설명하는 과거 실험 보고서로 읽어야 맞다.
+
+## 당시 문제
+
+실험 당시 concrete failure는 아래였다.
 
 - user asks for code analysis
-- the model answers with prose such as "I'll search..."
-- no native tool call is emitted
-- the turn is treated as a valid final answer
+- model answers with prose such as `"I'll search..."`
+- native tool call은 비거나 약함
+- turn이 유효 final answer처럼 닫힐 수 있음
 
-Claude Code can also end on plain assistant text when no `tool_use` arrives, but Anthropic models tend to emit native tool calls more reliably. This report checks whether the remaining gap is primarily model behavior.
+Claude Code도 `tool_use`가 없으면 plain assistant text를 성공으로 볼 수 있지만, Anthropic 모델은 native tool use를 더 잘 냈다. 이 문서는 그 차이가 model behavior인지 확인하려고 작성됐다.
 
-## Relevant Implementation Points
+## 당시 관찰 결과
 
-Current PIXLLM desktop loop:
+당시 실험 결론은 단순했다.
 
-- [QueryEngine.cjs](/D:/Pixoneer_Source/PIX_RAG_Source/desktop/src/main/QueryEngine.cjs)
-- [query.cjs](/D:/Pixoneer_Source/PIX_RAG_Source/desktop/src/main/query.cjs)
-- [streamModelCompletion.cjs](/D:/Pixoneer_Source/PIX_RAG_Source/desktop/src/main/services/model/streamModelCompletion.cjs)
-- [processUserInput.cjs](/D:/Pixoneer_Source/PIX_RAG_Source/desktop/src/main/utils/processUserInput/processUserInput.cjs)
-- [ToolRuntime.cjs](/D:/Pixoneer_Source/PIX_RAG_Source/desktop/src/main/services/tools/ToolRuntime.cjs)
+1. `tool_choice=auto`에서 pseudo tool markup이 자주 나왔다.
+2. `tool_choice=required`는 tool emission을 늘렸지만 너무 거칠었다.
+3. 한국어 prompt도 같은 문제를 보였다.
+4. 따라서 `required`는 유용한 진단 도구였지만, 최종 구조로는 적절하지 않았다.
 
-Claude Code reference points:
-
-- [query.ts](/D:/Pixoneer_Source/PIX_RAG_Source/claude-code-sourcemap/restored-src/src/query.ts)
-- [QueryEngine.ts](/D:/Pixoneer_Source/PIX_RAG_Source/claude-code-sourcemap/restored-src/src/QueryEngine.ts)
-- [queryHelpers.ts](/D:/Pixoneer_Source/PIX_RAG_Source/claude-code-sourcemap/restored-src/src/utils/queryHelpers.ts)
-- [prompts.ts](/D:/Pixoneer_Source/PIX_RAG_Source/claude-code-sourcemap/restored-src/src/constants/prompts.ts)
-
-## Method
-
-The evaluation used the actual desktop runtime pieces that shape model behavior:
-
-- real `QueryEngine`
-- real `processUserInput`
-- real `buildSystemPrompt`
-- real active tool narrowing for turn 1
-- real JSON tool schemas exported to the model
-
-The model endpoint tested was the direct OpenAI-compatible server behind the stack:
-
-- backend health said current model label was `Jackrong/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled`
-- direct callable model name on the LLM server was `qwen3.5-27b`
-- direct LLM URL was `http://192.168.2.212:8001`
-
-This was a tool-emission experiment, not a full end-to-end desktop transcript replay. It tested whether the model emits native `tool_calls` under the current PIXLLM prompt/tool contract.
-
-Raw outputs were saved to:
-
-- [.tmp-model-tool-eval-20260402.json](/D:/Pixoneer_Source/PIX_RAG_Source/.tmp-model-tool-eval-20260402.json)
-- [.tmp-model-tool-eval-20260402-b.json](/D:/Pixoneer_Source/PIX_RAG_Source/.tmp-model-tool-eval-20260402-b.json)
-- [.tmp-model-tool-eval-20260402-c.json](/D:/Pixoneer_Source/PIX_RAG_Source/.tmp-model-tool-eval-20260402-c.json)
-
-## Result Summary
-
-### 1. `tool_choice=auto` is the main failure point
-
-For workspace analysis/search prompts, the current model frequently does not emit native tool calls under `auto`.
-
-Instead it emits plain text plus pseudo markup such as:
+예시 패턴:
 
 ```text
 I'll search for image registration related code in the codebase.
@@ -72,234 +47,49 @@ I'll search for image registration related code in the codebase.
 </tool_call>
 ```
 
-That means:
+이 패턴은 native `tool_calls`가 아니라 textual pseudo markup이기 때문에, adapter 없는 loop에서는 쉽게 놓친다.
 
-- OpenAI-compatible `tool_calls` array is empty
-- finish reason is usually `stop`
-- PIXLLM sees a normal assistant text reply
-- Claude-like success semantics allow that reply to end the turn
+## 왜 현재 구조가 바뀌었는가
 
-This reproduces the exact symptom the user saw.
+이 실험의 가장 중요한 교훈은 `tool_choice forcing`보다 `Qwen 출력 적응층`이 더 본질적이라는 점이었다.
 
-### 2. `tool_choice=required` fixes native tool emission reliably
+현재 runtime은 이 실험을 바탕으로 다음처럼 바뀌었다.
 
-Across the tested evidence-seeking prompts, `required` consistently changed the model behavior from pseudo markup to real native `tool_calls`.
+- model boundary에 `QwenAdapter.cjs` 추가
+- Qwen textual `<tool_call>` / `<tool_response>`를 1급 프로토콜로 승격
+- malformed JSON-like payload 복구
+- `reasoning_content` / `reasoning` 기반 recovery
+- `QwenQueryRewrite.cjs`로 한국어 prompt를 search/symbol hint로 재작성
+- prose-only intermediate answer에 `nextSpeakerCheck.cjs` 적용
 
-Observed patterns:
+## 현재 읽는 방법
 
-- workspace search prompt:
-  - `auto`: 0 native tool calls, pseudo `<tool_call>` text
-  - `required`: 3-4 native calls like `grep(...)`, `glob(...)`
-- specific file read prompt:
-  - `auto`: pseudo `read_file`
-  - `required`: native `read_file`
-- `/reference` prompt:
-  - `auto`: pseudo `company_reference_search`
-  - `required`: native `company_reference_search`
-- Korean analysis prompt:
-  - `auto`: pseudo `grep`
-  - `required`: native `grep`
+이 문서를 읽을 때는 아래처럼 해석해야 한다.
 
-### 3. `required` is too blunt as a global default
+- `tool_choice=required`는 현재 기본 설계가 아님
+- `required` 실험은 Qwen이 native transport보다 textual protocol에 더 자연스럽게 반응한다는 근거였음
+- 현재 구현은 forcing 대신 adapter, rewrite, continuation으로 이동했음
 
-For trivial questions that do not need tools:
+## 현재 참고해야 할 문서
 
-- prompt: `What is 2 + 2?`
-- `auto`: plain correct answer `4`
-- `required`: model forced a meaningless tool call such as `brief(message="2 + 2 = 4")`
+현재 구조를 보려면 이 문서를 기준으로 삼지 말고 아래를 먼저 본다.
 
-So a blanket global switch to `required` would degrade simple Q&A behavior.
+- [Qwen_출력_적응_설계.md](/D:/Pixoneer_Source/PIX_RAG_Source/docs/02-design/Qwen_출력_적응_설계.md)
+- [LLM서빙_상세_설계.md](/D:/Pixoneer_Source/PIX_RAG_Source/docs/02-design/LLM서빙_상세_설계.md)
+- [desktop_layered_tool_loop_architecture.md](/D:/Pixoneer_Source/PIX_RAG_Source/docs/02-design/desktop_layered_tool_loop_architecture.md)
 
-### 4. The model issue is real even when intent classification is correct
+## Raw outputs
 
-One possible explanation was that PIXLLM might simply be failing to detect analysis-like prompts.
+원 실험 결과는 아래 파일에 남아 있다.
 
-That is partly true for some English phrasings:
-
-- `Search the codebase ... explain the flow` did not set `wantsAnalysis=true`
-
-But that is not the full story.
-
-When the prompt was made explicit:
-
-- `Analyze the image registration flow in this codebase.`
-
-the request context correctly became:
-
-- `wantsAnalysis=true`
-- `analysisOnly=true`
-
-and the model still produced plain text plus pseudo `<tool_call>` markup under `auto`.
-
-So the root cause is not only request classification. The model itself is not reliably honoring native tool calling under `auto`.
-
-### 5. `/reference` routing is working at the tool-activation level
-
-After correcting the evaluation harness to call `ToolRuntime.beginRun({ prompt, selectedFilePath })` properly, `/reference` did narrow turn-1 tools correctly:
-
-- active tool set became `company_reference_search` plus always-on runtime tools
-- the model still used pseudo markup under `auto`
-- the same prompt produced native `company_reference_search(...)` under `required`
-
-So this particular issue is not caused by broken reference routing.
-
-## Detailed Observations
-
-### Workspace analysis
-
-Prompt:
-
-```text
-Search the codebase for image registration related code and explain the flow.
-```
-
-Observed:
-
-- `auto`: assistant prose + pseudo `grep` markup
-- `required`: native `grep` and `glob`
-
-### Specific file read
-
-Prompt:
-
-```text
-Open the main QueryEngine implementation and summarize how tool execution works.
-```
-
-Observed:
-
-- `auto`: pseudo `read_file`
-- `required`: native `read_file`
-
-### Company reference search
-
-Prompt:
-
-```text
-/reference Search company reference code for image registration flow and summarize the design.
-```
-
-Observed:
-
-- active tool set correctly narrowed to include `company_reference_search`
-- `auto`: prose + pseudo `company_reference_search`
-- `required`: native `company_reference_search`
-
-### Korean prompt
-
-Prompt:
-
-```text
-Korean prompt equivalent of: "Search the codebase for video/image registration related code and explain the flow."
-```
-
-Observed:
-
-- `auto`: prose + pseudo `grep`
-- `required`: native `grep`
-
-This matters because the production user prompt was Korean. The failure is not limited to English wording.
-
-## Comparison With Claude Code
-
-Claude Code semantics are still important, but they do not fully save this situation.
-
-Claude Code does:
-
-- treat native `tool_use` as follow-up work
-- keep looping when `tool_use` appears
-- consider a plain assistant text result successful when no `tool_use` appears
-
-Relevant references:
-
-- [queryHelpers.ts](/D:/Pixoneer_Source/PIX_RAG_Source/claude-code-sourcemap/restored-src/src/utils/queryHelpers.ts)
-- [query.ts](/D:/Pixoneer_Source/PIX_RAG_Source/claude-code-sourcemap/restored-src/src/query.ts)
-
-That means exact Claude Code semantics assume the model is willing to emit native tool calls when tools are appropriate.
-
-The current Qwen model is not reliable enough under `tool_choice=auto` to satisfy that assumption.
-
-So the current failure is best understood as:
-
-- loop semantics are now reasonably Claude-like
-- the model is not Claude-like enough in native tool-calling behavior
-
-## Conclusions
-
-### Main conclusion
-
-The remaining failure is primarily model-behavioral, not just loop-architectural.
-
-With the current model:
-
-- `auto` often yields pseudo tool markup in assistant text
-- `required` reliably yields native tool calls
-
-### Secondary conclusion
-
-PIXLLM should keep the overall Claude Code loop shape, but add a model-adaptive forcing layer. That is the smallest change that preserves the architecture while making the current model usable.
-
-## Recommended Direction
-
-### Recommended policy
-
-Keep the Claude-like loop, but make `toolChoice` adaptive:
-
-- use `auto` by default
-- upgrade to `required` on turn 1 when the request is evidence-seeking and there are relevant tools available
-- drop back to `auto` after the first real tool result if needed
-
-### Suggested triggers for `required`
-
-Use `required` when all of the following are true:
-
-- turn is 1
-- active tool set contains meaningful read/discovery/reference tools
-- request is evidence-seeking
-
-Evidence-seeking should include at least:
-
-- `wantsAnalysis`
-- `/reference`, `/workspace`, `/hybrid`
-- prompts asking to search, find, inspect, trace, explain a code flow, summarize implementation, or compare code behavior
-- prompts that mention codebase/workspace/internal reference source
-
-### Suggested exclusions
-
-Do not force `required` for:
-
-- trivial factual or arithmetic questions
-- clearly conversational replies
-- prompts where no meaningful tools are active
-- follow-up turns after the model already has enough evidence
-
-## Concrete Next Steps
-
-1. Add a model-adaptive `toolChoice` policy in [QueryEngine.cjs](/D:/Pixoneer_Source/PIX_RAG_Source/desktop/src/main/QueryEngine.cjs) or [streamModelCompletion.cjs](/D:/Pixoneer_Source/PIX_RAG_Source/desktop/src/main/services/model/streamModelCompletion.cjs).
-2. Use `required` only for first-turn evidence-seeking prompts on models that show this pseudo-tool pattern.
-3. Strengthen `processUserInput` classification so English prompts like `search ... and explain the flow` are recognized as analysis-like more consistently.
-4. Keep the existing Claude-like transcript semantics rather than adding regex guards for phrases like `I'll search...`.
-
-## Non-Recommendation
-
-Do not solve this by adding phrase-based guards such as:
-
-- if answer contains `I'll search`
-- if answer contains `let me check`
-
-That would diverge from the Claude Code design for the wrong reason. The real issue is native tool-call reliability, not wording.
+- [.tmp-model-tool-eval-20260402.json](/D:/Pixoneer_Source/PIX_RAG_Source/.tmp-model-tool-eval-20260402.json)
+- [.tmp-model-tool-eval-20260402-b.json](/D:/Pixoneer_Source/PIX_RAG_Source/.tmp-model-tool-eval-20260402-b.json)
+- [.tmp-model-tool-eval-20260402-c.json](/D:/Pixoneer_Source/PIX_RAG_Source/.tmp-model-tool-eval-20260402-c.json)
 
 ## Bottom Line
 
-If the product goal is:
+이 문서의 현재 의미는 하나다.
 
-- keep Claude Code's overall loop shape
-- but make PIXLLM work well with the current model
-
-then the right move is:
-
-- keep the loop Claude-like
-- adapt `toolChoice` to the model
-- force tools only on first-turn evidence-seeking requests
-
-For the current Qwen model, that is the highest-leverage fix supported by the experiments.
+- `tool_choice forcing`은 임시 진단 도구로는 유효했지만
+- 최종 해법은 `Qwen-first adapter architecture`였고
+- 현재 PIXLLM은 그 방향으로 이미 이동했다

@@ -1,6 +1,6 @@
 # API 인터페이스 설계
 
-기준일: 2026-04-01
+기준일: 2026-04-06
 
 이 문서는 현재 구현된 desktop IPC, local agent stream, backend HTTP surface를 정리한다.
 
@@ -12,7 +12,7 @@
 |---|---|---|
 | renderer -> preload | Electron context bridge | UI에서 안전한 desktop surface 호출 |
 | preload -> main | IPC invoke / event | 세션, workspace, local agent stream 제어 |
-| main -> backend | HTTP | health, runs, approvals, evidence, LLM endpoint |
+| main -> backend | HTTP | health, runs, approvals, evidence, LLM/proxy endpoint |
 
 ## 2. preload surface
 
@@ -60,6 +60,11 @@ renderer는 `agent:stream-event`를 구독한다.
 }
 ```
 
+중요:
+
+- `transition`에는 compaction, continuation, grounding retry, next-speaker continuation 같은 내부 제어 흐름이 기록된다.
+- Qwen textual protocol 자체는 `assistant_message`, `tool_use`, `tool_result` 이벤트로 재구성되어 renderer에 전달된다.
+
 ## 4. done payload
 
 `done` event는 아래 필드를 반환한다.
@@ -98,28 +103,46 @@ desktop이 직접 호출하는 backend API:
 
 ## 6. LLM 인터페이스
 
-desktop local agent는 두 종류의 LLM surface를 쓸 수 있다.
+desktop local agent는 두 종류의 transport surface를 쓸 수 있다.
 
-- OpenAI 호환: `POST /v1/chat/completions`
+- OpenAI-compatible direct call: `POST /v1/chat/completions`
 - proxy mode: `POST /v1/llm/chat_completions`
 
 streaming도 같은 축을 따른다.
 
-- OpenAI 호환 SSE
+- OpenAI-compatible SSE
 - proxy stream `/v1/llm/chat_completions/stream`
 
-현재 구현은 native tool-calling transcript를 기준으로 flattening한다. 예전 XML-style `<tool_use>/<tool_result>` fallback을 기본 경로로 두지 않는다.
+하지만 현재 application-level contract는 transport와 다르다.
 
-## 7. streaming tool execution 상태
+- transport는 OpenAI-compatible일 수 있다.
+- transcript와 tool protocol은 Qwen textual contract가 기준이다.
+  - assistant -> `<tool_call>...</tool_call>`
+  - user/tool result -> `<tool_response>...</tool_response>`
+
+native `tool_calls`는 tolerated fallback이지 기본 flattening 경로가 아니다.
+
+## 7. compaction과 user query 보존
+
+Qwen server는 flattened messages 안에 user query가 사라지면 `400 No user query found in messages`를 반환할 수 있다.
+
+현재 desktop runtime은:
+
+- message compaction 시 첫 substantive user message를 보존하고
+- flattened payload에 user query가 없으면 fallback `User request:` 메시지를 다시 주입한다.
+
+이 보정은 현재 LLM 인터페이스 설계의 중요한 일부다.
+
+## 8. streaming tool execution 상태
 
 현재 상태는 다음과 같다.
 
 - 스트리밍 중 parse 가능한 tool call은 선실행을 시작할 수 있다.
 - turn 종료 시 `ToolRuntime`이 prefetched result를 claim해서 재사용한다.
 - cancel 또는 model error 시 unclaimed tool call은 drain하거나 synthetic result로 transcript를 복구한다.
-- 아직 claude-code처럼 같은 스트림 안에서 `tool_result`를 모델에 즉시 재주입하지는 않는다.
+- 같은 스트림 안에서 `tool_result`를 모델에 즉시 재주입하지는 않는다.
 
-## 8. 현재 범위 밖 인터페이스
+## 9. 현재 범위 밖 인터페이스
 
 현재 코드 기준으로 기본 경로가 아닌 것:
 
@@ -129,4 +152,4 @@ streaming도 같은 축을 따른다.
 - MCP transport
 - plugin/skill host transport
 
-현재 PIXLLM의 인터페이스는 `Electron IPC + local agent stream + backend /api/v1/runs + backend evidence + LLM endpoint`로 이해하는 게 맞다.
+현재 PIXLLM의 인터페이스는 `Electron IPC + local agent stream + backend /api/v1/runs + backend evidence + Qwen-compatible LLM endpoint`로 이해하는 게 맞다.

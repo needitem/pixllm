@@ -5,6 +5,7 @@
 현재 기준으로 먼저 읽을 문서:
 
 - `desktop_layered_tool_loop_architecture.md`
+- `Qwen_출력_적응_설계.md`
 - `API_인터페이스_설계.md`
 - `에이전트_상세_설계.md`
 - `intent_routing_minimal.md`
@@ -12,9 +13,11 @@
 현재 핵심 설계 요약:
 
 - desktop이 유일한 agent loop를 가진다.
-- `QueryEngine -> processUserInput -> ToolRuntime -> tools/*`가 기본 실행축이다.
+- `QueryEngine -> processUserInput -> QwenQueryRewrite -> QwenAdapter -> ToolRuntime -> tools/*`가 기본 실행축이다.
 - backend는 evidence, runs, approvals, health, LLM endpoint를 제공한다.
 - `company_reference_search`가 backend knowledge/code evidence를 desktop loop에 연결한다.
+- 모델 출력 계약은 Qwen textual tool protocol이 기준이다.
+- 한국어 입력은 하드코딩된 용어집이 아니라 rewrite hint 계층으로 적응한다.
 - tool policy는 중앙 gate와 tool별 hook을 같이 사용한다.
 - 현재 streaming tool execution은 "스트리밍 중 선실행 + turn 종료 시 claim/recovery" 수준이다.
 
