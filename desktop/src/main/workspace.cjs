@@ -1373,6 +1373,7 @@ async function runWorkspaceShell(workspacePath, commandText, options = {}) {
       stdout: '',
       stderr: '',
       error: 'command_rejected_by_safety_policy',
+      message: 'Shell rejected this command by safety policy. Use write/edit tools for workspace file changes.',
     };
   }
   if (!isAllowedShellCommand(script)) {
@@ -1382,6 +1383,7 @@ async function runWorkspaceShell(workspacePath, commandText, options = {}) {
       stdout: '',
       stderr: '',
       error: 'command_not_in_allowed_shell_prefixes',
+      message: 'Shell only allows approved read/build/test prefixes. Use write/edit tools for workspace file creation or modification.',
     };
   }
 

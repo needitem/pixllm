@@ -26,3 +26,16 @@ class LlmChatCompletionResponse(BaseModel):
     tool_calls: List[Dict[str, Any]] = Field(default_factory=list)
     finish_reason: str = ""
     usage: Dict[str, Any] = Field(default_factory=dict)
+
+
+class LlmTokenizeRequest(BaseModel):
+    model: str = config.VLLM_MODEL
+    messages: List[LlmChatMessage] = Field(default_factory=list)
+    return_token_strs: bool = False
+
+
+class LlmTokenizeResponse(BaseModel):
+    count: int = 0
+    max_model_len: int = 0
+    tokens: List[int] = Field(default_factory=list)
+    token_strs: List[str] = Field(default_factory=list)

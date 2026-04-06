@@ -1,13 +1,16 @@
 import asyncio
 import json
+import urllib.request
+import urllib.error
 from contextlib import suppress
 
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 
+from .. import config
 from ..deps import state
 from ..envelopes import ok, ApiError
-from ..schemas.llm import LlmChatCompletionRequest
+from ..schemas.llm import LlmChatCompletionRequest, LlmTokenizeRequest
 from ..core.llm_utils import (
     safe_chat_completion_create,
     extract_completion_finish_reason,
@@ -34,6 +37,59 @@ def _resolve_request_kwargs(request: LlmChatCompletionRequest):
 
 def _sse_event(event: str, payload) -> str:
     return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+def _normalize_tokenize_payload(payload):
+    data = payload if isinstance(payload, dict) else {}
+    tokens = data.get("tokens")
+    if not isinstance(tokens, list):
+        tokens = data.get("token_ids")
+    if not isinstance(tokens, list):
+        tokens = data.get("ids")
+    if not isinstance(tokens, list):
+        tokens = []
+    token_strs = data.get("token_strs")
+    if not isinstance(token_strs, list):
+        token_strs = []
+    count = 0
+    for candidate in [
+        data.get("count"),
+        data.get("token_count"),
+        data.get("prompt_tokens"),
+        len(tokens),
+    ]:
+        try:
+            value = int(candidate or 0)
+        except Exception:
+            value = 0
+        if value >= 0:
+            count = value
+            break
+    max_model_len = 0
+    for candidate in [
+        data.get("max_model_len"),
+        data.get("max_model_len_tokens"),
+        data.get("model_max_length"),
+    ]:
+        try:
+            value = int(candidate or 0)
+        except Exception:
+            value = 0
+        if value > 0:
+            max_model_len = value
+            break
+    normalized_tokens = []
+    for item in tokens:
+        try:
+            normalized_tokens.append(int(item))
+        except Exception:
+            continue
+    return {
+        "count": count,
+        "max_model_len": max_model_len,
+        "tokens": normalized_tokens,
+        "token_strs": [str(item) for item in token_strs],
+    }
 
 
 @router.post("/chat_completions")
@@ -74,6 +130,37 @@ async def llm_chat_completions(request: LlmChatCompletionRequest):
             "usage": usage_payload,
         }
     )
+
+
+@router.post("/tokenize")
+async def llm_tokenize(request: LlmTokenizeRequest):
+    if state.vllm_client is None:
+        raise ApiError("LLM_UNAVAILABLE", "vLLM client is not initialized", status_code=503)
+
+    request_body = json.dumps(
+        {
+            "model": request.model,
+            "messages": [message.model_dump() for message in list(request.messages or [])],
+            "return_token_strs": bool(request.return_token_strs),
+        },
+        ensure_ascii=False,
+    ).encode("utf-8")
+    upstream_request = urllib.request.Request(
+        f"{config.VLLM_URL}/tokenize",
+        data=request_body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(upstream_request, timeout=10) as response:
+            payload = json.load(response)
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="ignore")
+        raise ApiError("LLM_TOKENIZE_FAILED", detail or str(exc), status_code=502)
+    except Exception as exc:
+        raise ApiError("LLM_TOKENIZE_FAILED", str(exc), status_code=502)
+
+    return ok(_normalize_tokenize_payload(payload))
 
 
 @router.post("/chat_completions/stream")

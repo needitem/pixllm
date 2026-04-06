@@ -40,7 +40,7 @@ function BashTool() {
     userFacingName: () => 'Shell',
     getToolUseSummary: (input) => `Run shell command: ${toStringValue(input?.command).slice(0, 80)}`,
     async description() {
-      return 'Run a safe workspace PowerShell command for read, diff, build, or test tasks';
+      return 'Run a safe workspace shell command for inspection, diff, build, or test tasks. Use write/edit tools for file creation or modification.';
     },
     async call(input, context) {
       const command = toStringValue(input.command);

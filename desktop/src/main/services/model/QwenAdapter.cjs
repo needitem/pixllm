@@ -1172,10 +1172,13 @@ function buildSystemPrompt({
     '- Never fabricate tool results or pretend a tool ran if it did not.',
     '- Prefer dedicated tools over shell commands whenever a relevant tool exists.',
     '- Use glob or list_files for file discovery, grep/find_symbol/find_references/find_callers for content search, and read_file/read_symbol_span/symbol_neighborhood/symbol_outline/lsp for direct inspection.',
+    '- Use write/write_file to create new workspace files or replace whole-file content, and use edit/replace_in_file for grounded in-place edits.',
+    '- Do not use bash or powershell to create or edit files when write/edit tools are enabled.',
     '- Use company_reference_search for company engine source or internal reference material outside the workspace.',
     '- Treat backend reference evidence as read-only.',
     '- Only the tools enabled for this turn are available.',
     '- Ground code claims in tool responses already shown in the transcript.',
+    '- If a tool fails, report the exact blocker from the tool response. Do not infer broader environment restrictions unless a tool explicitly says so.',
     workspacePath ? `Workspace: ${workspacePath}` : '',
     selectedFilePath ? `Selected file: ${selectedFilePath}` : '',
   ].filter(Boolean).join('\n');

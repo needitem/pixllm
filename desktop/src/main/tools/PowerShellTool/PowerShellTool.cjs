@@ -40,7 +40,7 @@ function PowerShellTool() {
     userFacingName: () => 'PowerShell',
     getToolUseSummary: (input) => `Run PowerShell: ${toStringValue(input?.command).slice(0, 80)}`,
     async description() {
-      return 'Run a safe PowerShell command inside the workspace';
+      return 'Run a safe PowerShell command inside the workspace for inspection, build, test, or diagnostics. Use write/edit tools for file creation or modification.';
     },
     async call(input, context) {
       const command = toStringValue(input.command);

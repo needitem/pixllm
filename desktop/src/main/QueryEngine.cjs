@@ -1,6 +1,6 @@
 const { createHash } = require('node:crypto');
 const { createLocalToolCollection } = require('./tools.cjs');
-const { streamModelCompletion } = require('./services/model/streamModelCompletion.cjs');
+const { streamModelCompletion, countPromptTokens } = require('./services/model/streamModelCompletion.cjs');
 const { rewritePromptForSearch } = require('./services/model/QwenQueryRewrite.cjs');
 const { ToolRuntime } = require('./services/tools/ToolRuntime.cjs');
 const { StreamingToolExecutor } = require('./services/tools/StreamingToolExecutor.cjs');
@@ -31,11 +31,17 @@ const MAX_CONSECUTIVE_PARSE_ERRORS = 2;
 const MAX_MODEL_RETRIES = 2;
 const MAX_OUTPUT_TOKENS_RECOVERY_LIMIT = 3;
 const ESCALATED_MAX_TOKENS = 6400;
+const MAX_CONTEXT_COMPACTION_PASSES = 4;
 const MESSAGE_CHAR_BUDGET = 32000;
-const APPROX_CONTEXT_TOKEN_BUDGET = 12000;
+const DEFAULT_MODEL_CONTEXT_WINDOW = 16384;
+const DEFAULT_MODEL_OUTPUT_TOKENS = 1600;
+const MIN_DYNAMIC_OUTPUT_TOKENS = 64;
+const REQUEST_TOKEN_SAFETY_MARGIN = 64;
+const APPROX_CONTEXT_HEADROOM_TOKENS = 192;
 const TOOL_RESULT_CHAR_BUDGET = 18000;
 const MODEL_PREVIEW_LIMIT = 180;
 const MAX_FILE_CACHE_ENTRIES = 24;
+const MAX_PROMPT_TOKEN_CACHE_ENTRIES = 32;
 const MAX_TRANSITIONS = 64;
 const MAX_UNGROUNDED_ANSWER_RETRIES = 2;
 const MAX_NO_PROGRESS_RETRIES = 2;
@@ -75,6 +81,20 @@ function normalizeUsage(value = {}) {
 
 function estimateTokens(text) {
   return Math.max(1, Math.ceil(String(text || '').length / 4));
+}
+
+function resolveModelContextWindow(model = '') {
+  const explicit = Number(process.env.PIXLLM_MODEL_CONTEXT_WINDOW || process.env.PIXLLM_CONTEXT_WINDOW || 0);
+  if (Number.isFinite(explicit) && explicit > 1024) {
+    return Math.floor(explicit);
+  }
+  const normalized = toStringValue(model).toLowerCase();
+  if (!normalized) return DEFAULT_MODEL_CONTEXT_WINDOW;
+  if (/\b(?:128k|131072)\b/.test(normalized)) return 131072;
+  if (/\b(?:64k|65536)\b/.test(normalized)) return 65536;
+  if (/\b(?:32k|32768)\b/.test(normalized)) return 32768;
+  if (/\b(?:16k|16384)\b/.test(normalized)) return 16384;
+  return DEFAULT_MODEL_CONTEXT_WINDOW;
 }
 
 function previewText(text) {
@@ -132,17 +152,23 @@ function cloneMessage(message = null) {
 function compactMessages(messages) {
   const safeMessages = Array.isArray(messages) ? [...messages] : [];
   const totalChars = safeMessages.reduce((sum, item) => sum + messageCharLength(item), 0);
-  if (totalChars <= MESSAGE_CHAR_BUDGET || safeMessages.length <= 10) {
+  if (totalChars <= MESSAGE_CHAR_BUDGET || safeMessages.length <= 2) {
     return { messages: safeMessages, compacted: false };
   }
   const firstUserMessage = cloneMessage(findFirstSubstantiveUserMessage(safeMessages));
-  const head = safeMessages.slice(0, Math.max(0, safeMessages.length - 8));
-  const tail = safeMessages.slice(-8);
+  const preserveTailCount = safeMessages.length > 10
+    ? 8
+    : Math.max(2, Math.min(6, safeMessages.length - 2));
+  const head = safeMessages.slice(0, Math.max(0, safeMessages.length - preserveTailCount));
+  const tail = safeMessages.slice(-preserveTailCount);
   const summary = head
     .map((item) => summarizeMessage(item))
     .filter(Boolean)
     .join('\n')
-    .slice(0, 8000);
+    .slice(0, 6000);
+  if (!summary) {
+    return { messages: safeMessages, compacted: false };
+  }
   const nextMessages = [];
   if (firstUserMessage) {
     nextMessages.push(firstUserMessage);
@@ -425,6 +451,7 @@ class QueryEngine {
       : { tools: [], call: async () => ({ ok: false, error: 'workspace_not_available' }) };
     this.runtime.setTools(this.tools);
     this.toolDescriptionCache = new Map();
+    this.promptTokenCountCache = new Map();
     this.projectContext = null;
     this.projectContextPrompt = '';
     this.runtimeHandlers = {};
@@ -449,6 +476,7 @@ class QueryEngine {
     this.apiToken = this.llmApiToken || toStringValue(apiToken) || this.apiToken || this.serverApiToken;
     this.model = toStringValue(model) || this.model;
     this.selectedFilePath = toStringValue(selectedFilePath) || this.selectedFilePath;
+    this.promptTokenCountCache.clear();
     if (this.runtime) {
       this.runtime.selectedFilePath = this.selectedFilePath;
     }
@@ -682,7 +710,8 @@ class QueryEngine {
     let lastError = null;
     for (let attempt = 0; attempt <= MAX_MODEL_RETRIES; attempt += 1) {
       try {
-        const maxTokens = Math.max(1600, Number(this.state.maxOutputTokensOverride || 0) || 1600);
+        const budgetState = await this._requestBudgetStateForMessages(messages, { signal });
+        const maxTokens = this._resolveMaxTokensForRequest(messages, budgetState);
         const result = await streamModelCompletion({
           baseUrl: this.llmBaseUrl || this.baseUrl || this.serverBaseUrl,
           apiToken: this.llmApiToken || this.apiToken || this.serverApiToken,
@@ -844,16 +873,176 @@ class QueryEngine {
     this.state.fileCache = nextCache;
   }
 
-  _messageBudgetState() {
-    const runtimeContext = this._runtimeContextMessage();
-    const serialized = [
-      this.projectContextPrompt,
-      runtimeContext,
-      ...this.state.messages.map((message) => serializeBlocks(Array.isArray(message?.content) ? message.content : [])),
-    ].filter(Boolean).join('\n\n');
+  _messageBudgetState(systemPrompt = '') {
+    return this._messageBudgetStateForMessages(this._modelMessages(systemPrompt));
+  }
+
+  _messageBudgetStateForMessages(messages = []) {
+    const serialized = Array.isArray(messages)
+      ? messages.map((message) => {
+          const role = toStringValue(message?.role || 'assistant');
+          const content = typeof message?.content === 'string'
+            ? message.content
+            : serializeBlocks(Array.isArray(message?.content) ? message.content : []);
+          return `${role}: ${content}`;
+        }).filter(Boolean).join('\n\n')
+      : '';
     return {
       chars: serialized.length,
       approxTokens: estimateTokens(serialized),
+    };
+  }
+
+  _promptTokenCacheKey(messages = []) {
+    return [
+      toStringValue(this.model),
+      toStringValue(this.llmBaseUrl || this.baseUrl || this.serverBaseUrl),
+      toStringValue(this.serverBaseUrl),
+      hashText(JSON.stringify(Array.isArray(messages) ? messages : [])),
+    ].join('|');
+  }
+
+  async _requestBudgetStateForMessages(messages = [], { signal = null } = {}) {
+    const approxState = this._messageBudgetStateForMessages(messages);
+    const cacheKey = this._promptTokenCacheKey(messages);
+    if (this.promptTokenCountCache.has(cacheKey)) {
+      return {
+        ...approxState,
+        ...this.promptTokenCountCache.get(cacheKey),
+      };
+    }
+
+    const fallbackState = {
+      ...approxState,
+      promptTokens: Number(approxState.approxTokens || 0),
+      exactPromptTokens: 0,
+      exact: false,
+      contextWindow: resolveModelContextWindow(this.model),
+    };
+
+    try {
+      const payload = await countPromptTokens({
+        baseUrl: this.llmBaseUrl || this.baseUrl || this.serverBaseUrl,
+        apiToken: this.llmApiToken || this.apiToken || this.serverApiToken,
+        fallbackBaseUrl: this.serverBaseUrl,
+        fallbackApiToken: this.serverApiToken,
+        model: this.model,
+        messages,
+        signal,
+      });
+      const exactPromptTokens = Number(payload?.count || 0);
+      const resolvedState = {
+        promptTokens: exactPromptTokens > 0 ? exactPromptTokens : Number(approxState.approxTokens || 0),
+        exactPromptTokens,
+        exact: exactPromptTokens > 0,
+        contextWindow: Number(payload?.maxModelLen || 0) || resolveModelContextWindow(this.model),
+      };
+      const entries = Array.from(this.promptTokenCountCache.entries());
+      while (entries.length >= MAX_PROMPT_TOKEN_CACHE_ENTRIES) {
+        const oldest = entries.shift();
+        if (!oldest) break;
+        this.promptTokenCountCache.delete(oldest[0]);
+      }
+      this.promptTokenCountCache.set(cacheKey, resolvedState);
+      return {
+        ...approxState,
+        ...resolvedState,
+      };
+    } catch {
+      return fallbackState;
+    }
+  }
+
+  _softContextTokenBudget(contextWindowOverride = 0) {
+    const contextWindow = Number(contextWindowOverride || 0) || resolveModelContextWindow(this.model);
+    return Math.max(
+      1024,
+      contextWindow - APPROX_CONTEXT_HEADROOM_TOKENS,
+    );
+  }
+
+  _resolveMaxTokensForRequest(messages = [], budgetState = null) {
+    const requested = Math.max(
+      MIN_DYNAMIC_OUTPUT_TOKENS,
+      Number(this.state.maxOutputTokensOverride || 0) || DEFAULT_MODEL_OUTPUT_TOKENS,
+    );
+    const resolvedBudgetState = budgetState && typeof budgetState === 'object'
+      ? budgetState
+      : this._messageBudgetStateForMessages(messages);
+    const contextWindow = Number(resolvedBudgetState?.contextWindow || 0) || resolveModelContextWindow(this.model);
+    const promptTokens = Number(
+      resolvedBudgetState?.promptTokens
+      || resolvedBudgetState?.exactPromptTokens
+      || resolvedBudgetState?.approxTokens
+      || 0,
+    );
+    const available = contextWindow - promptTokens - REQUEST_TOKEN_SAFETY_MARGIN;
+    if (available <= 0) {
+      return 1;
+    }
+    if (available < requested) {
+      return Math.max(1, available);
+    }
+    return requested;
+  }
+
+  async _compactMessagesToSoftBudget({
+    systemPrompt = '',
+    turn = 0,
+    boundaryReason = 'context_budget_compaction',
+    transitionName = 'context_budget_compaction',
+    reactive = false,
+    errorMessage = '',
+    signal = null,
+  } = {}) {
+    let budgetState = await this._requestBudgetStateForMessages(
+      this._modelMessages(systemPrompt),
+      { signal },
+    );
+    let passes = 0;
+    while (
+      Number(budgetState?.promptTokens || budgetState?.approxTokens || 0) > this._softContextTokenBudget(budgetState?.contextWindow)
+      && passes < MAX_CONTEXT_COMPACTION_PASSES
+    ) {
+      const previousTokens = Number(budgetState?.promptTokens || budgetState?.approxTokens || 0);
+      const candidate = compactMessages(this.state.messages);
+      if (!candidate.compacted) {
+        break;
+      }
+      this.state.messages = candidate.messages;
+      this.state.totalUsage.compactions += 1;
+      passes += 1;
+      budgetState = await this._requestBudgetStateForMessages(
+        this._modelMessages(systemPrompt),
+        { signal },
+      );
+      if (Number(budgetState?.promptTokens || budgetState?.approxTokens || 0) >= previousTokens) {
+        break;
+      }
+    }
+    if (passes > 0) {
+      if (reactive) {
+        this.state.totalUsage.reactive_compactions += passes;
+      }
+      this.state.compactBoundaries = [...(Array.isArray(this.state.compactBoundaries) ? this.state.compactBoundaries : []), {
+        timestamp: new Date().toISOString(),
+        reason: boundaryReason,
+        turn,
+        passes,
+      }].slice(-MAX_TRANSITIONS);
+      this._recordTransition(transitionName, {
+        turn,
+        passes,
+        promptTokens: Number(budgetState?.promptTokens || budgetState?.approxTokens || 0),
+        exact: Boolean(budgetState?.exact),
+        ...(toStringValue(errorMessage) ? { message: toStringValue(errorMessage) } : {}),
+      });
+      this._persistState();
+    }
+    return {
+      budgetState,
+      compacted: passes > 0,
+      passes,
     };
   }
 
@@ -1096,26 +1285,19 @@ class QueryEngine {
           this._persistState();
         }
 
-        const budgetState = this._messageBudgetState();
-        if (budgetState.approxTokens > APPROX_CONTEXT_TOKEN_BUDGET) {
-          const forcedCompact = compactMessages(this.state.messages);
-          if (forcedCompact.compacted) {
-            this.state.messages = forcedCompact.messages;
-            this.state.totalUsage.compactions += 1;
-            this._recordTransition('approx_token_budget_compaction', {
-              turn,
-              approxTokens: budgetState.approxTokens,
-            });
-            this._persistState();
-          }
-        }
-
         const activeToolNames = this._activeToolNames(turn);
         const toolDefinitions = await this._describeTools(activeToolNames);
         const systemPrompt = buildSystemPrompt({
           workspacePath: this.workspacePath,
           selectedFilePath: this.selectedFilePath,
           toolDefinitions,
+        });
+        await this._compactMessagesToSoftBudget({
+          systemPrompt,
+          turn,
+          boundaryReason: 'approx_token_budget_compaction',
+          transitionName: 'approx_token_budget_compaction',
+          signal,
         });
 
         await onStatus({
@@ -1156,18 +1338,16 @@ class QueryEngine {
           });
           const message = error instanceof Error ? error.message : String(error);
           if (/context|maximum context|prompt too long|token/i.test(message)) {
-            const reactive = compactMessages(this.state.messages);
-            if (reactive.compacted) {
-              this.state.messages = reactive.messages;
-              this.state.totalUsage.compactions += 1;
-              this.state.totalUsage.reactive_compactions += 1;
-              this.state.compactBoundaries = [...(Array.isArray(this.state.compactBoundaries) ? this.state.compactBoundaries : []), {
-                timestamp: new Date().toISOString(),
-                reason: 'reactive_context_compaction',
-                turn,
-              }].slice(-MAX_TRANSITIONS);
-              this._recordTransition('reactive_compact_retry', { turn, message });
-              this._persistState();
+            const reactiveCompaction = await this._compactMessagesToSoftBudget({
+              systemPrompt,
+              turn,
+              boundaryReason: 'reactive_context_compaction',
+              transitionName: 'reactive_compact_retry',
+              reactive: true,
+              errorMessage: message,
+              signal,
+            });
+            if (reactiveCompaction.compacted) {
               continue;
             }
           }
@@ -1182,7 +1362,7 @@ class QueryEngine {
           this._recordTranscript({
             kind: 'max_output_tokens_escalate',
             turn,
-            from: 1600,
+            from: DEFAULT_MODEL_OUTPUT_TOKENS,
             to: ESCALATED_MAX_TOKENS,
           });
           this._recordTransition('max_output_tokens_escalate', {
