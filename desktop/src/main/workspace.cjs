@@ -2,6 +2,7 @@ const { dialog } = require('electron');
 const { execFile } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
+const { createUnifiedDiff } = require('./tools/shared/unifiedDiff.cjs');
 
 const IGNORED_DIRS = new Set([
   '.svn',
@@ -653,6 +654,7 @@ async function writeWorkspaceFile(workspacePath, relativePath, content) {
     }
     
     const nextContent = String(content || '');
+    const diffSummary = createUnifiedDiff(String(relativePath || ''), previous, nextContent);
     await fs.promises.writeFile(fullPath, nextContent, 'utf-8');
     const nextStat = await fs.promises.stat(fullPath).catch(() => null);
     return {
@@ -663,6 +665,10 @@ async function writeWorkspaceFile(workspacePath, relativePath, content) {
       bytes: Buffer.byteLength(nextContent, 'utf-8'),
       size: Number(nextStat?.size || 0),
       mtimeMs: Math.floor(Number(nextStat?.mtimeMs || 0)),
+      added: diffSummary.added,
+      removed: diffSummary.removed,
+      diff: diffSummary.diff,
+      diff_truncated: diffSummary.truncated,
     };
   } catch (err) {
     return { ok: false, path: String(relativePath || ''), error: err.message };

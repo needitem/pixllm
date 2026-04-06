@@ -44,6 +44,31 @@
     text: string;
   };
 
+  type DiffLineView = {
+    type: 'context' | 'add' | 'remove';
+    oldNumber?: number;
+    newNumber?: number;
+    text: string;
+  };
+
+  type DiffHunkView = {
+    header: string;
+    oldStart: number;
+    oldLines: number;
+    newStart: number;
+    newLines: number;
+    lines: DiffLineView[];
+  };
+
+  type DiffFileView = {
+    file: string;
+    added: number;
+    removed: number;
+    diff: string;
+    hunks: DiffHunkView[];
+    truncated?: boolean;
+  };
+
   type LocalToolTraceEntry = {
     round: number;
     thought: string;
@@ -77,12 +102,7 @@
       tasks: RunTask[];
       approvals: RunApproval[];
       artifacts: RunArtifact[];
-      editSummaries: Array<{
-        file: string;
-        added: number;
-        removed: number;
-        diff: string;
-      }>;
+      editSummaries: DiffFileView[];
     };
     reasoningSummary?: Record<string, unknown>;
     reasoningTrace?: Array<Record<string, unknown>>;
@@ -107,6 +127,7 @@
     tone: string;
     detailTitle: string;
     detail: unknown;
+    diffs?: DiffFileView[];
     note?: string;
   };
 
@@ -145,6 +166,7 @@
   let runTasks: RunTask[] = [];
   let runArtifacts: RunArtifact[] = [];
   let runApprovals: RunApproval[] = [];
+  let runEditSummaries: DiffFileView[] = [];
 
   let workspaceInfo = '';
   let workspaceStatus = '';
@@ -194,6 +216,14 @@
   $: if (selectedRunId) {
     void loadRunDetail(selectedRunId);
   }
+  $: runEditSummaries = selectedRun
+    ? extractEditSummaries({
+        ...selectedRun,
+        tasks: runTasks,
+        artifacts: runArtifacts,
+        approvals: runApprovals,
+      })
+    : [];
   $: workspaceName = getWorkspaceName(settings.workspacePath);
   $: workspaceOptions = buildWorkspaceOptions(settings.workspacePath, settings.recentWorkspaces);
   $: selectedSession = sessions.find((session) => session.id === selectedSessionId) || null;
@@ -449,6 +479,10 @@
     }
   }
 
+  function isRecord(value: unknown): value is Record<string, unknown> {
+    return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+  }
+
   function compactInputSummary(value: unknown): string {
     if (!value || typeof value !== 'object') {
       return '';
@@ -466,6 +500,16 @@
         return `${key}=${rendered}`;
       });
     return entries.join(' ');
+  }
+
+  function diffMarker(type: DiffLineView['type']) {
+    if (type === 'add') return '+';
+    if (type === 'remove') return '-';
+    return ' ';
+  }
+
+  function diffLineNumber(value?: number) {
+    return Number.isInteger(value) ? String(value) : '';
   }
 
   function extractChangedPaths(text: string): string[] {
@@ -653,19 +697,133 @@
     return 'Server code search';
   }
 
+  function parseUnifiedDiffBlock(file: string, diff: string): DiffFileView | null {
+    const lines = String(diff || '').split(/\r?\n/);
+    const hunks: DiffHunkView[] = [];
+    let current: DiffHunkView | null = null;
+    let oldLine = 0;
+    let newLine = 0;
+    let added = 0;
+    let removed = 0;
+
+    const flush = () => {
+      if (current && current.lines.length > 0) {
+        hunks.push(current);
+      }
+      current = null;
+    };
+
+    for (const line of lines) {
+      if (!line) continue;
+      if (line.startsWith('@@ ')) {
+        flush();
+        const match = line.match(/^@@\s+\-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?\s+@@/);
+        if (!match) continue;
+        current = {
+          header: line,
+          oldStart: Number(match[1] || 0),
+          oldLines: Number(match[2] || 1),
+          newStart: Number(match[3] || 0),
+          newLines: Number(match[4] || 1),
+          lines: [],
+        };
+        oldLine = current.oldStart;
+        newLine = current.newStart;
+        continue;
+      }
+      if (!current) continue;
+      if (line.startsWith('+') && !line.startsWith('+++')) {
+        current.lines.push({ type: 'add', newNumber: newLine, text: line.slice(1) });
+        newLine += 1;
+        added += 1;
+        continue;
+      }
+      if (line.startsWith('-') && !line.startsWith('---')) {
+        current.lines.push({ type: 'remove', oldNumber: oldLine, text: line.slice(1) });
+        oldLine += 1;
+        removed += 1;
+        continue;
+      }
+      if (line.startsWith(' ')) {
+        current.lines.push({
+          type: 'context',
+          oldNumber: oldLine,
+          newNumber: newLine,
+          text: line.slice(1),
+        });
+        oldLine += 1;
+        newLine += 1;
+      }
+    }
+
+    flush();
+    if (hunks.length === 0) return null;
+    return {
+      file: String(file || 'unknown'),
+      added,
+      removed,
+      diff: String(diff || ''),
+      hunks,
+    };
+  }
+
+  function uniqueDiffViews(items: DiffFileView[]) {
+    const unique = new Map<string, DiffFileView>();
+    for (const item of items) {
+      const key = `${item.file}::${item.diff}`;
+      if (!unique.has(key)) unique.set(key, item);
+    }
+    return Array.from(unique.values());
+  }
+
+  function diffViewsFromUnknown(value: unknown): DiffFileView[] {
+    if (!value) return [];
+    if (typeof value === 'string') return extractUnifiedDiffs(value);
+    if (Array.isArray(value)) {
+      return uniqueDiffViews(value.flatMap((item) => diffViewsFromUnknown(item)));
+    }
+    if (!isRecord(value)) return [];
+
+    const results: DiffFileView[] = [];
+    if (typeof value.diff === 'string' && value.diff.trim()) {
+      const file = typeof value.file === 'string'
+        ? value.file
+        : typeof value.path === 'string'
+          ? value.path
+          : 'unknown';
+      const parsed = parseUnifiedDiffBlock(file, value.diff);
+      if (parsed) {
+        parsed.added = Number(value.added ?? parsed.added);
+        parsed.removed = Number(value.removed ?? parsed.removed);
+        parsed.truncated = Boolean(value.diff_truncated ?? value.truncated);
+        results.push(parsed);
+      }
+    }
+    if (Array.isArray(value.edit_summaries)) {
+      results.push(...value.edit_summaries.flatMap((item) => diffViewsFromUnknown(item)));
+    }
+    if (typeof value.output_preview === 'string') {
+      results.push(...extractUnifiedDiffs(value.output_preview));
+    }
+    if (typeof value.content === 'string') {
+      results.push(...extractUnifiedDiffs(value.content));
+    }
+    if (isRecord(value.result)) {
+      results.push(...diffViewsFromUnknown(value.result));
+    }
+
+    return uniqueDiffViews(results);
+  }
+
   function extractUnifiedDiffs(text: string) {
     const lines = String(text || '').split(/\r?\n/);
-    const results: Array<{ file: string; added: number; removed: number; diff: string }> = [];
-    let current: { file: string; added: number; removed: number; diffLines: string[] } | null = null;
+    const results: DiffFileView[] = [];
+    let current: { file: string; diffLines: string[] } | null = null;
 
     const flush = () => {
       if (!current || current.diffLines.length === 0) return;
-      results.push({
-        file: current.file,
-        added: current.added,
-        removed: current.removed,
-        diff: current.diffLines.join('\n')
-      });
+      const parsed = parseUnifiedDiffBlock(current.file, current.diffLines.join('\n'));
+      if (parsed) results.push(parsed);
       current = null;
     };
 
@@ -675,8 +833,6 @@
         const match = line.match(/ b\/(.+)$/);
         current = {
           file: match?.[1] || 'unknown',
-          added: 0,
-          removed: 0,
           diffLines: [line]
         };
         continue;
@@ -685,16 +841,12 @@
         flush();
         current = {
           file: line.slice(6).trim() || 'unknown',
-          added: 0,
-          removed: 0,
           diffLines: [line]
         };
         continue;
       }
       if (!current) continue;
       current.diffLines.push(line);
-      if (line.startsWith('+') && !line.startsWith('+++')) current.added += 1;
-      if (line.startsWith('-') && !line.startsWith('---')) current.removed += 1;
     }
 
     flush();
@@ -717,11 +869,10 @@
     }
 
     const parsed = texts.flatMap((text) => extractUnifiedDiffs(text));
-    const unique = new Map<string, { file: string; added: number; removed: number; diff: string }>();
+    const unique = new Map<string, DiffFileView>();
     for (const item of parsed) {
-      if (!unique.has(item.file)) {
-        unique.set(item.file, item);
-      }
+      const key = `${item.file}::${item.diff}`;
+      if (!unique.has(key)) unique.set(key, item);
     }
     return Array.from(unique.values());
   }
@@ -899,6 +1050,13 @@
     }
 
     for (const step of message.localTrace ?? []) {
+      const detail = {
+        round: step.round,
+        thought: step.thought,
+        tool: step.tool,
+        input: step.input,
+        result: step.observation
+      };
       items.push({
         id: `${message.id}-local-step-${step.round}`,
         title: step.tool || `Local step ${step.round}`,
@@ -906,18 +1064,23 @@
         badge: 'local',
         tone: 'accent',
         detailTitle: `Local tool round ${step.round}`,
-        detail: {
-          round: step.round,
-          thought: step.thought,
-          tool: step.tool,
-          input: step.input,
-          result: step.observation
-        },
+        detail,
+        diffs: diffViewsFromUnknown(detail),
         note: step.thought || ''
       });
     }
 
     if (message.runSnapshot) {
+      const detail = {
+        run_id: message.runSnapshot.runId,
+        status: message.runSnapshot.status || '',
+        response_type: message.runSnapshot.responseType || '',
+        task_count: message.runSnapshot.tasks.length,
+        approval_count: message.runSnapshot.approvals.length,
+        artifact_count: message.runSnapshot.artifacts.length,
+        approvals: message.runSnapshot.approvals,
+        edit_summaries: message.runSnapshot.editSummaries
+      };
       items.push({
         id: `${message.id}-run-summary`,
         title: 'Run snapshot',
@@ -925,20 +1088,23 @@
         badge: 'run',
         tone: toneClass(message.runSnapshot.status),
         detailTitle: 'Server run snapshot',
-        detail: {
-          run_id: message.runSnapshot.runId,
-          status: message.runSnapshot.status || '',
-          response_type: message.runSnapshot.responseType || '',
-          task_count: message.runSnapshot.tasks.length,
-          approval_count: message.runSnapshot.approvals.length,
-          artifact_count: message.runSnapshot.artifacts.length,
-          approvals: message.runSnapshot.approvals,
-          edit_summaries: message.runSnapshot.editSummaries
-        }
+        detail,
+        diffs: diffViewsFromUnknown(detail)
       });
 
       for (const task of message.runSnapshot.tasks) {
         for (const step of (task.steps ?? []).filter((entry) => entry.kind === 'tool')) {
+          const detail = {
+            task_key: task.task_key,
+            task_title: task.title,
+            task_status: task.status,
+            step_key: step.step_key,
+            step_title: step.title,
+            step_status: step.status,
+            input: step.input,
+            output_preview: step.output_preview || '',
+            metadata: step.metadata || {}
+          };
           items.push({
             id: `${message.id}-server-step-${task.task_id}-${step.step_id}`,
             title: describeRunStep(step),
@@ -948,17 +1114,8 @@
             badge: step.status || 'server',
             tone: toneClass(step.status),
             detailTitle: task.title || 'Server tool step',
-            detail: {
-              task_key: task.task_key,
-              task_title: task.title,
-              task_status: task.status,
-              step_key: step.step_key,
-              step_title: step.title,
-              step_status: step.status,
-              input: step.input,
-              output_preview: step.output_preview || '',
-              metadata: step.metadata || {}
-            },
+            detail,
+            diffs: diffViewsFromUnknown(detail),
             note: step.output_preview || ''
           });
         }
@@ -1913,6 +2070,44 @@
                 <strong>{runTasks.reduce((count, task) => count + (task.steps?.length || 0), 0)}</strong>
               </div>
             </div>
+            {#if runEditSummaries.length > 0}
+              <div class="diff-stack">
+                {#each runEditSummaries as diffView}
+                  <section class="diff-card">
+                    <div class="diff-card-head">
+                      <div>
+                        <div class="diff-file">{diffView.file}</div>
+                        <div class="muted small">{diffView.hunks.length} hunk(s)</div>
+                      </div>
+                      <div class="diff-stats">
+                        <span class="diff-count removed">-{diffView.removed}</span>
+                        <span class="diff-count added">+{diffView.added}</span>
+                        {#if diffView.truncated}
+                          <span class="pill neutral">truncated</span>
+                        {/if}
+                      </div>
+                    </div>
+                    <div class="diff-scroll">
+                      {#each diffView.hunks as hunk}
+                        <div class="diff-hunk">
+                          <div class="diff-hunk-header">{hunk.header}</div>
+                          <div class="diff-grid">
+                            {#each hunk.lines as line}
+                              <div class={`diff-row ${line.type}`}>
+                                <span class="diff-line-no old">{diffLineNumber(line.oldNumber)}</span>
+                                <span class="diff-line-no new">{diffLineNumber(line.newNumber)}</span>
+                                <span class={`diff-line-marker ${line.type}`}>{diffMarker(line.type)}</span>
+                                <span class="diff-line-text">{line.text || ' '}</span>
+                              </div>
+                            {/each}
+                          </div>
+                        </div>
+                      {/each}
+                    </div>
+                  </section>
+                {/each}
+              </div>
+            {/if}
           </div>
         {:else if detailTab === 'approvals'}
           {#if runApprovals.length > 0}
@@ -1973,21 +2168,60 @@
           {/if}
         {:else}
           {#if runArtifacts.length > 0}
-            <div class="detail-list">
-              {#each runArtifacts as artifact}
-                <details class="detail-card disclosure-card">
-                  <summary class="detail-summary">
-                    <div class="row">
-                      <strong>{artifact.title}</strong>
+              <div class="detail-list">
+                {#each runArtifacts as artifact}
+                  {@const artifactDiffs = diffViewsFromUnknown(artifact.content)}
+                  <details class="detail-card disclosure-card">
+                    <summary class="detail-summary">
+                      <div class="row">
+                        <strong>{artifact.title}</strong>
                       <span class="muted small">{artifact.type}</span>
                     </div>
-                    <div class="muted small">Owner: {artifact.owner_agent || 'n/a'}</div>
-                  </summary>
-                  <div class="detail-body">
-                    <pre>{typeof artifact.content === 'string' ? artifact.content : JSON.stringify(artifact.content, null, 2)}</pre>
-                  </div>
-                </details>
-              {/each}
+                      <div class="muted small">Owner: {artifact.owner_agent || 'n/a'}</div>
+                    </summary>
+                    <div class="detail-body">
+                      {#if artifactDiffs.length > 0}
+                        <div class="diff-stack">
+                          {#each artifactDiffs as diffView}
+                            <section class="diff-card">
+                              <div class="diff-card-head">
+                                <div>
+                                  <div class="diff-file">{diffView.file}</div>
+                                  <div class="muted small">{diffView.hunks.length} hunk(s)</div>
+                                </div>
+                                <div class="diff-stats">
+                                  <span class="diff-count removed">-{diffView.removed}</span>
+                                  <span class="diff-count added">+{diffView.added}</span>
+                                  {#if diffView.truncated}
+                                    <span class="pill neutral">truncated</span>
+                                  {/if}
+                                </div>
+                              </div>
+                              <div class="diff-scroll">
+                                {#each diffView.hunks as hunk}
+                                  <div class="diff-hunk">
+                                    <div class="diff-hunk-header">{hunk.header}</div>
+                                    <div class="diff-grid">
+                                      {#each hunk.lines as line}
+                                        <div class={`diff-row ${line.type}`}>
+                                          <span class="diff-line-no old">{diffLineNumber(line.oldNumber)}</span>
+                                          <span class="diff-line-no new">{diffLineNumber(line.newNumber)}</span>
+                                          <span class={`diff-line-marker ${line.type}`}>{diffMarker(line.type)}</span>
+                                          <span class="diff-line-text">{line.text || ' '}</span>
+                                        </div>
+                                      {/each}
+                                    </div>
+                                  </div>
+                                {/each}
+                              </div>
+                            </section>
+                          {/each}
+                        </div>
+                      {/if}
+                      <pre>{typeof artifact.content === 'string' ? artifact.content : JSON.stringify(artifact.content, null, 2)}</pre>
+                    </div>
+                  </details>
+                {/each}
             </div>
           {:else}
             <div class="empty-state">No artifacts are attached to this run.</div>
@@ -2302,6 +2536,44 @@
                                       <div class="activity-result">
                                         {#if item.note && item.note !== item.subtitle}
                                           <div class="details-note">{item.note}</div>
+                                        {/if}
+                                        {#if item.diffs && item.diffs.length > 0}
+                                          <div class="diff-stack">
+                                            {#each item.diffs as diffView}
+                                              <section class="diff-card">
+                                                <div class="diff-card-head">
+                                                  <div>
+                                                    <div class="diff-file">{diffView.file}</div>
+                                                    <div class="muted small">{diffView.hunks.length} hunk(s)</div>
+                                                  </div>
+                                                  <div class="diff-stats">
+                                                    <span class="diff-count removed">-{diffView.removed}</span>
+                                                    <span class="diff-count added">+{diffView.added}</span>
+                                                    {#if diffView.truncated}
+                                                      <span class="pill neutral">truncated</span>
+                                                    {/if}
+                                                  </div>
+                                                </div>
+                                                <div class="diff-scroll">
+                                                  {#each diffView.hunks as hunk}
+                                                    <div class="diff-hunk">
+                                                      <div class="diff-hunk-header">{hunk.header}</div>
+                                                      <div class="diff-grid">
+                                                        {#each hunk.lines as line}
+                                                          <div class={`diff-row ${line.type}`}>
+                                                            <span class="diff-line-no old">{diffLineNumber(line.oldNumber)}</span>
+                                                            <span class="diff-line-no new">{diffLineNumber(line.newNumber)}</span>
+                                                            <span class={`diff-line-marker ${line.type}`}>{diffMarker(line.type)}</span>
+                                                            <span class="diff-line-text">{line.text || ' '}</span>
+                                                          </div>
+                                                        {/each}
+                                                      </div>
+                                                    </div>
+                                                  {/each}
+                                                </div>
+                                              </section>
+                                            {/each}
+                                          </div>
                                         {/if}
                                         <details class="activity-raw">
                                           <summary>Execution result</summary>
@@ -3022,6 +3294,146 @@
     display: grid;
     gap: 8px;
     padding: 0 4px 4px 4px;
+  }
+
+  .diff-stack {
+    display: grid;
+    gap: 10px;
+  }
+
+  .diff-card {
+    display: grid;
+    gap: 0;
+    padding: 0;
+    border-radius: 16px;
+    border: 1px solid rgba(148, 163, 184, 0.14);
+    background: rgba(5, 10, 17, 0.88);
+    overflow: hidden;
+  }
+
+  .diff-card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    padding: 12px 14px;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+    background: linear-gradient(180deg, rgba(16, 26, 40, 0.96) 0%, rgba(8, 14, 22, 0.94) 100%);
+  }
+
+  .diff-file {
+    font-weight: 700;
+    color: #eef5ff;
+    overflow-wrap: anywhere;
+  }
+
+  .diff-stats {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .diff-count {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 52px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+  }
+
+  .diff-count.added {
+    color: #bbf7d0;
+    background: rgba(22, 163, 74, 0.18);
+    border: 1px solid rgba(74, 222, 128, 0.18);
+  }
+
+  .diff-count.removed {
+    color: #fecaca;
+    background: rgba(220, 38, 38, 0.18);
+    border: 1px solid rgba(248, 113, 113, 0.18);
+  }
+
+  .diff-scroll {
+    max-height: 340px;
+    overflow: auto;
+  }
+
+  .diff-hunk + .diff-hunk {
+    border-top: 1px solid rgba(148, 163, 184, 0.08);
+  }
+
+  .diff-hunk-header {
+    padding: 8px 14px;
+    font-family: 'Cascadia Code', 'Fira Code', Consolas, monospace;
+    font-size: 12px;
+    color: rgba(191, 219, 254, 0.84);
+    background: rgba(15, 23, 42, 0.92);
+  }
+
+  .diff-grid {
+    min-width: max-content;
+  }
+
+  .diff-row {
+    display: grid;
+    grid-template-columns: 56px 56px 24px minmax(0, 1fr);
+    align-items: stretch;
+    font-family: 'Cascadia Code', 'Fira Code', Consolas, monospace;
+    font-size: 12px;
+    line-height: 1.55;
+    border-top: 1px solid rgba(148, 163, 184, 0.05);
+  }
+
+  .diff-row.context {
+    background: rgba(255, 255, 255, 0.02);
+  }
+
+  .diff-row.add {
+    background: rgba(22, 163, 74, 0.14);
+  }
+
+  .diff-row.remove {
+    background: rgba(220, 38, 38, 0.14);
+  }
+
+  .diff-line-no,
+  .diff-line-marker,
+  .diff-line-text {
+    padding: 5px 10px;
+    white-space: pre;
+  }
+
+  .diff-line-no {
+    text-align: right;
+    color: rgba(148, 163, 184, 0.72);
+    border-right: 1px solid rgba(148, 163, 184, 0.08);
+    user-select: none;
+  }
+
+  .diff-line-marker {
+    text-align: center;
+    color: rgba(226, 232, 240, 0.92);
+    border-right: 1px solid rgba(148, 163, 184, 0.08);
+    user-select: none;
+  }
+
+  .diff-line-marker.add {
+    color: #bbf7d0;
+  }
+
+  .diff-line-marker.remove {
+    color: #fecaca;
+  }
+
+  .diff-line-text {
+    overflow-x: auto;
+    color: #e6edf7;
   }
 
   .activity-raw {

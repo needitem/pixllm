@@ -53,6 +53,26 @@ PIXLLM은 로컬 코드베이스를 기준으로 질문하고, 실행 로그와 
 - `이 기능을 수정하려면 어떤 파일을 먼저 봐야 하는지 알려줘`
 - `이 저장소에서 API 호출 경로를 정리해줘`
 
+## 코드 수정 요청 예시
+
+실제 수정 요청도 바로 보낼 수 있습니다. 아래 캡처는 `TEST` 워크스페이스에서 `desktop-edit-check/demo.js` 파일의 `return "before"` 를 `return "after"` 로 바꾸라고 요청한 실제 화면입니다.
+
+### 1. 수정 요청 입력
+
+![코드 수정 요청 입력 화면](docs/assets/pixllm-desktop-edit-prompt-flow.png)
+
+### 2. 수정 완료 응답
+
+![코드 수정 완료 화면](docs/assets/pixllm-desktop-edit-response-flow.png)
+
+### 3. 변경 diff 확인
+
+수정이 끝난 뒤에는 같은 실행 로그 안에서 `edit` 단계를 열어, 어떤 줄이 빠지고 어떤 줄이 추가됐는지 라인 번호와 함께 바로 확인할 수 있습니다.
+
+![코드 수정 diff 화면](docs/assets/pixllm-desktop-edit-diff-flow.png)
+
+이 테스트에서는 실제로 파일이 저장됐고, 실행 로그에도 `read_file` 다음 `edit` 단계가 기록됐습니다. 위 diff 화면도 같은 실제 실행 결과에서 캡처한 것으로, 삭제 줄은 빨간색, 추가 줄은 초록색으로 표시됩니다.
+
 ## 빠른 시작
 
 ### 백엔드 실행

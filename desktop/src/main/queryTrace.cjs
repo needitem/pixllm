@@ -276,20 +276,30 @@ function summarizeObservation(toolName, observation, maxChars = 16000) {
     };
   }
   if (toolName === 'write' || toolName === 'write_file') {
+    const diffText = String(payload.diff || '');
     return {
       ok: Boolean(payload.ok),
       path: payload.path || '',
       bytes: Number(payload.bytes || 0),
+      added: Number(payload.added || 0),
+      removed: Number(payload.removed || 0),
+      diff: diffText.slice(0, maxChars),
+      diff_truncated: Boolean(payload.diff_truncated) || diffText.length > maxChars,
       error: payload.error || '',
       message: payload.message || '',
     };
   }
   if (toolName === 'edit' || toolName === 'replace_in_file') {
+    const diffText = String(payload.diff || '');
     return {
       ok: Boolean(payload.ok),
       path: payload.path || '',
       occurrences: Number(payload.occurrences || 0),
       replace_all: Boolean(payload.replace_all || payload.replaceAll),
+      added: Number(payload.added || 0),
+      removed: Number(payload.removed || 0),
+      diff: diffText.slice(0, maxChars),
+      diff_truncated: Boolean(payload.diff_truncated) || diffText.length > maxChars,
       error: payload.error || '',
       message: payload.message || '',
     };
