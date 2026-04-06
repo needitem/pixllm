@@ -12,6 +12,7 @@ from ..deps import state
 from ..envelopes import ok, ApiError
 from ..schemas.llm import LlmChatCompletionRequest, LlmTokenizeRequest
 from ..core.llm_utils import (
+    fallback_model_name,
     safe_chat_completion_create,
     extract_completion_finish_reason,
     extract_message_tool_calls,
@@ -137,9 +138,10 @@ async def llm_tokenize(request: LlmTokenizeRequest):
     if state.vllm_client is None:
         raise ApiError("LLM_UNAVAILABLE", "vLLM client is not initialized", status_code=503)
 
+    resolved_model = fallback_model_name(request.model, client=state.vllm_client) or request.model
     request_body = json.dumps(
         {
-            "model": request.model,
+            "model": resolved_model,
             "messages": [message.model_dump() for message in list(request.messages or [])],
             "return_token_strs": bool(request.return_token_strs),
         },
