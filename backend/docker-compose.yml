@@ -25,8 +25,9 @@ services:
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-pixllm2024!}
       MINIO_BUCKET: ${MINIO_BUCKET:-documents}
       VLLM_URL: ${VLLM_URL:-http://192.168.2.212:8001}
-      # Switch models by commenting/uncommenting VLLM_MODEL in backend/.env.
-      VLLM_MODEL: ${VLLM_MODEL:-Jackrong/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled}
+      # Default to the official Qwen 3.5 model family. Keep the served model alias
+      # on the vLLM side as `qwen3.5-27b` if desktop clients reference that name.
+      VLLM_MODEL: ${VLLM_MODEL:-Qwen/Qwen3.5-27B}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-BAAI/bge-m3}
       EMBEDDING_DEVICE: ${EMBEDDING_DEVICE:-cuda}
       EMBEDDING_USE_FP16: ${EMBEDDING_USE_FP16:-true}

@@ -146,6 +146,22 @@ function CompanyReferenceSearchTool() {
     laneAffinity: ['read', 'flow', 'compare', 'review', 'failure'],
     isReadOnly: () => true,
     isConcurrencySafe: () => true,
+    getObservationEvidenceKinds: (observation) => {
+      const windows = Array.isArray(observation?.windows) ? observation.windows : [];
+      const docChunks = Array.isArray(observation?.doc_chunks) ? observation.doc_chunks : [];
+      const hasInspection = windows.some((item) => toStringValue(item?.content))
+        || docChunks.some((item) => toStringValue(item?.content));
+      if (hasInspection) {
+        return ['inspection', 'reference'];
+      }
+      const matches = Array.isArray(observation?.matches) ? observation.matches : [];
+      const docResults = Array.isArray(observation?.doc_results) ? observation.doc_results : [];
+      const citations = Array.isArray(observation?.citations) ? observation.citations : [];
+      if (matches.length > 0 || docResults.length > 0 || citations.length > 0) {
+        return ['discovery', 'reference'];
+      }
+      return ['reference'];
+    },
     userFacingName: () => 'Company reference search',
     getToolUseSummary: (input) => `Search company reference: ${toStringValue(input?.query).slice(0, 80)}`,
     async description() {

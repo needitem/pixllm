@@ -1,15 +1,16 @@
 const path = require('node:path');
 
 const TOOL_GROUPS = {
-  always: [
-    'todo_read',
-    'todo_write',
-    'ask_user_question',
-    'brief',
-    'sleep',
+  always: [],
+  runtime_read: [],
+  runtime_meta: [
     'tool_search',
   ],
-  runtime_read: [
+  todo: [
+    'todo_read',
+    'todo_write',
+  ],
+  runtime_tasks: [
     'terminal_capture',
     'task_get',
     'task_list',
@@ -148,23 +149,24 @@ function analyzeIntent(prompt, directives = {}) {
   const source = toStringValue(prompt).toLowerCase();
   return {
     wantsChanges: Boolean(directives.change) || matchesAny(source, [
-      /(fix|change|edit|modify|refactor|implement|add|improve|update|rewrite|create|write|patch)/i,
+      /\b(fix|change|edit|modify|refactor|implement|add|improve|update|rewrite|create|write|patch)\b/i,
       /\uACE0\uCCD0|\uAC1C\uC120|\uC218\uC815|\uAD6C\uD604|\uCD94\uAC00/i,
     ]),
     wantsExecution: Boolean(directives.exec) || matchesAny(source, [
-      /(build|test|run|execute|compile|diagnos|lint|verify|benchmark|profile|powershell|shell|command|git|diff)/i,
+      /\b(build|test|run|execute|compile|diagnos|lint|verify|benchmark|profile|powershell|shell|command|git|diff)\b/i,
       /\uBE4C\uB4DC|\uD14C\uC2A4\uD2B8|\uC2E4\uD589|\uAC80\uC99D/i,
     ]),
     wantsAnalysis: Boolean(directives.analysis) || matchesAny(source, [
-      /(analy|compare|review|inspect|investigate|trace|understand|audit)/i,
-      /\uD750\uB984|\uBD84\uC11D|\uBE44\uAD50|\uB9AC\uBDF0|\uD30C\uC545/i,
+      /\b(analy(?:s|z)|compare|review|inspect|investigate|trace|understand|audit|explain|summari(?:s|z)e|search|find|locat(?:e|ion)|look up|open|read)\b/i,
+      /\b(flow|implementation|codebase|workspace|symbol|reference)\b/i,
+      /\uD750\uB984|\uBD84\uC11D|\uBE44\uAD50|\uB9AC\uBDF0|\uD30C\uC545|\uC124\uBA85|\uC694\uC57D|\uCC3E|\uAC80\uC0C9|\uC5F4\uC5B4|\uC77D/i,
     ]),
     createLikely: matchesAny(source, [
-      /(create|add|new file|new test|scaffold|generate)/i,
+      /\b(create|add|new file|new test|scaffold|generate)\b/i,
       /\uC0DD\uC131|\uCD94\uAC00|\uD30C\uC77C/i,
     ]),
     compareLikely: matchesAny(source, [
-      /(compare|diff|versus|vs)/i,
+      /\b(compare|diff|versus|vs)\b/i,
       /\uBE44\uAD50|\uCC28\uC774/i,
     ]),
   };
@@ -177,9 +179,13 @@ function analyzeFocus(prompt, directives = {}) {
     /\uC0AC\uB0B4|\uB0B4\uBD80|\uCC38\uACE0|\uC9C0\uC2DD|\uC5D4\uC9C4/i,
   ]);
   const mentionsConfig = Boolean(directives.config) || /(config|setting|option|base url|api token|endpoint)/i.test(source);
+  const mentionsTodo = /\b(todo|checklist|task list)\b/i.test(source) || /\uD560 \uC77C|\uCCB4\uD06C\uB9AC\uC2A4\uD2B8/i.test(source);
+  const mentionsRuntimeTask = /\b(task|terminal output|background job|job output|capture)\b/i.test(source) || /\uD0DC\uC2A4\uD06C|\uD130\uBBF8\uB110|\uCD9C\uB825|\uBC31\uADF8\uB77C\uC6B4\uB4DC/i.test(source);
   return {
     mentionsCompanyReference,
     mentionsConfig,
+    mentionsTodo,
+    mentionsRuntimeTask,
   };
 }
 
@@ -200,16 +206,43 @@ function deriveEvidencePreference({ intent = {}, focus = {}, directives = {}, ha
 }
 
 function deriveInitialToolNames({
+  prompt = '',
   intent = {},
   focus = {},
+  directives = {},
+  explicitPaths = [],
   hasWorkspacePath = false,
   evidencePreference = 'workspace',
 } = {}) {
   const names = new Set();
   addTools(names, TOOL_GROUPS.always);
-  addTools(names, TOOL_GROUPS.runtime_read);
+  const source = toStringValue(prompt);
+  const directiveCount = Object.values(directives || {}).filter(Boolean).length;
+  const shouldAskUser =
+    !source
+    || (
+      source.length < 10
+      && !intent.wantsAnalysis
+      && !intent.wantsChanges
+      && !intent.wantsExecution
+      && !focus.mentionsTodo
+      && !focus.mentionsRuntimeTask
+      && !focus.mentionsConfig
+      && !focus.mentionsCompanyReference
+      && (!Array.isArray(explicitPaths) || explicitPaths.length === 0)
+      && directiveCount === 0
+    );
+  if (shouldAskUser) {
+    names.add('ask_user_question');
+  }
   if (focus.mentionsConfig) {
     addTools(names, TOOL_GROUPS.config);
+  }
+  if (focus.mentionsTodo) {
+    addTools(names, TOOL_GROUPS.todo);
+  }
+  if (focus.mentionsRuntimeTask) {
+    addTools(names, TOOL_GROUPS.runtime_tasks);
   }
 
   if (evidencePreference === 'reference') {
@@ -230,13 +263,14 @@ function deriveInitialToolNames({
     if (hasWorkspacePath) {
       addTools(names, TOOL_GROUPS.path_read);
     }
-    if (!hasWorkspacePath || intent.wantsAnalysis || intent.compareLikely || intent.wantsChanges || intent.wantsExecution) {
+    if (intent.wantsAnalysis || intent.compareLikely || intent.wantsChanges || intent.wantsExecution) {
       addTools(names, TOOL_GROUPS.workspace_discovery);
     }
   }
 
   if (intent.wantsExecution) {
     addTools(names, TOOL_GROUPS.execution);
+    addTools(names, TOOL_GROUPS.runtime_tasks);
   }
   return Array.from(names);
 }
@@ -314,8 +348,11 @@ function createRunRequestContext({ prompt = '', workspacePath = '', selectedFile
     hasWorkspacePath,
   });
   const initialToolNames = uniqStrings(deriveInitialToolNames({
+    prompt,
     intent,
     focus,
+    directives,
+    explicitPaths,
     hasWorkspacePath,
     evidencePreference,
   }));
@@ -330,7 +367,6 @@ function createRunRequestContext({ prompt = '', workspacePath = '', selectedFile
     intent,
     focus,
     directives,
-    analysisOnly: Boolean(intent.wantsAnalysis && !intent.wantsChanges && !intent.wantsExecution),
     evidencePreference,
     prefersReferenceTools,
     initialToolNames,

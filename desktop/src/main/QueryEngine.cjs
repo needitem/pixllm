@@ -9,6 +9,7 @@ const {
   createToolUseBlock,
   normalizeMessageBlocks,
   parseAssistantResponse,
+  extractStreamingToolCalls,
   serializeBlocks,
   flattenMessagesForModel,
   extractTextFromBlocks,
@@ -16,6 +17,7 @@ const {
   buildSystemPrompt,
   toStringValue,
 } = require('./query.cjs');
+const { checkNextSpeaker } = require('./query/nextSpeakerCheck.cjs');
 const { loadAgentState, saveAgentState } = require('./state/agentStateStore.cjs');
 const { listTasks, listTerminalCaptures } = require('./tasks/taskRuntime.cjs');
 const {
@@ -37,7 +39,6 @@ const MAX_TRANSITIONS = 64;
 const MAX_UNGROUNDED_ANSWER_RETRIES = 2;
 const MAX_NO_PROGRESS_RETRIES = 2;
 const MAX_REPEATED_TOOL_BATCHES = 3;
-
 function toSerializableTraceStep(step = {}) {
   return {
     round: Number(step?.round || 0),
@@ -238,41 +239,43 @@ function toolUseCacheKey(toolUse = {}) {
   return `${toStringValue(toolUse?.name)}:${stableSerialize(toolUse?.input || {})}`;
 }
 
+function lastAssistantBlockType(blocks = []) {
+  const items = Array.isArray(blocks) ? blocks : [];
+  const lastBlock = items.length > 0 ? items[items.length - 1] : null;
+  return toStringValue(lastBlock?.type).toLowerCase();
+}
+
+function isResultSuccessful(message = null, stopReason = '') {
+  if (!message || toStringValue(message?.role).toLowerCase() !== 'assistant') {
+    return false;
+  }
+  const lastType = lastAssistantBlockType(message?.content);
+  if (lastType === 'text' || lastType === 'thinking' || lastType === 'redacted_thinking') {
+    return true;
+  }
+  // Anthropic uses end_turn; OpenAI-compatible backends usually surface stop.
+  return /^(stop|end_turn)$/i.test(toStringValue(stopReason));
+}
+
 async function describeTools(toolCollection, allowedToolNames = []) {
   const allowed = new Set((Array.isArray(allowedToolNames) ? allowedToolNames : []).map((item) => toStringValue(item)));
   const items = [];
   for (const tool of Array.isArray(toolCollection?.tools) ? toolCollection.tools : []) {
     if (allowed.size > 0 && !allowed.has(toStringValue(tool?.name))) continue;
     const description = await tool.description();
-    const aliases = Array.isArray(tool?.aliases) && tool.aliases.length > 0
-      ? ` [aliases: ${tool.aliases.join(', ')}]`
-      : '';
-    items.push(`- ${tool.name}${aliases}: ${description}`);
-  }
-  return items.join('\n');
-}
-
-async function describeToolsForModel(toolCollection, allowedToolNames = []) {
-  const allowed = new Set((Array.isArray(allowedToolNames) ? allowedToolNames : []).map((item) => toStringValue(item)));
-  const items = [];
-  for (const tool of Array.isArray(toolCollection?.tools) ? toolCollection.tools : []) {
-    if (allowed.size > 0 && !allowed.has(toStringValue(tool?.name))) continue;
-    const description = typeof tool?.description === 'function'
-      ? await tool.description()
-      : toStringValue(tool?.searchHint);
     items.push({
-      type: 'function',
-      function: {
-        name: toStringValue(tool?.name),
-        description: toStringValue(description),
-        parameters:
-          tool?.inputSchema && typeof tool.inputSchema === 'object' && !Array.isArray(tool.inputSchema)
-            ? tool.inputSchema
-            : { type: 'object', properties: {}, additionalProperties: false },
-      },
+      name: toStringValue(tool?.name),
+      description: toStringValue(description),
+      parameters: tool?.inputSchema && typeof tool.inputSchema === 'object' && !Array.isArray(tool.inputSchema)
+        ? tool.inputSchema
+        : {
+            type: 'object',
+            properties: {},
+            additionalProperties: false,
+          },
     });
   }
-  return items.filter((tool) => tool.function.name);
+  return items;
 }
 
 function buildUserBlocks(prompt, selectedFilePath = '') {
@@ -625,21 +628,18 @@ class QueryEngine {
     signal = null,
     onModelToken = async () => {},
     onToolCalls = async () => {},
-    modelTools = [],
   } = {}) {
     let lastError = null;
     for (let attempt = 0; attempt <= MAX_MODEL_RETRIES; attempt += 1) {
-        try {
-          const maxTokens = Math.max(1600, Number(this.state.maxOutputTokensOverride || 0) || 1600);
-          const result = await streamModelCompletion({
-            baseUrl: this.llmBaseUrl || this.baseUrl || this.serverBaseUrl,
-            apiToken: this.llmApiToken || this.apiToken || this.serverApiToken,
-            fallbackBaseUrl: this.serverBaseUrl,
-            fallbackApiToken: this.serverApiToken,
-            model: this.model,
-            messages,
-            tools: Array.isArray(modelTools) ? modelTools : [],
-          toolChoice: 'auto',
+      try {
+        const maxTokens = Math.max(1600, Number(this.state.maxOutputTokensOverride || 0) || 1600);
+        const result = await streamModelCompletion({
+          baseUrl: this.llmBaseUrl || this.baseUrl || this.serverBaseUrl,
+          apiToken: this.llmApiToken || this.apiToken || this.serverApiToken,
+          fallbackBaseUrl: this.serverBaseUrl,
+          fallbackApiToken: this.serverApiToken,
+          model: this.model,
+          messages,
           maxTokens,
           temperature: 0.2,
           signal,
@@ -690,7 +690,7 @@ class QueryEngine {
       onToolResult,
       getAssistantText,
       parseToolInput: safeJsonParseObject,
-      toolUseKey,
+      toolUseKey: toolUseCacheKey,
     });
   }
 
@@ -834,12 +834,41 @@ class QueryEngine {
 
   _modelMessages(systemPrompt) {
     const runtimeContext = this._runtimeContextMessage();
+    const mergedSystemPrompt = [
+      toStringValue(systemPrompt),
+      toStringValue(this.projectContextPrompt),
+      toStringValue(runtimeContext),
+    ].filter(Boolean).join('\n\n');
     return [
-      { role: 'system', content: systemPrompt },
-      ...(this.projectContextPrompt ? [{ role: 'system', content: this.projectContextPrompt }] : []),
-      ...(runtimeContext ? [{ role: 'system', content: runtimeContext }] : []),
+      { role: 'system', content: mergedSystemPrompt },
       ...flattenMessagesForModel(this.state.messages),
     ];
+  }
+
+  async _checkNextSpeaker(assistantMessage, { signal = null, turn = 0 } = {}) {
+    const result = await checkNextSpeaker({
+      baseUrl: this.llmBaseUrl || this.baseUrl || this.serverBaseUrl,
+      apiToken: this.llmApiToken || this.apiToken || this.serverApiToken,
+      fallbackBaseUrl: this.serverBaseUrl,
+      fallbackApiToken: this.serverApiToken,
+      model: this.model,
+      assistantMessage,
+      signal,
+    });
+    if (result) {
+      this._recordTranscript({
+        kind: 'next_speaker_check',
+        turn,
+        nextSpeaker: toStringValue(result.next_speaker),
+        reasoning: toStringValue(result.reasoning).slice(0, 320),
+      });
+      this._recordTransition('next_speaker_check', {
+        turn,
+        nextSpeaker: toStringValue(result.next_speaker),
+      });
+      this._persistState();
+    }
+    return result;
   }
 
   async run({
@@ -958,12 +987,11 @@ class QueryEngine {
         }
 
         const activeToolNames = this._activeToolNames(turn);
-        const toolDescriptions = await this._describeTools(activeToolNames);
-        const modelTools = await describeToolsForModel(this.tools, activeToolNames);
+        const toolDefinitions = await this._describeTools(activeToolNames);
         const systemPrompt = buildSystemPrompt({
           workspacePath: this.workspacePath,
           selectedFilePath: this.selectedFilePath,
-          toolDescriptions,
+          toolDefinitions,
         });
 
         await onStatus({
@@ -983,12 +1011,12 @@ class QueryEngine {
         try {
           completion = await this._callModel(this._modelMessages(systemPrompt), {
             signal,
-            modelTools,
             onToolCalls: async (toolCalls) => {
               streamingPrefetch.sync(toolCalls);
             },
             onModelToken: async (payload) => {
               streamedAssistantText = toStringValue(payload?.aggregate || payload?.preview || '');
+              streamingPrefetch.sync(extractStreamingToolCalls(streamedAssistantText));
               await onModelToken({
                 ...payload,
                 turn,
@@ -1041,14 +1069,15 @@ class QueryEngine {
           continue;
         }
 
-        const parsed = parseAssistantResponse(
-          Array.isArray(completion?.tool_calls) && completion.tool_calls.length > 0
-            ? {
-                text: rawText,
-                tool_calls: completion.tool_calls,
-              }
-            : rawText,
-        );
+        const parsed = parseAssistantResponse({
+          text: rawText,
+          tool_calls: Array.isArray(completion?.tool_calls) ? completion.tool_calls : [],
+          reasoning_content: toStringValue(completion?.reasoning_content || ''),
+          recovery_context: {
+            user_prompt: toStringValue(runContext?.prompt || prompt),
+            active_tool_names: activeToolNames,
+          },
+        });
         if (!parsed.ok) {
           if (hitOutputLimit && this.state.maxOutputTokensRecoveryCount < MAX_OUTPUT_TOKENS_RECOVERY_LIMIT) {
             this.state.maxOutputTokensRecoveryCount += 1;
@@ -1089,6 +1118,7 @@ class QueryEngine {
         const assistantBlocks = parsed.blocks;
         const assistantText = extractTextFromBlocks(assistantBlocks);
         const toolUses = toolUseBlocks(assistantBlocks);
+        let needsFollowUp = toolUses.length > 0;
         if (toolUses.length === 0) {
           const recoveredStreaming = await this._recoverStreamingToolPrefetch({
             streamingPrefetch,
@@ -1097,6 +1127,7 @@ class QueryEngine {
             reason: 'streaming_partial_tool_calls',
           });
           if (recoveredStreaming.toolUses.length > 0) {
+            needsFollowUp = true;
             this._persistState();
             continue;
           }
@@ -1157,34 +1188,77 @@ class QueryEngine {
           continue;
         }
 
-        if (toolUses.length === 0 && assistantText) {
+        const assistantMessage = { role: 'assistant', content: assistantBlocks };
+        if (!needsFollowUp && isResultSuccessful(assistantMessage, finishReason)) {
+          const nextSpeakerCheck = await this._checkNextSpeaker(assistantMessage, {
+            signal,
+            turn,
+          });
+          if (toStringValue(nextSpeakerCheck?.next_speaker).toLowerCase() === 'model') {
+            this._pushMetaUserMessage('Please continue.', {
+              turn,
+              hook: 'next_speaker',
+              reasoning: toStringValue(nextSpeakerCheck?.reasoning).slice(0, 240),
+            });
+            this._recordTransition('next_speaker_continue', {
+              turn,
+              reasoning: toStringValue(nextSpeakerCheck?.reasoning).slice(0, 160),
+            });
+            this._persistState();
+            continue;
+          }
           const finalAnswer = joinAnswerFragments(this.state.pendingAssistantContinuation, assistantText);
+          const runTrace = this.state.trace.slice(traceStartIndex);
+          const finalAnswerCheck = this.runtime.evaluateFinalAnswer(finalAnswer, {
+            trace: runTrace,
+            turn,
+          });
+          if (!finalAnswerCheck?.ok && finalAnswerCheck?.type === 'policy') {
+            this.state.pendingAssistantContinuation = '';
+            this.state.maxOutputTokensRecoveryCount = 0;
+            this.state.maxOutputTokensOverride = 0;
+            this._pushMetaUserMessage(
+              toStringValue(finalAnswerCheck.blockingMessage)
+                || 'Do not finalize yet. Inspect the relevant source directly before answering.',
+              {
+                turn,
+                hook: toStringValue(finalAnswerCheck.reason || 'final_answer_policy'),
+                candidatePaths: Array.isArray(finalAnswerCheck?.details?.candidatePaths)
+                  ? finalAnswerCheck.details.candidatePaths.slice(0, 6)
+                  : [],
+                successfulToolNames: Array.isArray(finalAnswerCheck?.details?.successfulToolNames)
+                  ? finalAnswerCheck.details.successfulToolNames.slice(0, 8)
+                  : [],
+              },
+            );
+            this._recordTransition('final_answer_policy_retry', {
+              turn,
+              reason: toStringValue(finalAnswerCheck.reason || 'final_answer_policy'),
+            });
+            this._persistState();
+            continue;
+          }
           this.state.pendingAssistantContinuation = '';
           this.state.maxOutputTokensRecoveryCount = 0;
           this.state.maxOutputTokensOverride = 0;
           this.state.repeatedToolBatchSignature = '';
           this.state.repeatedToolBatchCount = 0;
-          const runTrace = this.state.trace.slice(traceStartIndex);
-          const grounded = this.runtime.ensureGroundedFinalAnswer(finalAnswer, {
-            trace: runTrace,
-            turn,
-          });
-          if (!grounded?.ok) {
+          if (!finalAnswerCheck?.ok && finalAnswerCheck?.type === 'grounding') {
             this._pushMetaUserMessage(
-              `Your previous answer referenced ungrounded sources: ${(Array.isArray(grounded?.mentions) ? grounded.mentions : []).join(', ')}. Revise the answer using only paths or sources already shown in tool results, or say the missing detail is unverified.`,
+              `Your previous answer referenced ungrounded sources: ${(Array.isArray(finalAnswerCheck?.mentions) ? finalAnswerCheck.mentions : []).join(', ')}. Revise the answer using only paths or sources already shown in tool results, or say the missing detail is unverified.`,
               {
                 turn,
-                retryCount: Number(grounded?.retryCount || 0),
-                mentions: Array.isArray(grounded?.mentions) ? grounded.mentions.slice(0, 8) : [],
+                retryCount: Number(finalAnswerCheck?.retryCount || 0),
+                mentions: Array.isArray(finalAnswerCheck?.mentions) ? finalAnswerCheck.mentions.slice(0, 8) : [],
               },
             );
             this._recordTransition('ungrounded_answer_retry', {
               turn,
-              retryCount: Number(grounded?.retryCount || 0),
-              count: Array.isArray(grounded?.mentions) ? grounded.mentions.length : 0,
+              retryCount: Number(finalAnswerCheck?.retryCount || 0),
+              count: Array.isArray(finalAnswerCheck?.mentions) ? finalAnswerCheck.mentions.length : 0,
             });
             this._persistState();
-            if (Number(grounded?.retryCount || 0) > MAX_UNGROUNDED_ANSWER_RETRIES) {
+            if (Number(finalAnswerCheck?.retryCount || 0) > MAX_UNGROUNDED_ANSWER_RETRIES) {
               this.state.terminalReason = 'ungrounded_answer';
               break;
             }
@@ -1192,7 +1266,9 @@ class QueryEngine {
           }
           this.state.terminalReason = 'final_answer';
           await onStatus({ phase: 'finalize', message: 'Finalizing answer...' });
-          await onToken(finalAnswer);
+          if (finalAnswer) {
+            await onToken(finalAnswer);
+          }
           const readObservations = readObservationsFromTrace(runTrace);
           const primary = readObservations[0] || {};
           this._recordTranscript({

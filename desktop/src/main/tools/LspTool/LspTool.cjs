@@ -48,6 +48,16 @@ function LspTool(options = {}) {
     laneAffinity: ['read', 'flow', 'compare', 'review', 'failure'],
     isReadOnly: () => true,
     isConcurrencySafe: (input) => toStringValue(input?.action || input?.operation).toLowerCase() !== 'diagnostics',
+    getObservationEvidenceKinds: (_observation, input) => {
+      const action = toStringValue(input?.action || input?.operation).toLowerCase();
+      if (action === 'document_symbols' || action === 'read_symbol') {
+        return ['inspection'];
+      }
+      if (action === 'workspace_symbols' || action === 'references' || action === 'callers') {
+        return ['discovery'];
+      }
+      return [];
+    },
     userFacingName: () => 'Code intelligence',
     getToolUseSummary: (input) => {
       const action = toStringValue(input?.action || input?.operation);

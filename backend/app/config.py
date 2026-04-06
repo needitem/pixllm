@@ -62,7 +62,7 @@ MINIO_ACCESS_KEY = env("MINIO_ACCESS_KEY", "pixllm")
 MINIO_SECRET_KEY = env("MINIO_SECRET_KEY", "")
 MINIO_BUCKET = env("MINIO_BUCKET", "documents")
 VLLM_URL = env("VLLM_URL", "http://vllm:8000")
-VLLM_MODEL = env("VLLM_MODEL", "Jackrong/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled")
+VLLM_MODEL = env("VLLM_MODEL", "Qwen/Qwen3.5-27B")
 
 # Embedding.
 EMBEDDING_MODEL = env("EMBEDDING_MODEL", "BAAI/bge-m3")

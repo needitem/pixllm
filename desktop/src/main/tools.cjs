@@ -341,6 +341,7 @@ function getAllLocalBaseTools(limits = {}) {
       laneAffinity: ['read', 'flow', 'review'],
       isReadOnly: () => true,
       isConcurrencySafe: () => true,
+      getObservationEvidenceKinds: () => ['discovery'],
       async description() {
         return 'Search Claude-style project context files such as CLAUDE.md, .claude/settings.json, skills, commands, and agents';
       },
@@ -384,6 +385,7 @@ function getAllLocalBaseTools(limits = {}) {
     ...createTaskTools(),
     defineLocalTool({
       name: 'list_files',
+      aliases: ['list_directory', 'ls', 'dir'],
       kind: 'list',
       inputSchema: objectSchema({
         limit: integerSchema('Maximum number of files to list', { minimum: 1 }),
@@ -392,6 +394,7 @@ function getAllLocalBaseTools(limits = {}) {
       laneAffinity: ['read', 'flow', 'compare', 'review', 'failure', 'change'],
       isReadOnly: () => true,
       isConcurrencySafe: () => true,
+      getObservationEvidenceKinds: () => ['discovery'],
       async description() {
         return 'List workspace files';
       },
@@ -403,7 +406,7 @@ function getAllLocalBaseTools(limits = {}) {
     }),
     defineLocalTool({
       name: 'glob',
-      aliases: ['glob_files', 'Glob'],
+      aliases: ['glob_files', 'Glob', 'search_files', 'find_files'],
       kind: 'list',
       inputSchema: objectSchema({
         pattern: stringSchema('Wildcard path pattern such as src/**/*.ts'),
@@ -413,6 +416,7 @@ function getAllLocalBaseTools(limits = {}) {
       laneAffinity: ['read', 'review', 'change', 'failure'],
       isReadOnly: () => true,
       isConcurrencySafe: () => true,
+      getObservationEvidenceKinds: () => ['discovery'],
       async description() {
         return 'List workspace files that match a wildcard path pattern';
       },
@@ -432,6 +436,7 @@ function getAllLocalBaseTools(limits = {}) {
     }),
     defineLocalTool({
       name: 'grep',
+      aliases: ['search', 'rgrep', 'ripgrep', 'search_code'],
       kind: 'search',
       inputSchema: objectSchema({
         query: stringSchema('Search string or simple regex-like pattern'),
@@ -441,6 +446,7 @@ function getAllLocalBaseTools(limits = {}) {
       laneAffinity: ['read', 'flow', 'compare', 'review', 'failure', 'change'],
       isReadOnly: () => true,
       isConcurrencySafe: () => true,
+      getObservationEvidenceKinds: () => ['discovery'],
       async description() {
         return 'Search workspace text';
       },
@@ -454,6 +460,7 @@ function getAllLocalBaseTools(limits = {}) {
     }),
     defineLocalTool({
       name: 'find_symbol',
+      aliases: ['search_symbol', 'find_definition'],
       kind: 'search',
       inputSchema: objectSchema({
         symbol: stringSchema('Symbol name to locate'),
@@ -464,6 +471,7 @@ function getAllLocalBaseTools(limits = {}) {
       laneAffinity: ['read', 'flow', 'compare', 'failure'],
       isReadOnly: () => true,
       isConcurrencySafe: () => true,
+      getObservationEvidenceKinds: () => ['discovery'],
       async description() {
         return 'Find symbol definitions in workspace code';
       },
@@ -486,6 +494,7 @@ function getAllLocalBaseTools(limits = {}) {
       laneAffinity: ['flow', 'failure'],
       isReadOnly: () => true,
       isConcurrencySafe: () => true,
+      getObservationEvidenceKinds: () => ['discovery'],
       async description() {
         return 'Find symbol callers';
       },
@@ -508,6 +517,7 @@ function getAllLocalBaseTools(limits = {}) {
       laneAffinity: ['flow', 'compare', 'failure', 'review'],
       isReadOnly: () => true,
       isConcurrencySafe: () => true,
+      getObservationEvidenceKinds: () => ['discovery'],
       async description() {
         return 'Find symbol references';
       },
@@ -533,6 +543,7 @@ function getAllLocalBaseTools(limits = {}) {
       laneAffinity: ['read', 'flow', 'compare', 'review', 'failure'],
       isReadOnly: () => true,
       isConcurrencySafe: () => true,
+      getObservationEvidenceKinds: () => ['inspection'],
       async description() {
         return 'Read a symbol span from a workspace file';
       },
@@ -563,6 +574,7 @@ function getAllLocalBaseTools(limits = {}) {
       laneAffinity: ['read', 'flow', 'compare'],
       isReadOnly: () => true,
       isConcurrencySafe: () => true,
+      getObservationEvidenceKinds: () => ['inspection'],
       async description() {
         return 'Read symbol outline for a file';
       },
@@ -589,6 +601,7 @@ function getAllLocalBaseTools(limits = {}) {
       laneAffinity: ['flow', 'failure', 'review'],
       isReadOnly: () => true,
       isConcurrencySafe: () => true,
+      getObservationEvidenceKinds: () => ['inspection'],
       async description() {
         return 'Read the enclosing symbol around a line';
       },

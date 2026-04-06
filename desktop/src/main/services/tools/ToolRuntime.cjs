@@ -1,11 +1,14 @@
 const { processUserInput } = require('../../utils/processUserInput/processUserInput.cjs');
 const { canUseTool: authorizeLocalToolUse, collectGroundedPaths } = require('../../hooks/useCanUseTool.cjs');
 const { findUngroundedSourceMentions } = require('../../query/sourceGuard.cjs');
+const { evaluateFinalAnswerPolicy } = require('../../query/finalizationPolicy.cjs');
 const { createToolResultBlock, toStringValue } = require('../../query.cjs');
 const { summarizeObservation, failedSteps } = require('../../queryTrace.cjs');
 
 const MUTATION_TOOL_NAMES = new Set(['write', 'edit', 'notebook_edit']);
 const EXECUTION_TOOL_NAMES = new Set(['run_build', 'bash', 'powershell', 'task_create', 'task_update', 'task_stop']);
+const RUNTIME_TASK_READ_TOOL_NAMES = new Set(['terminal_capture', 'task_get', 'task_list', 'task_output']);
+const META_RECOVERY_TOOL_NAMES = new Set(['ask_user_question', 'tool_search']);
 const READ_CONTEXT_TOOL_NAMES = new Set([
   'list_files',
   'glob',
@@ -187,7 +190,7 @@ class ToolRuntime {
         .map((tool) => toStringValue(tool?.name))
         .filter(Boolean),
     );
-    const seeded = Array.isArray(this.requestContext?.initialToolNames) && this.requestContext.initialToolNames.length > 0
+    const seeded = Array.isArray(this.requestContext?.initialToolNames)
       ? this.requestContext.initialToolNames
       : Array.from(available);
     const active = new Set(seeded.filter((name) => available.has(name)));
@@ -211,6 +214,15 @@ class ToolRuntime {
 
     if ((intent.wantsExecution || hasFailures || hasMutation) && (turn > 1 || hasReadContext || hasMutation || hasFailures)) {
       for (const name of EXECUTION_TOOL_NAMES) {
+        if (available.has(name)) active.add(name);
+      }
+      for (const name of RUNTIME_TASK_READ_TOOL_NAMES) {
+        if (available.has(name)) active.add(name);
+      }
+    }
+
+    if (hasFailures) {
+      for (const name of META_RECOVERY_TOOL_NAMES) {
         if (available.has(name)) active.add(name);
       }
     }
@@ -261,8 +273,50 @@ class ToolRuntime {
     this.persistState();
     return {
       ok: false,
+      type: 'grounding',
       mentions: unknownMentions.slice(0, 8),
       retryCount: Number(this.state.ungroundedAnswerRetries || 0),
+    };
+  }
+
+  evaluateFinalAnswer(answer, { trace = [], turn = 0 } = {}) {
+    const policyResult = evaluateFinalAnswerPolicy({
+      requestContext: this.requestContext,
+      trace,
+      finalAnswer: answer,
+      describeTool: (toolName) => (this.tools?.describe ? this.tools.describe(toolName) : null),
+      turn,
+    });
+    if (!policyResult?.ok) {
+      this.state.totalUsage.stop_hooks += 1;
+      this.recordTranscript({
+        kind: 'final_answer_policy',
+        turn,
+        reason: toStringValue(policyResult.reason || 'final_answer_policy'),
+        details: policyResult.details || {},
+      });
+      this.recordTransition('final_answer_policy', {
+        turn,
+        reason: toStringValue(policyResult.reason || 'final_answer_policy'),
+      });
+      this.persistState();
+      return {
+        ok: false,
+        type: 'policy',
+        reason: toStringValue(policyResult.reason || 'final_answer_policy'),
+        blockingMessage: toStringValue(policyResult.blockingMessage),
+        details: policyResult.details || {},
+      };
+    }
+
+    const grounded = this.ensureGroundedFinalAnswer(answer, { trace, turn });
+    if (!grounded?.ok) {
+      return grounded;
+    }
+    return {
+      ok: true,
+      type: 'final',
+      details: policyResult.details || {},
     };
   }
 

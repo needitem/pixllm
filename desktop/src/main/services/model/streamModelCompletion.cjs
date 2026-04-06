@@ -119,6 +119,40 @@ function normalizeOpenAiToolCalls(toolCalls) {
     .filter((item) => item.id || item.name || item.arguments);
 }
 
+function coerceOpenAiText(value) {
+  if (typeof value === 'string') {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => {
+        if (typeof item === 'string') return item;
+        if (item && typeof item === 'object') {
+          if (typeof item.text === 'string') return item.text;
+          if (typeof item.content === 'string') return item.content;
+        }
+        return '';
+      })
+      .join('');
+  }
+  return '';
+}
+
+function buildExtraBody({
+  model = '',
+} = {}) {
+  const normalizedModel = toStringValue(model).toLowerCase();
+  if (/qwen/i.test(normalizedModel)) {
+    return {
+      chat_template_kwargs: {
+        enable_thinking: true,
+      },
+      top_k: 20,
+    };
+  }
+  return null;
+}
+
 async function callModelCompletion({
   baseUrl = '',
   apiToken = '',
@@ -126,12 +160,12 @@ async function callModelCompletion({
   fallbackApiToken = '',
   model = '',
   messages = [],
-  tools = [],
-  toolChoice = 'auto',
   maxTokens = 1200,
   temperature = 0.2,
   responseFormat = 'text',
   stop = [],
+  extraBody = null,
+  signal = null,
 } = {}) {
   const candidates = buildEndpointCandidates({
     baseUrl,
@@ -143,6 +177,10 @@ async function callModelCompletion({
     throw new Error('serverBaseUrl is required');
   }
   let lastError = null;
+  const defaultExtraBody = buildExtraBody({ model });
+  const resolvedExtraBody = extraBody && typeof extraBody === 'object'
+    ? extraBody
+    : defaultExtraBody;
   for (let index = 0; index < candidates.length; index += 1) {
     const candidate = candidates[index];
     const hasFallback = index < candidates.length - 1;
@@ -154,10 +192,10 @@ async function callModelCompletion({
         {
           method: 'POST',
           headers: buildHeaders(candidate.apiToken),
+          signal: signal || undefined,
           body: JSON.stringify({
             model: toStringValue(model),
             messages: Array.isArray(messages) ? messages : [],
-            ...(Array.isArray(tools) && tools.length > 0 ? { tools, tool_choice: toolChoice || 'auto' } : {}),
             max_tokens: Math.max(128, Number(maxTokens || 1200)),
             temperature: Number.isFinite(Number(temperature)) ? Number(temperature) : 0.2,
             ...(candidate.mode === 'proxy'
@@ -168,6 +206,7 @@ async function callModelCompletion({
                 ? { response_format: { type: 'json_object' } }
                 : {}),
             stop: Array.isArray(stop) ? stop.map((item) => toStringValue(item)).filter(Boolean) : [],
+            ...(resolvedExtraBody && typeof resolvedExtraBody === 'object' ? resolvedExtraBody : {}),
           }),
         },
       );
@@ -197,14 +236,13 @@ async function callModelCompletion({
         throw new Error(payload?.error?.message || payload?.message || `HTTP ${response.status}`);
       }
       const choice = Array.isArray(payload?.choices) ? payload.choices[0] : null;
-      const content =
-        typeof choice?.message?.content === 'string'
-          ? choice.message.content
-          : Array.isArray(choice?.message?.content)
-            ? choice.message.content.map((item) => String(item?.text || '')).join('')
-            : '';
+      const content = coerceOpenAiText(choice?.message?.content);
+      const reasoningContent = coerceOpenAiText(
+        choice?.message?.reasoning_content || choice?.message?.reasoning,
+      );
       return {
         text: content,
+        reasoning_content: reasoningContent,
         tool_calls: normalizeOpenAiToolCalls(choice?.message?.tool_calls),
         finish_reason: toStringValue(choice?.finish_reason),
         usage: payload?.usage && typeof payload.usage === 'object' ? payload.usage : {},
@@ -226,15 +264,15 @@ async function streamModelCompletion({
   fallbackApiToken = '',
   model = '',
   messages = [],
-  tools = [],
-  toolChoice = 'auto',
   maxTokens = 1200,
   temperature = 0.2,
   responseFormat = 'text',
   stop = [],
   signal = null,
   onToken = async () => {},
+  onReasoningToken = async () => {},
   onToolCalls = async () => {},
+  extraBody = null,
 } = {}) {
   const candidates = buildEndpointCandidates({
     baseUrl,
@@ -246,6 +284,10 @@ async function streamModelCompletion({
     throw new Error('serverBaseUrl is required');
   }
   let lastError = null;
+  const defaultExtraBody = buildExtraBody({ model });
+  const resolvedExtraBody = extraBody && typeof extraBody === 'object'
+    ? extraBody
+    : defaultExtraBody;
   for (let index = 0; index < candidates.length; index += 1) {
     const candidate = candidates[index];
     const hasFallback = index < candidates.length - 1;
@@ -258,7 +300,6 @@ async function streamModelCompletion({
         body: JSON.stringify({
           model: toStringValue(model),
           messages: Array.isArray(messages) ? messages : [],
-          ...(Array.isArray(tools) && tools.length > 0 ? { tools, tool_choice: toolChoice || 'auto' } : {}),
           max_tokens: Math.max(128, Number(maxTokens || 1200)),
           temperature: Number.isFinite(Number(temperature)) ? Number(temperature) : 0.2,
           ...(candidate.mode === 'proxy'
@@ -267,9 +308,10 @@ async function streamModelCompletion({
               : {}
             : responseFormat === 'json_object'
               ? { response_format: { type: 'json_object' } }
-              : {}),
+            : {}),
           ...(candidate.mode === 'openai' ? { stream: true } : {}),
           stop: Array.isArray(stop) ? stop.map((item) => toStringValue(item)).filter(Boolean) : [],
+          ...(resolvedExtraBody && typeof resolvedExtraBody === 'object' ? resolvedExtraBody : {}),
         }),
         signal: signal || undefined,
       });
@@ -292,6 +334,7 @@ async function streamModelCompletion({
       const decoder = new TextDecoder('utf-8');
       let buffer = '';
       let aggregated = '';
+      let aggregatedReasoning = '';
       let donePayload = null;
       const openAiToolCalls = [];
 
@@ -312,7 +355,14 @@ async function streamModelCompletion({
                 : Array.isArray(choice?.delta?.content)
                   ? choice.delta.content.map((item) => String(item?.text || '')).join('')
                   : '';
+            const deltaReasoning = coerceOpenAiText(
+              choice?.delta?.reasoning_content || choice?.delta?.reasoning,
+            );
             const deltaToolCalls = Array.isArray(choice?.delta?.tool_calls) ? choice.delta.tool_calls : [];
+            if (deltaReasoning) {
+              aggregatedReasoning += deltaReasoning;
+              void onReasoningToken(deltaReasoning, aggregatedReasoning);
+            }
             if (deltaText) {
               aggregated += deltaText;
               void onToken(deltaText, aggregated);
@@ -341,6 +391,7 @@ async function streamModelCompletion({
             if (choice?.finish_reason) {
               donePayload = {
                 text: aggregated,
+                reasoning_content: aggregatedReasoning,
                 tool_calls: normalizeOpenAiToolCalls(openAiToolCalls),
                 finish_reason: toStringValue(choice.finish_reason),
                 usage: payload?.usage && typeof payload.usage === 'object' ? payload.usage : {},
@@ -378,6 +429,7 @@ async function streamModelCompletion({
       if (donePayload && typeof donePayload === 'object') {
         return {
           text: typeof donePayload.text === 'string' ? donePayload.text : aggregated,
+          reasoning_content: typeof donePayload.reasoning_content === 'string' ? donePayload.reasoning_content : aggregatedReasoning,
           tool_calls: normalizeOpenAiToolCalls(donePayload.tool_calls || openAiToolCalls),
           finish_reason: toStringValue(donePayload.finish_reason),
           usage: donePayload.usage && typeof donePayload.usage === 'object' ? donePayload.usage : {},
@@ -386,6 +438,7 @@ async function streamModelCompletion({
 
       return {
         text: aggregated,
+        reasoning_content: aggregatedReasoning,
         tool_calls: normalizeOpenAiToolCalls(openAiToolCalls),
         finish_reason: '',
         usage: {},

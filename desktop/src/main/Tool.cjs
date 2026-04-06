@@ -10,6 +10,23 @@ function toStringList(values) {
     : [];
 }
 
+function normalizeEvidenceKind(value) {
+  const normalized = toStringValue(value).replace(/[_\-\s]/g, '_').toLowerCase();
+  return normalized;
+}
+
+function normalizeEvidenceKindList(values) {
+  const seen = new Set();
+  const output = [];
+  for (const item of Array.isArray(values) ? values : []) {
+    const normalized = normalizeEvidenceKind(item);
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    output.push(normalized);
+  }
+  return output;
+}
+
 function normalizeInputSchema(schema) {
   if (!schema || typeof schema !== 'object' || Array.isArray(schema)) {
     return {
@@ -307,6 +324,10 @@ function defineLocalTool(definition = {}) {
         : async () => {},
     getToolUseSummary:
       typeof definition.getToolUseSummary === 'function' ? definition.getToolUseSummary : () => null,
+    getObservationEvidenceKinds:
+      typeof definition.getObservationEvidenceKinds === 'function'
+        ? definition.getObservationEvidenceKinds
+        : () => [],
     userFacingName:
       typeof definition.userFacingName === 'function'
         ? definition.userFacingName
@@ -317,6 +338,7 @@ function defineLocalTool(definition = {}) {
         ? definition.description
         : async () => toStringValue(definition.name || 'tool'),
     ...definition,
+    evidenceKinds: normalizeEvidenceKindList(definition.evidenceKinds),
     name: toStringValue(definition.name),
   };
 }

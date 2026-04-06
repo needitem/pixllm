@@ -119,19 +119,22 @@ class StreamingToolExecutor {
 
   sync(toolCalls = []) {
     for (const rawToolCall of Array.isArray(toolCalls) ? toolCalls : []) {
-      const id = toStringValue(rawToolCall?.id);
+      const id = toStringValue(rawToolCall?.id || rawToolCall?.tool_use_id || `toolu_stream_${this.order.length + 1}`);
       const name = toStringValue(rawToolCall?.name);
       const argumentsText = toStringValue(rawToolCall?.arguments);
-      if (!id || !name) {
+      if (!name) {
         continue;
       }
 
-      const parsedInput = this.parseToolInput ? this.parseToolInput(argumentsText) : null;
+      const rawInput = rawToolCall?.input && typeof rawToolCall.input === 'object' && !Array.isArray(rawToolCall.input)
+        ? rawToolCall.input
+        : null;
+      const parsedInput = rawInput || (this.parseToolInput ? this.parseToolInput(argumentsText) : null);
       const parseable = Boolean(
         parsedInput
         && typeof parsedInput === 'object'
         && !Array.isArray(parsedInput)
-        && /[}\]]\s*$/.test(argumentsText),
+        && (rawInput || /[}\]]\s*$/.test(argumentsText)),
       );
       const entry = this._getOrCreateEntry({
         id,

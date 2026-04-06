@@ -20,6 +20,7 @@ function FileReadTool(options = {}) {
   const limits = resolveLimits(options);
   return defineLocalTool({
     name: 'read_file',
+    aliases: ['open_file', 'cat', 'read'],
     kind: 'read',
     workspaceRelativePaths: ['path'],
     inputSchema: objectSchema({
@@ -46,6 +47,7 @@ function FileReadTool(options = {}) {
     laneAffinity: ['read', 'flow', 'compare', 'review', 'failure', 'change'],
     isReadOnly: () => true,
     isConcurrencySafe: () => true,
+    getObservationEvidenceKinds: () => ['inspection'],
     userFacingName: () => 'Read file',
     getToolUseSummary: (input) => `Read ${toStringValue(input?.path)}`,
     async description() {
