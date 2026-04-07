@@ -34,11 +34,15 @@ async def issue_session_token(payload: IssueSessionTokenRequest, request: Reques
     redis = _resolve_redis_dependency(redis)
     if redis is None:
         raise ApiError("SERVICE_UNAVAILABLE", "redis unavailable", status_code=503)
-    issued = await issue_access_token(
-        redis,
-        label=payload.label,
-        ttl_sec=payload.ttl_sec,
-    )
+    try:
+        issued = await issue_access_token(
+            redis,
+            label=payload.label,
+            ttl_sec=payload.ttl_sec,
+            permanent=payload.permanent,
+        )
+    except ValueError as exc:
+        raise ApiError("BAD_REQUEST", str(exc), status_code=400) from exc
     return ok(issued)
 
 

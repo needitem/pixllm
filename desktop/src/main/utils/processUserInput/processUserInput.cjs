@@ -157,48 +157,49 @@ function parsePromptDirectives(prompt) {
   };
 }
 
-function analyzeIntent(prompt, directives = {}) {
-  const source = toStringValue(prompt).toLowerCase();
+function normalizeIntent(intent = {}) {
   return {
-    wantsChanges: Boolean(directives.change) || matchesAny(source, [
-      /\b(fix|change|edit|modify|refactor|implement|add|improve|update|rewrite|create|write|patch)\b/i,
-      /\uACE0\uCCD0|\uAC1C\uC120|\uC218\uC815|\uAD6C\uD604|\uCD94\uAC00/i,
-    ]),
-    wantsExecution: Boolean(directives.exec) || matchesAny(source, [
-      /\b(build|test|run|execute|compile|diagnos|lint|verify|benchmark|profile|powershell|shell|command|git|diff)\b/i,
-      /\uBE4C\uB4DC|\uD14C\uC2A4\uD2B8|\uC2E4\uD589|\uAC80\uC99D/i,
-    ]),
-    wantsAnalysis: Boolean(directives.analysis) || matchesAny(source, [
-      /\b(analy(?:s|z)|compare|review|inspect|investigate|trace|understand|audit|explain|summari(?:s|z)e|search|find|locat(?:e|ion)|look up|open|read)\b/i,
-      /\b(flow|implementation|codebase|workspace|symbol|reference)\b/i,
-      /\uC5B4\uB514\uC11C|\uC5B4\uB514\uC5D0|\uC704\uCE58|\uD750\uB984|\uBD84\uC11D|\uBE44\uAD50|\uB9AC\uBDF0|\uD30C\uC545|\uC124\uBA85|\uC694\uC57D|\uCC3E|\uAC80\uC0C9|\uC5F4\uC5B4|\uC77D/i,
-    ]),
-    createLikely: matchesAny(source, [
-      /\b(create|add|new file|new test|scaffold|generate)\b/i,
-      /\uC0DD\uC131|\uCD94\uAC00|\uD30C\uC77C/i,
-    ]),
-    compareLikely: matchesAny(source, [
-      /\b(compare|diff|versus|vs)\b/i,
-      /\uBE44\uAD50|\uCC28\uC774/i,
-    ]),
+    wantsChanges: Boolean(intent?.wantsChanges),
+    wantsExecution: Boolean(intent?.wantsExecution),
+    wantsAnalysis: Boolean(intent?.wantsAnalysis),
+    createLikely: Boolean(intent?.createLikely),
+    compareLikely: Boolean(intent?.compareLikely),
+  };
+}
+
+function analyzeIntent(prompt, directives = {}) {
+  return normalizeIntent({
+    wantsChanges: Boolean(directives.change),
+    wantsExecution: Boolean(directives.exec),
+    wantsAnalysis: Boolean(directives.analysis),
+    createLikely: false,
+    compareLikely: false,
+  });
+}
+
+function normalizeFocus(focus = {}) {
+  return {
+    mentionsCompanyReference: Boolean(focus?.mentionsCompanyReference),
+    mentionsConfig: Boolean(focus?.mentionsConfig),
+    mentionsTodo: Boolean(focus?.mentionsTodo),
+    mentionsRuntimeTask: Boolean(focus?.mentionsRuntimeTask),
   };
 }
 
 function analyzeFocus(prompt, directives = {}) {
-  const source = toStringValue(prompt).toLowerCase();
-  const mentionsCompanyReference = Boolean(directives.reference || directives.hybrid) || matchesAny(source, [
-    /(company|internal|reference|knowledge|engine source|reference source)/i,
-    /\uC0AC\uB0B4|\uB0B4\uBD80|\uCC38\uACE0|\uC9C0\uC2DD|\uC5D4\uC9C4/i,
-  ]);
-  const mentionsConfig = Boolean(directives.config) || /(config|setting|option|base url|api token|endpoint)/i.test(source);
-  const mentionsTodo = /\b(todo|checklist|task list)\b/i.test(source) || /\uD560 \uC77C|\uCCB4\uD06C\uB9AC\uC2A4\uD2B8/i.test(source);
-  const mentionsRuntimeTask = /\b(task|terminal output|background job|job output|capture)\b/i.test(source) || /\uD0DC\uC2A4\uD06C|\uD130\uBBF8\uB110|\uCD9C\uB825|\uBC31\uADF8\uB77C\uC6B4\uB4DC/i.test(source);
-  return {
-    mentionsCompanyReference,
-    mentionsConfig,
-    mentionsTodo,
-    mentionsRuntimeTask,
-  };
+  return normalizeFocus({
+    mentionsCompanyReference: Boolean(directives.reference || directives.hybrid),
+    mentionsConfig: Boolean(directives.config),
+    mentionsTodo: false,
+    mentionsRuntimeTask: false,
+  });
+}
+
+function extractIdentifierHints(prompt = '') {
+  const source = toStringValue(prompt);
+  return uniqStrings(
+    source.match(/\b(?:[A-Z][A-Za-z0-9_]*[A-Z][A-Za-z0-9_]*|[a-z]+[A-Z][A-Za-z0-9_]*|[A-Za-z_][A-Za-z0-9_]*::[A-Za-z_][A-Za-z0-9_]*)\b/g) || [],
+  ).slice(0, 6);
 }
 
 function addTools(target, items) {
@@ -207,14 +208,31 @@ function addTools(target, items) {
   }
 }
 
-function deriveEvidencePreference({ intent = {}, focus = {}, directives = {}, hasWorkspacePath = false } = {}) {
+function mergeBooleanFlags(base = {}, patch = {}, keys = []) {
+  const merged = {};
+  for (const key of Array.isArray(keys) ? keys : []) {
+    merged[key] = Boolean(base?.[key] || patch?.[key]);
+  }
+  return merged;
+}
+
+function deriveEvidencePreference({
+  intent = {},
+  focus = {},
+  directives = {},
+  hasWorkspacePath = false,
+  hasDirectWorkspaceTargets = false,
+} = {}) {
+  if (!hasWorkspacePath) return 'reference';
   if (directives.workspace) return 'workspace';
   if (directives.reference) return 'reference';
   if (directives.hybrid) return 'hybrid';
-  if (focus.mentionsCompanyReference && hasWorkspacePath) return 'hybrid';
+  if (hasDirectWorkspaceTargets) return 'workspace';
   if (focus.mentionsCompanyReference) return 'reference';
-  if (intent.compareLikely) return hasWorkspacePath ? 'hybrid' : 'reference';
-  return 'workspace';
+  if (intent.wantsExecution && !intent.wantsAnalysis && !intent.wantsChanges && !intent.compareLikely) {
+    return 'workspace';
+  }
+  return 'hybrid';
 }
 
 function deriveInitialToolNames({
@@ -331,6 +349,11 @@ function summarizeRequestContext(context = {}) {
     lines.push(`Rewrite notes: ${rewriteNotes}`);
   }
 
+  const semanticConfidence = toStringValue(context.semanticConfidence);
+  if (semanticConfidence) {
+    lines.push(`Semantic confidence: ${semanticConfidence}`);
+  }
+
   const directiveLabels = Object.entries(directives)
     .filter(([, enabled]) => Boolean(enabled))
     .map(([key]) => `/${key}`);
@@ -364,27 +387,36 @@ function summarizeRequestContext(context = {}) {
   return lines.join('\n').trim();
 }
 
-function createRunRequestContext({ prompt = '', workspacePath = '', selectedFilePath = '' } = {}) {
-  const languageProfile = detectLanguageProfile(prompt);
-  const directives = parsePromptDirectives(prompt);
-  const intent = analyzeIntent(prompt, directives);
-  const focus = analyzeFocus(prompt, directives);
+function buildRequestContext(context = {}) {
+  const prompt = toStringValue(context.prompt);
+  const workspacePath = toStringValue(context.workspacePath);
+  const directives = context.directives && typeof context.directives === 'object'
+    ? context.directives
+    : parsePromptDirectives(prompt);
+  const languageProfile = context.languageProfile && typeof context.languageProfile === 'object'
+    ? context.languageProfile
+    : detectLanguageProfile(prompt);
+  const intent = normalizeIntent(context.intent);
+  const focus = normalizeFocus(context.focus);
   const explicitPaths = uniq(
-    extractPathCandidates(prompt)
-      .map((candidate) => toWorkspaceRelativePath(workspacePath, candidate))
+    (Array.isArray(context.explicitPaths) ? context.explicitPaths : extractPathCandidates(prompt))
+      .map((candidate) => toWorkspaceRelativePath(workspacePath, candidate) || normalizePath(candidate))
       .filter(Boolean),
   );
-  const normalizedSelectedFilePath = toWorkspaceRelativePath(workspacePath, selectedFilePath) || normalizePath(selectedFilePath);
+  const normalizedSelectedFilePath = toWorkspaceRelativePath(workspacePath, context.selectedFilePath) || normalizePath(context.selectedFilePath);
   const allowedDirectPaths = uniq([
+    ...(Array.isArray(context.allowedDirectPaths) ? context.allowedDirectPaths : []),
     ...explicitPaths,
     normalizedSelectedFilePath,
   ]);
-  const hasWorkspacePath = allowedDirectPaths.length > 0;
+  const hasWorkspacePath = Boolean(toStringValue(workspacePath));
+  const hasDirectWorkspaceTargets = allowedDirectPaths.length > 0;
   const evidencePreference = deriveEvidencePreference({
     intent,
     focus,
     directives,
     hasWorkspacePath,
+    hasDirectWorkspaceTargets,
   });
   const initialToolNames = uniqStrings(deriveInitialToolNames({
     prompt,
@@ -396,6 +428,13 @@ function createRunRequestContext({ prompt = '', workspacePath = '', selectedFile
     evidencePreference,
   }));
   const prefersReferenceTools = focus.mentionsCompanyReference || evidencePreference !== 'workspace';
+  const searchHints = uniqStrings(context.searchHints, 8);
+  const symbolHints = uniqStrings([
+    ...extractIdentifierHints(prompt),
+    ...(Array.isArray(context.symbolHints) ? context.symbolHints : []),
+  ], 6);
+  const rewriteNotes = toStringValue(context.rewriteNotes).slice(0, 240);
+  const semanticConfidence = toStringValue(context.semanticConfidence);
 
   return {
     prompt: toStringValue(prompt),
@@ -409,9 +448,10 @@ function createRunRequestContext({ prompt = '', workspacePath = '', selectedFile
     languageProfile,
     evidencePreference,
     prefersReferenceTools,
-    searchHints: [],
-    symbolHints: [],
-    rewriteNotes: '',
+    searchHints,
+    symbolHints,
+    rewriteNotes,
+    semanticConfidence,
     initialToolNames,
     summary: summarizeRequestContext({
       explicitPaths,
@@ -421,12 +461,54 @@ function createRunRequestContext({ prompt = '', workspacePath = '', selectedFile
       languageProfile,
       evidencePreference,
       prefersReferenceTools,
-      searchHints: [],
-      symbolHints: [],
-      rewriteNotes: '',
+      searchHints,
+      symbolHints,
+      rewriteNotes,
+      semanticConfidence,
       initialToolNames,
     }),
   };
+}
+
+function createRunRequestContext({ prompt = '', workspacePath = '', selectedFilePath = '' } = {}) {
+  const directives = parsePromptDirectives(prompt);
+  return buildRequestContext({
+    prompt,
+    workspacePath,
+    selectedFilePath,
+    directives,
+    intent: analyzeIntent(prompt, directives),
+    focus: analyzeFocus(prompt, directives),
+    languageProfile: detectLanguageProfile(prompt),
+  });
+}
+
+function applySemanticAnalysis(context = {}, analysis = {}) {
+  const nextIntent = mergeBooleanFlags(
+    normalizeIntent(context.intent),
+    normalizeIntent(analysis.intent),
+    ['wantsChanges', 'wantsExecution', 'wantsAnalysis', 'createLikely', 'compareLikely'],
+  );
+  const nextFocus = mergeBooleanFlags(
+    normalizeFocus(context.focus),
+    normalizeFocus(analysis.focus),
+    ['mentionsCompanyReference', 'mentionsConfig', 'mentionsTodo', 'mentionsRuntimeTask'],
+  );
+  return buildRequestContext({
+    ...context,
+    intent: nextIntent,
+    focus: nextFocus,
+    searchHints: uniqStrings([
+      ...(Array.isArray(context.searchHints) ? context.searchHints : []),
+      ...(Array.isArray(analysis.searchTerms) ? analysis.searchTerms : []),
+    ], 8),
+    symbolHints: uniqStrings([
+      ...(Array.isArray(context.symbolHints) ? context.symbolHints : []),
+      ...(Array.isArray(analysis.symbolHints) ? analysis.symbolHints : []),
+    ], 6),
+    rewriteNotes: toStringValue(analysis.notes || context.rewriteNotes).slice(0, 240),
+    semanticConfidence: toStringValue(analysis.confidence || context.semanticConfidence),
+  });
 }
 
 function processUserInput({ prompt = '', workspacePath = '', selectedFilePath = '' } = {}) {
@@ -441,6 +523,7 @@ module.exports = {
   processUserInput,
   toWorkspaceRelativePath,
   createRunRequestContext,
+  applySemanticAnalysis,
   summarizeRequestContext,
   parsePromptDirectives,
 };

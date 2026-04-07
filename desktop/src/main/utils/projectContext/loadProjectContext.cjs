@@ -16,26 +16,11 @@ const {
   toWorkspaceRelativePath,
 } = require('./shared.cjs');
 
-const SETTINGS_PATHS = [
-  path.join('.claude', 'settings.json'),
-  path.join('.claude', 'settings.local.json'),
-  path.join('.codex', 'settings.json'),
-  path.join('.codex', 'settings.local.json'),
-];
-const SKILL_DIRS = [
-  path.join('.claude', 'skills'),
-  path.join('.codex', 'skills'),
-];
-const COMMAND_DIRS = [
-  path.join('.claude', 'commands'),
-  path.join('.codex', 'commands'),
-];
-const AGENT_DIRS = [
-  path.join('.claude', 'agents'),
-  path.join('.codex', 'agents'),
-  path.join('.codex', 'prompts'),
-];
-const ROOT_MEMORY_FILE_NAMES = new Set(['AGENTS.MD', 'CLAUDE.MD', 'MEMORY.MD']);
+const SETTINGS_PATHS = [];
+const SKILL_DIRS = [];
+const COMMAND_DIRS = [];
+const AGENT_DIRS = [];
+const ROOT_MEMORY_FILE_NAMES = new Set(['MEMORY.MD']);
 
 function pathWithinBase(candidatePath, basePath) {
   const normalizedCandidate = path.resolve(candidatePath).toLowerCase();
@@ -60,10 +45,7 @@ function isRootContextFile(rootPath, filePath) {
   if (parentDir.toLowerCase() === normalizedRoot.toLowerCase()) {
     return ROOT_MEMORY_FILE_NAMES.has(path.basename(normalizedFile).toUpperCase());
   }
-  return [
-    path.join(normalizedRoot, '.claude'),
-    path.join(normalizedRoot, '.codex'),
-  ].some((basePath) => pathWithinBase(normalizedFile, basePath));
+  return false;
 }
 
 async function collectMarkdownFilesFromRoots(rootPath, relativeDirs, options = {}) {

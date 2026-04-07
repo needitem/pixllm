@@ -329,7 +329,7 @@ function getAllLocalBaseTools(limits = {}) {
     }),
     defineLocalTool({
       name: 'project_context_search',
-      aliases: ['claude_context_search', 'skill_search', 'command_search', 'agent_search', 'memory_search'],
+      aliases: ['skill_search', 'command_search', 'agent_search', 'memory_search'],
       kind: 'read',
       inputSchema: objectSchema({
         category: enumSchema(['all', 'memory', 'settings', 'skill', 'command', 'agent'], 'Project context category to search'),
@@ -337,13 +337,13 @@ function getAllLocalBaseTools(limits = {}) {
         limit: integerSchema('Maximum number of results to return', { minimum: 1 }),
         include_content: booleanSchema('Include clipped full content instead of short excerpts'),
       }),
-      searchHint: 'search project CLAUDE.md memories, .claude settings, skills, commands, and agents',
+      searchHint: 'search project MEMORY.md context, settings, skills, commands, and agents',
       laneAffinity: ['read', 'flow', 'review'],
       isReadOnly: () => true,
       isConcurrencySafe: () => true,
       getObservationEvidenceKinds: () => ['discovery'],
       async description() {
-        return 'Search Claude-style project context files such as CLAUDE.md, .claude/settings.json, skills, commands, and agents';
+        return 'Search project context files such as MEMORY.md plus any discovered settings, skills, commands, and agents';
       },
       async call(input, context) {
         return projectContextSearchCall(input, context);
@@ -630,10 +630,16 @@ function createLocalToolCollection({
   runtimeBridge = {},
   authorizeToolUse = null,
   getBackendConfig = null,
+  allowedToolNames = null,
 } = {}) {
   const normalizedWorkspacePath = toStringValue(workspacePath);
   const normalizedSessionId = toStringValue(sessionId);
-  const tools = getAllLocalBaseTools(limits).filter((tool) => tool.isEnabled());
+  const allowedNameSet = Array.isArray(allowedToolNames)
+    ? new Set(allowedToolNames.map((item) => toStringValue(item)).filter(Boolean))
+    : null;
+  const tools = getAllLocalBaseTools(limits).filter((tool) =>
+    tool.isEnabled() && (!allowedNameSet || allowedNameSet.has(toStringValue(tool?.name)))
+  );
   const context = {
     workspacePath: normalizedWorkspacePath,
     sessionId: normalizedSessionId,

@@ -1,3 +1,5 @@
+const path = require('node:path');
+
 const {
   grepItemsFromTrace,
   listFilesFromTrace,
@@ -13,6 +15,16 @@ function toStringValue(value) {
 
 function normalizePath(value) {
   return toStringValue(value).replace(/\\/g, '/').replace(/^\.\/+/, '');
+}
+
+function isWorkspaceRelativePath(value) {
+  const normalized = normalizePath(value);
+  if (!normalized) return false;
+  if (/^[A-Za-z]+:\/\//.test(normalized) || /^file:\/\//i.test(normalized)) return false;
+  if (path.win32.isAbsolute(normalized) || path.posix.isAbsolute(normalized)) return false;
+  const collapsed = path.posix.normalize(normalized);
+  if (!collapsed || collapsed === '..' || collapsed.startsWith('../')) return false;
+  return true;
 }
 
 function normalizedSet(items) {
@@ -38,6 +50,15 @@ function collectWorkspaceGroundedPaths({ trace = [], fileCache = {}, requestCont
   for (const item of grepItemsFromTrace(trace)) append(item?.path);
   for (const item of listFilesFromTrace(trace)) append(item?.path);
   for (const item of symbolOutlinesFromTrace(trace)) append(item?.path);
+  for (const step of Array.isArray(trace) ? trace : []) {
+    if (!['write', 'write_file', 'edit', 'replace_in_file', 'notebook_edit'].includes(toStringValue(step?.tool))) {
+      continue;
+    }
+    if (step?.observation?.ok === false) {
+      continue;
+    }
+    append(step?.observation?.path);
+  }
   for (const key of Object.keys(fileCache && typeof fileCache === 'object' ? fileCache : {})) append(key);
 
   return Array.from(paths);
@@ -219,7 +240,10 @@ function authorizeToolUse({
         message: 'This request looks read-only. Do not write files unless the user asked for a change.',
       });
     }
-    if (unknownPaths.length > 0) {
+    const creatingNewWorkspacePath = Boolean(intent.createLikely)
+      && unknownPaths.length > 0
+      && unknownPaths.every((value) => isWorkspaceRelativePath(value));
+    if (unknownPaths.length > 0 && !creatingNewWorkspacePath) {
       return permissionDenied({
         toolName,
         reason: 'unknown_path',

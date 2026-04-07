@@ -1,7 +1,7 @@
 const { createHash } = require('node:crypto');
 const { createLocalToolCollection } = require('./tools.cjs');
 const { streamModelCompletion, countPromptTokens } = require('./services/model/streamModelCompletion.cjs');
-const { rewritePromptForSearch } = require('./services/model/QwenQueryRewrite.cjs');
+const { analyzePromptSemantics } = require('./services/model/QwenQueryRewrite.cjs');
 const { ToolRuntime } = require('./services/tools/ToolRuntime.cjs');
 const { StreamingToolExecutor } = require('./services/tools/StreamingToolExecutor.cjs');
 const { loadProjectContext, buildProjectContextPrompt } = require('./utils/projectContext.cjs');
@@ -46,6 +46,16 @@ const MAX_TRANSITIONS = 64;
 const MAX_UNGROUNDED_ANSWER_RETRIES = 2;
 const MAX_NO_PROGRESS_RETRIES = 2;
 const MAX_REPEATED_TOOL_BATCHES = 3;
+const NO_WORKSPACE_TOOL_NAMES = Object.freeze([
+  'todo_read',
+  'todo_write',
+  'ask_user_question',
+  'brief',
+  'sleep',
+  'tool_search',
+  'config',
+  'company_reference_search',
+]);
 function toSerializableTraceStep(step = {}) {
   return {
     round: Number(step?.round || 0),
@@ -109,9 +119,40 @@ function messageCharLength(message) {
   return serializeBlocks(Array.isArray(message?.content) ? message.content : []).length;
 }
 
+function isSyntheticSummaryText(text = '') {
+  const normalized = toStringValue(text);
+  return normalized.startsWith('[Compacted transcript]')
+    || normalized.startsWith('[Tool result summary]');
+}
+
+function summarizeSyntheticText(text = '') {
+  const normalized = toStringValue(text);
+  if (!normalized) return '';
+  if (normalized.startsWith('[Compacted transcript]')) {
+    const repeats = (normalized.match(/\[Compacted transcript\]/g) || []).length;
+    const userMatch = normalized.match(/user:\s*([^\n]+)/i);
+    const request = toStringValue(userMatch?.[1]).slice(0, 220);
+    return [
+      `[Compacted transcript summary${repeats > 1 ? ` x${repeats}` : ''}]`,
+      request ? `Latest request: ${request}` : '',
+    ].filter(Boolean).join('\n');
+  }
+  if (normalized.startsWith('[Tool result summary]')) {
+    return normalized
+      .split(/\r?\n/)
+      .slice(0, 8)
+      .join('\n')
+      .slice(0, 420);
+  }
+  return normalized.slice(0, 420);
+}
+
 function summarizeMessage(message) {
   const role = toStringValue(message?.role || 'assistant');
-  const content = serializeBlocks(Array.isArray(message?.content) ? message.content : []).slice(0, 420);
+  const rawContent = serializeBlocks(Array.isArray(message?.content) ? message.content : []);
+  const content = isSyntheticSummaryText(rawContent)
+    ? summarizeSyntheticText(rawContent)
+    : rawContent.slice(0, 420);
   return `${role}: ${content}`;
 }
 
@@ -217,14 +258,151 @@ function summarizeToolResultBlocks(message) {
   return lines;
 }
 
+function summarizeStructuredItems(items = [], formatter, limit = 4) {
+  return (Array.isArray(items) ? items : [])
+    .slice(0, limit)
+    .map((item) => toStringValue(formatter(item)))
+    .filter(Boolean);
+}
+
+function summarizeStructuredToolResult(name = '', payload = {}) {
+  const lines = [];
+  const toolName = toStringValue(name || payload?.tool || 'tool');
+  const status = payload?.ok === false ? 'error' : 'ok';
+  const message = toStringValue(payload?.message || payload?.error || payload?.reason);
+  lines.push(`${toolName}: ${status}`);
+  if (message) {
+    lines.push(message.slice(0, 240));
+  }
+
+  const matchItems = summarizeStructuredItems(payload?.matches, (item) => {
+    const path = toStringValue(item?.path || item?.file_path || item?.filePath);
+    const lineRange = toStringValue(item?.lineRange || item?.line_range || item?.line);
+    return [path, lineRange].filter(Boolean).join(':');
+  });
+  if (matchItems.length > 0) {
+    lines.push(`matches(${Array.isArray(payload?.matches) ? payload.matches.length : matchItems.length}): ${matchItems.join('; ')}`);
+  }
+
+  const windowItems = summarizeStructuredItems(payload?.windows, (item) => {
+    const path = toStringValue(item?.path || item?.file_path || item?.filePath);
+    const lineRange = toStringValue(item?.lineRange || item?.line_range || '');
+    return [path, lineRange].filter(Boolean).join(':');
+  }, 3);
+  if (windowItems.length > 0) {
+    lines.push(`windows(${Array.isArray(payload?.windows) ? payload.windows.length : windowItems.length}): ${windowItems.join('; ')}`);
+  }
+
+  const docItems = summarizeStructuredItems(
+    Array.isArray(payload?.doc_chunks) && payload.doc_chunks.length > 0 ? payload.doc_chunks : payload?.doc_results,
+    (item) => {
+      const path = toStringValue(item?.file_path || item?.path || item?.source_url || item?.sourceUrl);
+      const heading = toStringValue(item?.heading_path || item?.paragraph_range || item?.line_range);
+      return [path, heading].filter(Boolean).join(' @ ');
+    },
+    3,
+  );
+  if (docItems.length > 0) {
+    const count = Array.isArray(payload?.doc_chunks) && payload.doc_chunks.length > 0
+      ? payload.doc_chunks.length
+      : Array.isArray(payload?.doc_results)
+        ? payload.doc_results.length
+        : docItems.length;
+    lines.push(`docs(${count}): ${docItems.join('; ')}`);
+  }
+
+  const fileItems = summarizeStructuredItems(payload?.files, (item) => toStringValue(item?.path || item), 4);
+  if (fileItems.length > 0) {
+    lines.push(`files(${Array.isArray(payload?.files) ? payload.files.length : fileItems.length}): ${fileItems.join('; ')}`);
+  }
+
+  const stdout = toStringValue(payload?.stdout || payload?.output_preview || payload?.summary || payload?.text)
+    .replace(/\s+/g, ' ')
+    .slice(0, 320);
+  if (stdout) {
+    lines.push(stdout);
+  }
+
+  return lines.filter(Boolean).join('\n').slice(0, 1400);
+}
+
+function summarizeToolResultContent(name = '', content = '', isError = false) {
+  const raw = toStringValue(content);
+  if (!raw) {
+    return raw;
+  }
+  const parsed = safeJsonParseObject(raw);
+  if (parsed) {
+    const summary = summarizeStructuredToolResult(name, parsed);
+    if (summary) {
+      return summary;
+    }
+  }
+  const prefix = `${toStringValue(name || 'tool')}${isError ? ' error' : ''}: `;
+  return `${prefix}${raw.replace(/\s+/g, ' ').slice(0, 1200)}`.slice(0, 1400);
+}
+
+function shrinkToolResultMessage(message) {
+  let changed = false;
+  const nextContent = [];
+  for (const block of Array.isArray(message?.content) ? message.content : []) {
+    if (block?.type !== 'tool_result') {
+      nextContent.push(block);
+      continue;
+    }
+    const original = toStringValue(block?.content);
+    const summarized = summarizeToolResultContent(block?.name, original, Boolean(block?.is_error));
+    if (summarized && summarized !== original) {
+      changed = true;
+      nextContent.push({
+        ...block,
+        content: summarized,
+      });
+    } else {
+      nextContent.push(block);
+    }
+  }
+  return {
+    changed,
+    message: changed
+      ? {
+          ...message,
+          content: nextContent,
+        }
+      : message,
+  };
+}
+
 function applyToolResultBudget(messages) {
-  const safeMessages = Array.isArray(messages) ? [...messages] : [];
-  const resultIndexes = toolResultMessageIndexes(safeMessages);
-  const totalChars = resultIndexes.reduce((sum, index) => sum + messageCharLength(safeMessages[index]), 0);
-  if (totalChars <= TOOL_RESULT_CHAR_BUDGET || resultIndexes.length <= 4) {
+  let safeMessages = Array.isArray(messages) ? [...messages] : [];
+  let resultIndexes = toolResultMessageIndexes(safeMessages);
+  let totalChars = resultIndexes.reduce((sum, index) => sum + messageCharLength(safeMessages[index]), 0);
+  if (totalChars <= TOOL_RESULT_CHAR_BUDGET || resultIndexes.length === 0) {
     return { messages: safeMessages, compacted: false, removed: 0 };
   }
-  const preserve = new Set(resultIndexes.slice(-4));
+
+  let summarizedMessages = 0;
+  safeMessages = safeMessages.map((message, index) => {
+    if (!resultIndexes.includes(index)) {
+      return message;
+    }
+    const shrunk = shrinkToolResultMessage(message);
+    if (shrunk.changed) {
+      summarizedMessages += 1;
+    }
+    return shrunk.message;
+  });
+  resultIndexes = toolResultMessageIndexes(safeMessages);
+  totalChars = resultIndexes.reduce((sum, index) => sum + messageCharLength(safeMessages[index]), 0);
+  if (totalChars <= TOOL_RESULT_CHAR_BUDGET) {
+    return {
+      messages: safeMessages,
+      compacted: summarizedMessages > 0,
+      removed: 0,
+    };
+  }
+
+  const preserve = new Set(resultIndexes.slice(-2));
   const summarizeIndexes = [];
   let removedChars = 0;
   for (const index of resultIndexes) {
@@ -437,18 +615,17 @@ class QueryEngine {
       pushMetaUserMessage: (text, meta) => this._pushMetaUserMessage(text, meta),
       updateFileCache: (toolName, observation) => this._updateFileCache(toolName, observation),
     });
-    this.tools = this.workspacePath
-      ? createLocalToolCollection({
-          workspacePath: this.workspacePath,
-          sessionId: this.sessionId,
-          runtimeBridge: this.runtimeBridge,
-          authorizeToolUse: (payload) => this.runtime.authorizeToolUse(payload),
-          getBackendConfig: () => ({
-            baseUrl: this.serverBaseUrl,
-            apiToken: this.serverApiToken,
-          }),
-        })
-      : { tools: [], call: async () => ({ ok: false, error: 'workspace_not_available' }) };
+    this.tools = createLocalToolCollection({
+      workspacePath: this.workspacePath,
+      sessionId: this.sessionId,
+      runtimeBridge: this.runtimeBridge,
+      authorizeToolUse: (payload) => this.runtime.authorizeToolUse(payload),
+      getBackendConfig: () => ({
+        baseUrl: this.serverBaseUrl,
+        apiToken: this.serverApiToken,
+      }),
+      allowedToolNames: this.workspacePath ? null : NO_WORKSPACE_TOOL_NAMES,
+    });
     this.runtime.setTools(this.tools);
     this.toolDescriptionCache = new Map();
     this.promptTokenCountCache = new Map();
@@ -1005,6 +1182,20 @@ class QueryEngine {
       && passes < MAX_CONTEXT_COMPACTION_PASSES
     ) {
       const previousTokens = Number(budgetState?.promptTokens || budgetState?.approxTokens || 0);
+      const toolBudget = applyToolResultBudget(this.state.messages);
+      if (toolBudget.compacted) {
+        this.state.messages = toolBudget.messages;
+        this.state.totalUsage.tool_result_compactions += 1;
+        passes += 1;
+        budgetState = await this._requestBudgetStateForMessages(
+          this._modelMessages(systemPrompt),
+          { signal },
+        );
+        if (Number(budgetState?.promptTokens || budgetState?.approxTokens || 0) < previousTokens) {
+          continue;
+        }
+      }
+
       const candidate = compactMessages(this.state.messages);
       if (!candidate.compacted) {
         break;
@@ -1125,57 +1316,63 @@ class QueryEngine {
     return result;
   }
 
-  async _rewriteSearchHints(runContext, { signal = null } = {}) {
+  async _analyzePromptSemantics(runContext, { signal = null } = {}) {
     const requestContext = runContext && typeof runContext === 'object' ? runContext : {};
-    const languageProfile = requestContext.languageProfile && typeof requestContext.languageProfile === 'object'
-      ? requestContext.languageProfile
-      : {};
-    const intent = requestContext.intent && typeof requestContext.intent === 'object'
-      ? requestContext.intent
-      : {};
-    const shouldRewrite = Boolean(languageProfile.hasHangul)
-      && (
-        intent.wantsAnalysis
-        || intent.wantsChanges
-        || intent.wantsExecution
-        || requestContext.prefersReferenceTools
-      );
-    if (!shouldRewrite) {
+    const prompt = toStringValue(requestContext.prompt);
+    if (!prompt || prompt.length < 4) {
       return requestContext;
     }
 
-    const rewritten = await rewritePromptForSearch({
+    const semantics = await analyzePromptSemantics({
       baseUrl: this.llmBaseUrl || this.baseUrl || this.serverBaseUrl,
       apiToken: this.llmApiToken || this.apiToken || this.serverApiToken,
       fallbackBaseUrl: this.serverBaseUrl,
       fallbackApiToken: this.serverApiToken,
       model: this.model,
-      prompt: toStringValue(requestContext.prompt),
+      prompt,
       signal,
     });
-    const searchTerms = Array.isArray(rewritten?.searchTerms) ? rewritten.searchTerms : [];
-    const symbolHints = Array.isArray(rewritten?.symbolHints) ? rewritten.symbolHints : [];
-    const rewriteNotes = toStringValue(rewritten?.notes);
-    if (searchTerms.length === 0 && symbolHints.length === 0 && !rewriteNotes) {
+    const searchTerms = Array.isArray(semantics?.searchTerms) ? semantics.searchTerms : [];
+    const symbolHints = Array.isArray(semantics?.symbolHints) ? semantics.symbolHints : [];
+    const notes = toStringValue(semantics?.notes);
+    const confidence = toStringValue(semantics?.confidence);
+    const inferredIntent = semantics?.intent && typeof semantics.intent === 'object' ? semantics.intent : {};
+    const inferredFocus = semantics?.focus && typeof semantics.focus === 'object' ? semantics.focus : {};
+    const hasSemantics = (
+      searchTerms.length > 0
+      || symbolHints.length > 0
+      || notes
+      || confidence
+      || Object.values(inferredIntent).some(Boolean)
+      || Object.values(inferredFocus).some(Boolean)
+    );
+    if (!hasSemantics) {
       return requestContext;
     }
 
-    const updatedContext = this.runtime.updateRequestContextHints({
-      searchHints: searchTerms,
+    const updatedContext = this.runtime.updateRequestContextSemantics({
+      intent: inferredIntent,
+      focus: inferredFocus,
+      searchTerms,
       symbolHints,
-      rewriteNotes,
+      notes,
+      confidence,
     }) || requestContext;
 
     this._recordTranscript({
-      kind: 'query_rewrite_hints',
+      kind: 'prompt_semantics',
       promptPreview: previewText(requestContext.prompt),
+      intent: inferredIntent,
+      focus: inferredFocus,
       searchHints: searchTerms.slice(0, 8),
       symbolHints: symbolHints.slice(0, 6),
-      notes: rewriteNotes,
+      notes,
+      confidence,
     });
-    this._recordTransition('query_rewrite_hints', {
+    this._recordTransition('prompt_semantics', {
       searchHints: searchTerms.length,
       symbolHints: symbolHints.length,
+      confidence,
     });
     this._persistState();
     return updatedContext;
@@ -1206,7 +1403,7 @@ class QueryEngine {
         prompt,
         selectedFilePath: this.selectedFilePath,
       });
-      runContext = await this._rewriteSearchHints(runContext, { signal });
+      runContext = await this._analyzePromptSemantics(runContext, { signal });
       const userBlocks = buildUserBlocks(
         toStringValue(runContext?.prompt || prompt),
         toStringValue(runContext?.selectedFilePath || this.selectedFilePath),
@@ -1222,29 +1419,34 @@ class QueryEngine {
         searchHints: Array.isArray(runContext?.searchHints) ? runContext.searchHints.slice(0, 8) : [],
         symbolHints: Array.isArray(runContext?.symbolHints) ? runContext.symbolHints.slice(0, 6) : [],
       });
-      try {
-        this.projectContext = await loadProjectContext({
-          workspacePath: this.workspacePath,
-          selectedFilePath: toStringValue(runContext?.selectedFilePath || this.selectedFilePath),
-          explicitPaths: Array.isArray(runContext?.explicitPaths) ? runContext.explicitPaths : [],
-        });
-        this.projectContextPrompt = buildProjectContextPrompt(this.projectContext);
-        if (this.projectContextPrompt) {
-          this._recordTranscript({
-            kind: 'project_context_loaded',
-            summary: toStringValue(this.projectContext?.summary),
+      if (this.workspacePath) {
+        try {
+          this.projectContext = await loadProjectContext({
+            workspacePath: this.workspacePath,
+            selectedFilePath: toStringValue(runContext?.selectedFilePath || this.selectedFilePath),
+            explicitPaths: Array.isArray(runContext?.explicitPaths) ? runContext.explicitPaths : [],
           });
-          this._recordTransition('project_context_loaded', {
-            summary: toStringValue(this.projectContext?.summary),
+          this.projectContextPrompt = buildProjectContextPrompt(this.projectContext);
+          if (this.projectContextPrompt) {
+            this._recordTranscript({
+              kind: 'project_context_loaded',
+              summary: toStringValue(this.projectContext?.summary),
+            });
+            this._recordTransition('project_context_loaded', {
+              summary: toStringValue(this.projectContext?.summary),
+            });
+          }
+        } catch (error) {
+          this.projectContext = null;
+          this.projectContextPrompt = '';
+          this._recordTranscript({
+            kind: 'project_context_error',
+            message: error instanceof Error ? error.message : String(error),
           });
         }
-      } catch (error) {
+      } else {
         this.projectContext = null;
         this.projectContextPrompt = '';
-        this._recordTranscript({
-          kind: 'project_context_error',
-          message: error instanceof Error ? error.message : String(error),
-        });
       }
       this._persistState();
 

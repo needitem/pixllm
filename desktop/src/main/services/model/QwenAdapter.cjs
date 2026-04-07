@@ -62,6 +62,36 @@ function normalizePseudoToolCallPayload(payload, fallbackId = '') {
   };
 }
 
+function normalizeRuntimeToolCall(rawToolCall = {}) {
+  const id = toStringValue(rawToolCall?.id || rawToolCall?.tool_use_id || '');
+  const name = toStringValue(rawToolCall?.name || rawToolCall?.tool || '');
+  if (!name) return null;
+  const rawInput = rawToolCall?.input && typeof rawToolCall.input === 'object' && !Array.isArray(rawToolCall.input)
+    ? rawToolCall.input
+    : null;
+  const argumentText = typeof rawToolCall?.arguments === 'string' ? rawToolCall.arguments : '';
+  if (rawInput) {
+    return {
+      id: id || 'toolu_openai',
+      name,
+      input: rawInput,
+    };
+  }
+  const normalizedArguments = toStringValue(argumentText);
+  if (!normalizedArguments) {
+    return null;
+  }
+  const parsedInput = safeJsonParse(normalizedArguments);
+  if (!parsedInput || typeof parsedInput !== 'object' || Array.isArray(parsedInput)) {
+    return null;
+  }
+  return {
+    id: id || 'toolu_openai',
+    name,
+    input: parsedInput,
+  };
+}
+
 function parseXmlFunctionToolCallPayload(rawPayload, fallbackId = '') {
   const source = toStringValue(rawPayload);
   if (!source) return null;
@@ -385,6 +415,57 @@ function extractLeadingBalancedJson(text) {
   return '';
 }
 
+function repairUnbalancedJsonCandidate(rawPayload) {
+  const source = String(rawPayload || '');
+  if (!source) return '';
+  let output = source;
+  let inString = false;
+  let escaped = false;
+  const closers = [];
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (char === '\\') {
+        escaped = true;
+        continue;
+      }
+      if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+    if (char === '{') {
+      closers.push('}');
+      continue;
+    }
+    if (char === '[') {
+      closers.push(']');
+      continue;
+    }
+    if ((char === '}' || char === ']') && closers.length > 0) {
+      const expected = closers[closers.length - 1];
+      if (char === expected) {
+        closers.pop();
+      }
+    }
+  }
+  if (inString) {
+    output += '"';
+  }
+  if (closers.length === 0 && output === source) {
+    return '';
+  }
+  return `${output}${closers.reverse().join('')}`;
+}
+
 function parseToolCallPayload(rawPayload, fallbackId = '') {
   const normalized = toStringValue(rawPayload);
   if (!normalized) return null;
@@ -413,6 +494,20 @@ function parseToolCallPayload(rawPayload, fallbackId = '') {
   );
   if (lenientLeadingRecovered) {
     return lenientLeadingRecovered;
+  }
+  const repairedJson = repairUnbalancedJsonCandidate(normalized);
+  if (repairedJson) {
+    const repairedStrict = normalizePseudoToolCallPayload(safeJsonParse(repairedJson), fallbackId);
+    if (repairedStrict) {
+      return repairedStrict;
+    }
+    const repairedLenient = normalizePseudoToolCallPayload(
+      parseLenientJsonLikePayload(repairedJson),
+      fallbackId,
+    );
+    if (repairedLenient) {
+      return repairedLenient;
+    }
   }
   const functionStyle = parseFunctionStyleToolCallPayload(normalized, fallbackId);
   if (functionStyle) {
@@ -476,7 +571,7 @@ function parsePseudoToolCallBlocks(text, { allowIncompleteLastBlock = false } = 
     const payloadStart = nextMarker.start + nextMarker.open.length;
     const end = source.indexOf(nextMarker.close, payloadStart);
     const isClosed = end >= 0;
-    if (!isClosed && !allowIncompleteLastBlock) {
+    if (!isClosed) {
       const trailing = source.slice(nextMarker.start);
       if (toStringValue(trailing)) {
         blocks.push(createTextBlock(trailing));
@@ -484,7 +579,7 @@ function parsePseudoToolCallBlocks(text, { allowIncompleteLastBlock = false } = 
       break;
     }
 
-    const payload = isClosed ? source.slice(payloadStart, end) : source.slice(payloadStart);
+    const payload = source.slice(payloadStart, end);
     const fallbackId = `toolu_qwen_${count + 1}`;
     const toolCall = parseToolCallPayload(payload, fallbackId);
     if (toolCall) {
@@ -497,9 +592,6 @@ function parsePseudoToolCallBlocks(text, { allowIncompleteLastBlock = false } = 
       }
     }
 
-    if (!isClosed) {
-      break;
-    }
     cursor = end + nextMarker.close.length;
   }
 
@@ -925,16 +1017,9 @@ function parseAssistantResponse(rawValue) {
       blocks.push(createTextBlock(textSource));
     }
     for (const toolCall of Array.isArray(rawValue.tool_calls) ? rawValue.tool_calls : []) {
-      const id = toStringValue(toolCall?.id || toolCall?.tool_use_id || '');
-      const name = toStringValue(toolCall?.name || toolCall?.tool || '');
-      if (!name) continue;
-      const argumentText = typeof toolCall?.arguments === 'string' ? toolCall.arguments : '';
-      const parsedInput = safeJsonParse(argumentText);
-      blocks.push(createToolUseBlock({
-        id: id || 'toolu_openai',
-        name,
-        input: parsedInput && typeof parsedInput === 'object' && !Array.isArray(parsedInput) ? parsedInput : {},
-      }));
+      const normalizedToolCall = normalizeRuntimeToolCall(toolCall);
+      if (!normalizedToolCall) continue;
+      blocks.push(createToolUseBlock(normalizedToolCall));
     }
     if (!blocks.some((block) => block?.type === 'tool_use')) {
       const shellRecovered = recoverShellIntentToolUses(textSource);

@@ -96,6 +96,7 @@ _generated_session_token = secrets.token_urlsafe(32)
 API_SESSION_TOKEN = env("API_SESSION_TOKEN", _generated_session_token)
 API_SESSION_ACCESS_TTL_SEC = env_int("API_SESSION_ACCESS_TTL_SEC", 43200)
 API_SESSION_ACCESS_MAX_TTL_SEC = env_int("API_SESSION_ACCESS_MAX_TTL_SEC", 604800)
+API_SESSION_ACCESS_ALLOW_PERMANENT = env_bool("API_SESSION_ACCESS_ALLOW_PERMANENT", True)
 
 # Repository sync imports (TFS/SVN).
 IMPORT_DOCS_ROOT = env("IMPORT_DOCS_ROOT", "/workspace_host/pixoneer_project")

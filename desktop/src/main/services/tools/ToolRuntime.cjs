@@ -1,4 +1,8 @@
-const { processUserInput, summarizeRequestContext } = require('../../utils/processUserInput/processUserInput.cjs');
+const {
+  processUserInput,
+  summarizeRequestContext,
+  applySemanticAnalysis,
+} = require('../../utils/processUserInput/processUserInput.cjs');
 const { canUseTool: authorizeLocalToolUse, collectGroundedPaths } = require('../../hooks/useCanUseTool.cjs');
 const { findUngroundedSourceMentions } = require('../../query/sourceGuard.cjs');
 const { evaluateFinalAnswerPolicy } = require('../../query/finalizationPolicy.cjs');
@@ -9,6 +13,7 @@ const MUTATION_TOOL_NAMES = new Set(['write', 'edit', 'notebook_edit']);
 const EXECUTION_TOOL_NAMES = new Set(['run_build', 'bash', 'powershell', 'task_create', 'task_update', 'task_stop']);
 const RUNTIME_TASK_READ_TOOL_NAMES = new Set(['terminal_capture', 'task_get', 'task_list', 'task_output']);
 const META_RECOVERY_TOOL_NAMES = new Set(['ask_user_question', 'tool_search']);
+const MAX_REFERENCE_SEARCH_PASSES_FOR_CHANGE_REQUEST = 3;
 const READ_CONTEXT_TOOL_NAMES = new Set([
   'list_files',
   'glob',
@@ -24,6 +29,9 @@ const READ_CONTEXT_TOOL_NAMES = new Set([
   'symbol_neighborhood',
   'company_reference_search',
 ]);
+const WORKSPACE_PROGRESS_TOOL_NAMES = new Set(
+  Array.from(READ_CONTEXT_TOOL_NAMES).filter((name) => name !== 'company_reference_search'),
+);
 
 function summarizeToolRequests(toolUses, describeTool = null) {
   return (Array.isArray(toolUses) ? toolUses : [])
@@ -142,6 +150,70 @@ function traceHasSuccessfulTool(trace = [], names = new Set()) {
   });
 }
 
+function successfulToolCount(trace = [], name = '') {
+  const normalized = toStringValue(name);
+  if (!normalized) return 0;
+  return (Array.isArray(trace) ? trace : []).filter((step) => (
+    toStringValue(step?.tool) === normalized
+      && step?.observation?.ok !== false
+  )).length;
+}
+
+function consecutiveSuccessfulToolCount(trace = [], name = '') {
+  const normalized = toStringValue(name);
+  if (!normalized) return 0;
+  let count = 0;
+  const items = Array.isArray(trace) ? trace : [];
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const step = items[index];
+    if (toStringValue(step?.tool) !== normalized || step?.observation?.ok === false) {
+      break;
+    }
+    count += 1;
+  }
+  return count;
+}
+
+function hasReferenceSearchEvidence(trace = []) {
+  return (Array.isArray(trace) ? trace : []).some((step) => {
+    if (toStringValue(step?.tool) !== 'company_reference_search' || step?.observation?.ok === false) {
+      return false;
+    }
+    const observation = step?.observation && typeof step.observation === 'object' ? step.observation : {};
+    return (
+      (Array.isArray(observation?.matches) && observation.matches.length > 0)
+      || (Array.isArray(observation?.windows) && observation.windows.length > 0)
+      || (Array.isArray(observation?.doc_results) && observation.doc_results.length > 0)
+      || (Array.isArray(observation?.doc_chunks) && observation.doc_chunks.length > 0)
+      || (Array.isArray(observation?.citations) && observation.citations.length > 0)
+    );
+  });
+}
+
+function getReferenceSearchLoopState({ trace = [], intent = {} } = {}) {
+  const wantsCodeOutput = Boolean(intent?.wantsChanges || intent?.createLikely);
+  const successfulReferenceSearches = successfulToolCount(trace, 'company_reference_search');
+  const consecutiveReferenceSearches = consecutiveSuccessfulToolCount(trace, 'company_reference_search');
+  const hasWorkspaceProgress = traceHasSuccessfulTool(trace, WORKSPACE_PROGRESS_TOOL_NAMES);
+  const hasMutation = traceHasSuccessfulTool(trace, MUTATION_TOOL_NAMES);
+  const hasExecution = traceHasSuccessfulTool(trace, EXECUTION_TOOL_NAMES);
+  const saturated = wantsCodeOutput
+    && hasReferenceSearchEvidence(trace)
+    && !hasWorkspaceProgress
+    && !hasMutation
+    && !hasExecution
+    && consecutiveReferenceSearches >= MAX_REFERENCE_SEARCH_PASSES_FOR_CHANGE_REQUEST;
+  return {
+    wantsCodeOutput,
+    successfulReferenceSearches,
+    consecutiveReferenceSearches,
+    hasWorkspaceProgress,
+    hasMutation,
+    hasExecution,
+    saturated,
+  };
+}
+
 class ToolRuntime {
   constructor({
     workspacePath = '',
@@ -196,12 +268,24 @@ class ToolRuntime {
     symbolHints = [],
     rewriteNotes = '',
   } = {}) {
+    return this.updateRequestContextSemantics({
+      searchTerms: searchHints,
+      symbolHints,
+      notes: rewriteNotes,
+    });
+  }
+
+  updateRequestContextSemantics(analysis = {}) {
     if (!this.requestContext || typeof this.requestContext !== 'object') {
       return null;
     }
-    this.requestContext.searchHints = uniqueHintStrings(searchHints, 8);
-    this.requestContext.symbolHints = uniqueHintStrings(symbolHints, 6);
-    this.requestContext.rewriteNotes = toStringValue(rewriteNotes).slice(0, 240);
+    this.requestContext = applySemanticAnalysis(this.requestContext, {
+      ...analysis,
+      searchTerms: uniqueHintStrings(analysis?.searchTerms, 8),
+      symbolHints: uniqueHintStrings(analysis?.symbolHints, 6),
+      notes: toStringValue(analysis?.notes).slice(0, 240),
+      confidence: toStringValue(analysis?.confidence),
+    });
     this.requestContext.summary = summarizeRequestContext(this.requestContext);
     return this.requestContext;
   }
@@ -231,12 +315,15 @@ class ToolRuntime {
     const hasFailures = failedSteps(trace).length > 0;
     const hasReadContext = traceHasSuccessfulTool(trace, READ_CONTEXT_TOOL_NAMES);
     const hasMutation = traceHasSuccessfulTool(trace, MUTATION_TOOL_NAMES);
+    const referenceLoop = getReferenceSearchLoopState({ trace, intent });
 
-    if ((this.requestContext?.prefersReferenceTools || this.requestContext?.evidencePreference !== 'workspace') && available.has('company_reference_search')) {
+    if (referenceLoop.saturated) {
+      active.delete('company_reference_search');
+    } else if (available.has('company_reference_search')) {
       active.add('company_reference_search');
     }
 
-    if (intent.wantsChanges && (turn > 1 || hasReadContext || hasFailures || hasMutation)) {
+    if ((intent.wantsChanges || intent.createLikely) && (turn > 1 || hasReadContext || hasFailures || hasMutation)) {
       for (const name of MUTATION_TOOL_NAMES) {
         if (available.has(name)) active.add(name);
       }
@@ -566,6 +653,36 @@ class ToolRuntime {
 
     const allFailed = toolExecutions.length > 0 && toolExecutions.every((item) => item?.observation?.ok === false);
     const interrupted = toolExecutions.some((item) => item?.observation?.interrupted === true);
+    const intent = this.requestContext?.intent && typeof this.requestContext.intent === 'object'
+      ? this.requestContext.intent
+      : {};
+    const referenceLoop = getReferenceSearchLoopState({
+      trace: this.state.trace,
+      intent,
+    });
+    const onlyReferenceSearch = toolUses.length > 0
+      && toolUses.every((toolUse) => toStringValue(toolUse?.name) === 'company_reference_search');
+
+    if (
+      onlyReferenceSearch
+      && referenceLoop.saturated
+      && referenceLoop.consecutiveReferenceSearches === MAX_REFERENCE_SEARCH_PASSES_FOR_CHANGE_REQUEST
+    ) {
+      this.pushMetaUserMessage(
+        'You already have enough company reference evidence for this code change. Stop calling company_reference_search. Use workspace tools next: inspect the target folder, then create or edit a workspace-relative file to implement the request.',
+        {
+          turn,
+          hook: 'reference_search_saturated',
+          successfulReferenceSearches: referenceLoop.successfulReferenceSearches,
+          consecutiveReferenceSearches: referenceLoop.consecutiveReferenceSearches,
+        },
+      );
+      this.recordTransition('reference_search_saturated', {
+        turn,
+        successfulReferenceSearches: referenceLoop.successfulReferenceSearches,
+        consecutiveReferenceSearches: referenceLoop.consecutiveReferenceSearches,
+      });
+    }
 
     await onToolBatchEnd({
       turn,

@@ -292,7 +292,7 @@
   }
 
   function getWorkspaceName(workspacePath: string): string {
-    if (!workspacePath) return 'No workspace selected';
+    if (!workspacePath) return 'Reference mode';
     const parts = workspacePath.replace(/\\/g, '/').split('/').filter(Boolean);
     return parts[parts.length - 1] || workspacePath;
   }
@@ -333,7 +333,7 @@
     dirtyCount: number,
     diffCount: number
   ): string {
-    if (!workspacePath) return 'Choose a workspace to start a tracked session.';
+    if (!workspacePath) return 'Backend reference mode is active. Searches run against the server on 192.168.2.238.';
     if (dirtyCount === 0 && diffCount === 0) return 'Workspace is clean and ready for a new run.';
     if (dirtyCount > 0 && diffCount > 0) {
       return `${dirtyCount} tracked changes across ${diffCount} files.`;
@@ -1521,6 +1521,17 @@
     closeSidebar();
   }
 
+  async function clearActiveWorkspace() {
+    const next = await desktop.saveSettings({
+      workspacePath: '',
+      recentWorkspaces: buildWorkspaceOptions('', settings.recentWorkspaces)
+    });
+    applyLoadedSettings(next);
+    await refreshWorkspace();
+    await loadSessionsForWorkspace('');
+    closeSidebar();
+  }
+
   async function addWorkspace() {
     const picked = await desktop.chooseWorkspace();
     if (picked.canceled || !picked.path) return;
@@ -2271,9 +2282,14 @@
           <div class="section-row">
             <div>
               <div class="section-title">Workspaces</div>
-              <div class="muted small">Switch context without losing your session history.</div>
+              <div class="muted small">Switch local context, or clear it to search backend reference code only.</div>
             </div>
-            <button class="primary" on:click={addWorkspace}>Add</button>
+            <div class="actions">
+              {#if settings.workspacePath}
+                <button class="secondary" on:click={clearActiveWorkspace}>Reference</button>
+              {/if}
+              <button class="primary" on:click={addWorkspace}>Add</button>
+            </div>
           </div>
 
           {#if workspaceOptions.length > 0}
@@ -2595,7 +2611,7 @@
                   {/each}
                 {:else}
                   <div class="empty-state conversation-empty">
-                    Start with a prompt about the current workspace, a failing build, or a file you want changed.
+                    Start with a prompt about backend reference code, a failing build, or a file you want changed.
                   </div>
                 {/if}
               </div>
@@ -2613,8 +2629,8 @@
                 <div class="insight-list">
                   <div class="insight-row">
                     <span>Path</span>
-                    <strong class="path-emphasis" title={settings.workspacePath || 'No workspace selected'}>
-                      {settings.workspacePath ? getPathTail(settings.workspacePath, 5) : 'No workspace selected'}
+                    <strong class="path-emphasis" title={settings.workspacePath || 'Reference mode active'}>
+                      {settings.workspacePath ? getPathTail(settings.workspacePath, 5) : 'Reference mode active'}
                     </strong>
                   </div>
                   <div class="insight-row">
@@ -2686,11 +2702,13 @@
               <div>
                 <div class="section-title">Prompt Composer</div>
                 <div class="muted small">
-                  Workspace context is attached automatically. Ask for fixes, reviews, or implementation work.
+                  {settings.workspacePath
+                    ? 'Workspace context is attached automatically. Ask for fixes, reviews, or implementation work.'
+                    : 'No local workspace is attached. Requests will use backend reference code on 192.168.2.238.'}
                 </div>
               </div>
               <div class="panel-head-meta">
-                <span class="pill neutral">Context on</span>
+                <span class="pill neutral">{settings.workspacePath ? 'Context on' : 'Reference only'}</span>
               </div>
             </div>
 
@@ -2698,7 +2716,9 @@
             <textarea
               bind:value={chatInput}
               rows="3"
-              placeholder="Describe the change you want, the file you care about, or the problem to fix."
+              placeholder={settings.workspacePath
+                ? 'Describe the change you want, the file you care about, or the problem to fix.'
+                : 'Describe the symbol, API, or feature you want to find in backend reference code.'}
               on:keydown={handleComposerKeydown}
             ></textarea>
           </label>
@@ -2708,7 +2728,7 @@
             <button
               class={`composer-send ${busy && activeStreamCancel ? 'stop' : 'send'}`}
               on:click={busy && activeStreamCancel ? cancelActiveChat : submitChat}
-              disabled={!settings.workspacePath || (!busy && !chatInput.trim())}
+              disabled={!busy && !chatInput.trim()}
               aria-label={busy && activeStreamCancel ? 'Stop response' : 'Send prompt'}
               title={busy && activeStreamCancel ? 'Stop response' : 'Send prompt'}
             >

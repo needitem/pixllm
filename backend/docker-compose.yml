@@ -45,7 +45,7 @@ services:
       TF_BIN: ${TF_BIN:-tf}
       TFS_DOCS_SYNC_COMMAND: ${TFS_DOCS_SYNC_COMMAND:-}
     volumes:
-      - ../:/workspace_host
+      - ${WORKSPACE_HOST_ROOT:-../}:/workspace_host
       - hf_model_cache:/root/.cache/huggingface
     depends_on:
       qdrant:

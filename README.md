@@ -73,6 +73,12 @@ PIXLLM은 로컬 코드베이스를 기준으로 질문하고, 실행 로그와 
 
 이 테스트에서는 실제로 파일이 저장됐고, 실행 로그에도 `read_file` 다음 `edit` 단계가 기록됐습니다. 위 diff 화면도 같은 실제 실행 결과에서 캡처한 것으로, 삭제 줄은 빨간색, 추가 줄은 초록색으로 표시됩니다.
 
+## NXImageView 질문 응답 예시
+
+아래 캡처는 기존 세션을 모두 비운 뒤 `TEST` 워크스페이스에서 `nximageview 써서, 이미지 로드한다음 보여주는 프로그램 만들어줘`를 다시 실행한 실제 앱 화면입니다. 이 실행에서는 `company_reference_search` 이후 `write` 단계까지 진행되며 `TEST/NXImageViewExample.cpp` 파일이 생성됐습니다.
+
+![TEST 워크스페이스 NXImageView 응답 화면](docs/assets/pixllm-desktop-test-nximageview-response.png)
+
 ## 빠른 시작
 
 ### 백엔드 실행

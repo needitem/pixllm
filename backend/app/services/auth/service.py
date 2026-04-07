@@ -63,13 +63,22 @@ async def issue_access_token(
     *,
     label: str = "",
     ttl_sec: Optional[int] = None,
+    permanent: bool = False,
     issued_by: str = "admin",
 ) -> dict:
-    effective_ttl = session_token_ttl_seconds(ttl_sec)
+    is_permanent = bool(permanent)
+    if is_permanent and not bool(config.API_SESSION_ACCESS_ALLOW_PERMANENT):
+        raise ValueError("permanent api session tokens are disabled")
+
+    effective_ttl = None if is_permanent else session_token_ttl_seconds(ttl_sec)
     raw_token = secrets.token_urlsafe(32)
     token_id = new_id()
     issued_at = now_iso()
-    expires_at = (datetime.now(timezone.utc) + timedelta(seconds=effective_ttl)).isoformat()
+    expires_at = (
+        None
+        if effective_ttl is None
+        else (datetime.now(timezone.utc) + timedelta(seconds=effective_ttl)).isoformat()
+    )
     payload = {
         "token_id": token_id,
         "label": str(label or "").strip(),
@@ -77,9 +86,17 @@ async def issue_access_token(
         "issued_at": issued_at,
         "expires_at": expires_at,
         "ttl_sec": effective_ttl,
+        "permanent": is_permanent,
     }
-    await redis.set(_token_key(raw_token), json.dumps(payload, ensure_ascii=False), ex=effective_ttl)
-    await redis.set(_token_id_key(token_id), _token_digest(raw_token), ex=effective_ttl)
+    token_key = _token_key(raw_token)
+    token_id_key = _token_id_key(token_id)
+    serialized_payload = json.dumps(payload, ensure_ascii=False)
+    if effective_ttl is None:
+        await redis.set(token_key, serialized_payload)
+        await redis.set(token_id_key, _token_digest(raw_token))
+    else:
+        await redis.set(token_key, serialized_payload, ex=effective_ttl)
+        await redis.set(token_id_key, _token_digest(raw_token), ex=effective_ttl)
     return {
         **payload,
         "access_token": raw_token,
