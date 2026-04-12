@@ -214,6 +214,24 @@ function getReferenceSearchLoopState({ trace = [], intent = {} } = {}) {
   };
 }
 
+function buildToolResultStreamPayload({
+  turn = 0,
+  toolUse = null,
+  observation = {},
+} = {}) {
+  const detail = summarizeObservation(toolUse?.name, observation, 2400);
+  return {
+    turn,
+    id: toolUse?.id,
+    name: toolUse?.name,
+    ok: observation?.ok !== false,
+    input: toolUse?.input && typeof toolUse.input === 'object' ? toolUse.input : {},
+    detail,
+    error: toStringValue(detail?.error || observation?.error),
+    message: toStringValue(detail?.message || observation?.message),
+  };
+}
+
 class ToolRuntime {
   constructor({
     workspacePath = '',
@@ -372,6 +390,7 @@ class ToolRuntime {
 
   ensureGroundedFinalAnswer(answer, { trace = [], turn = 0 } = {}) {
     const unknownMentions = findUngroundedSourceMentions(answer, this.groundedSourcePaths(trace));
+    const mentions = unknownMentions.slice(0, 8);
     if (unknownMentions.length === 0) {
       this.state.ungroundedAnswerRetries = 0;
       return { ok: true, mentions: [] };
@@ -380,18 +399,20 @@ class ToolRuntime {
     this.recordTranscript({
       kind: 'ungrounded_answer',
       turn,
-      mentions: unknownMentions.slice(0, 8),
+      mentions,
     });
     this.recordTransition('ungrounded_answer', {
       turn,
       count: unknownMentions.length,
+      mentions,
     });
     this.state.ungroundedAnswerRetries = Number(this.state.ungroundedAnswerRetries || 0) + 1;
     this.persistState();
     return {
       ok: false,
       type: 'grounding',
-      mentions: unknownMentions.slice(0, 8),
+      mentions,
+      count: unknownMentions.length,
       retryCount: Number(this.state.ungroundedAnswerRetries || 0),
     };
   }
@@ -541,10 +562,11 @@ class ToolRuntime {
     }
 
     await onToolResult({
-      turn,
-      id: toolUse?.id,
-      name: toolUse?.name,
-      ok: observation?.ok !== false,
+      ...buildToolResultStreamPayload({
+        turn,
+        toolUse,
+        observation,
+      }),
     });
     return this._recordToolExecution({
       turn,

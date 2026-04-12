@@ -111,6 +111,11 @@ export type StreamToolResultPayload = {
   name?: string;
   ok?: boolean;
   turn?: number;
+  input?: Record<string, unknown>;
+  detail?: Record<string, unknown>;
+  error?: string;
+  message?: string;
+  [key: string]: unknown;
 };
 
 export type StreamAssistantMessagePayload = {
@@ -128,6 +133,14 @@ export type StreamTransitionPayload = {
   parallel?: boolean;
   toolUses?: number;
   message?: string;
+  count?: number;
+  retryCount?: number;
+  mentions?: string[];
+  candidatePaths?: string[];
+  successfulToolNames?: string[];
+  blockingMessage?: string;
+  details?: Record<string, unknown>;
+  [key: string]: unknown;
 };
 
 export type StreamRequestStartPayload = {
@@ -154,6 +167,8 @@ export type StreamToolBatchPayload = {
 export type StreamTerminalPayload = {
   reason?: string;
   turn?: number;
+  mentions?: string[];
+  [key: string]: unknown;
 };
 
 export type StreamUserQuestionPayload = {

@@ -1792,6 +1792,7 @@ class QueryEngine {
               turn,
               retryCount: Number(finalAnswerCheck?.retryCount || 0),
               count: Array.isArray(finalAnswerCheck?.mentions) ? finalAnswerCheck.mentions.length : 0,
+              mentions: Array.isArray(finalAnswerCheck?.mentions) ? finalAnswerCheck.mentions.slice(0, 8) : [],
             });
             this._persistState();
             if (Number(finalAnswerCheck?.retryCount || 0) > MAX_UNGROUNDED_ANSWER_RETRIES) {

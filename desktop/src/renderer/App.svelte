@@ -87,9 +87,12 @@
     runId?: string;
     statusEvents?: Array<{
       id: string;
+      key?: string;
       message: string;
       phase?: string;
       tool?: string;
+      note?: string;
+      detail?: unknown;
       timestamp: Date;
     }>;
     localTrace?: LocalToolTraceEntry[];
@@ -493,6 +496,68 @@
 
   function isRecord(value: unknown): value is Record<string, unknown> {
     return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+  }
+
+  function toNonEmptyString(value: unknown): string {
+    return typeof value === 'string' ? value.trim() : '';
+  }
+
+  function firstDetailRecord(detail: unknown): Record<string, unknown> | null {
+    if (!isRecord(detail)) return null;
+    if (isRecord(detail.detail)) return detail.detail;
+    if (isRecord(detail.result)) return detail.result;
+    return detail;
+  }
+
+  function executionInputDetail(detail: unknown): unknown {
+    const record = isRecord(detail) ? detail : null;
+    if (!record || record.input === undefined) return null;
+    return record.input;
+  }
+
+  function executionResultDetail(detail: unknown): unknown {
+    const record = isRecord(detail) ? detail : null;
+    if (!record) return null;
+    if (record.detail !== undefined) return record.detail;
+    if (record.result !== undefined) return record.result;
+    return null;
+  }
+
+  function executionDetailMessage(detail: unknown): string {
+    const items = new Set<string>();
+    const root = isRecord(detail) ? detail : null;
+    const nested = firstDetailRecord(detail);
+    for (const value of [
+      root?.message,
+      root?.error,
+      nested?.message,
+      nested?.error,
+      root?.blockingMessage,
+    ]) {
+      const text = toNonEmptyString(value);
+      if (text) items.add(text);
+    }
+    return Array.from(items).join('\n');
+  }
+
+  function executionDetailList(detail: unknown, key: string): string[] {
+    const root = isRecord(detail) ? detail : null;
+    const nested = firstDetailRecord(detail);
+    const candidates = [root?.[key], nested?.[key]];
+    for (const value of candidates) {
+      if (!Array.isArray(value)) continue;
+      return value
+        .map((item) => String(item || '').trim())
+        .filter(Boolean)
+        .slice(0, 12);
+    }
+    return [];
+  }
+
+  function executionDetailValue(detail: unknown, key: string): string {
+    const root = isRecord(detail) ? detail : null;
+    const nested = firstDetailRecord(detail);
+    return toNonEmptyString(root?.[key]) || toNonEmptyString(nested?.[key]);
   }
 
   function compactInputSummary(value: unknown): string {
