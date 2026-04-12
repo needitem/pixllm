@@ -2661,6 +2661,40 @@
                                         {#if item.note && item.note !== item.subtitle}
                                           <div class="details-note">{item.note}</div>
                                         {/if}
+                                        {#if executionDetailMessage(item.detail)}
+                                          <div class="error-box activity-error">{executionDetailMessage(item.detail)}</div>
+                                        {/if}
+                                        {#if executionDetailList(item.detail, 'mentions').length > 0}
+                                          <div class="activity-pill-list">
+                                            {#each executionDetailList(item.detail, 'mentions') as mention}
+                                              <span class="pill neutral">{mention}</span>
+                                            {/each}
+                                          </div>
+                                        {/if}
+                                        {#if executionDetailList(item.detail, 'candidatePaths').length > 0}
+                                          <details class="activity-raw">
+                                            <summary>Candidate paths</summary>
+                                            <pre>{stringifyDetail(executionDetailList(item.detail, 'candidatePaths'))}</pre>
+                                          </details>
+                                        {/if}
+                                        {#if executionDetailList(item.detail, 'successfulToolNames').length > 0}
+                                          <details class="activity-raw">
+                                            <summary>Successful tools</summary>
+                                            <pre>{stringifyDetail(executionDetailList(item.detail, 'successfulToolNames'))}</pre>
+                                          </details>
+                                        {/if}
+                                        {#if executionInputDetail(item.detail) !== null}
+                                          <details class="activity-raw" open>
+                                            <summary>Execution input</summary>
+                                            <pre>{stringifyDetail(executionInputDetail(item.detail))}</pre>
+                                          </details>
+                                        {/if}
+                                        {#if executionResultDetail(item.detail) !== null}
+                                          <details class="activity-raw" open>
+                                            <summary>Execution detail</summary>
+                                            <pre>{stringifyDetail(executionResultDetail(item.detail))}</pre>
+                                          </details>
+                                        {/if}
                                         {#if item.diffs && item.diffs.length > 0}
                                           <div class="diff-stack">
                                             {#each item.diffs as diffView}
@@ -2700,7 +2734,7 @@
                                           </div>
                                         {/if}
                                         <details class="activity-raw">
-                                          <summary>Execution result</summary>
+                                          <summary>Raw payload</summary>
                                           <pre>{stringifyDetail(item.detail)}</pre>
                                         </details>
                                       </div>
@@ -3422,6 +3456,16 @@
     display: grid;
     gap: 8px;
     padding: 0 4px 4px 4px;
+  }
+
+  .activity-error {
+    white-space: pre-wrap;
+  }
+
+  .activity-pill-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
   }
 
   .diff-stack {
