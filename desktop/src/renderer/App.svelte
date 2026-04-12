@@ -396,7 +396,12 @@
       model_retry: 'Retrying model request',
       cancelled: 'Run cancelled'
     };
-    return labels[reason] || reason.replace(/_/g, ' ');
+    const base = labels[reason] || reason.replace(/_/g, ' ');
+    const count = Number(payload?.count || 0);
+    if ((reason === 'ungrounded_answer' || reason === 'ungrounded_answer_retry') && count > 0) {
+      return `${base} (${count} reference${count === 1 ? '' : 's'})`;
+    }
+    return base;
   }
 
   function summarizeTerminal(payload?: StreamTerminalPayload): string {
@@ -448,7 +453,7 @@
 
   function appendStatusEvent(
     messageId: string,
-    event: { message: string; phase?: string; tool?: string }
+    event: { message: string; phase?: string; tool?: string; key?: string; note?: string; detail?: unknown }
   ) {
     updateConversationMessage(messageId, (message) => {
       const events = message.statusEvents ?? [];
@@ -457,7 +462,8 @@
         last &&
         last.message === event.message &&
         last.phase === event.phase &&
-        last.tool === event.tool
+        last.tool === event.tool &&
+        ((last.key || '') === (event.key || ''))
       ) {
         return message;
       }
@@ -467,9 +473,12 @@
           ...events,
           {
             id: createMessageId(),
+            key: event.key,
             message: event.message,
             phase: event.phase,
             tool: event.tool,
+            note: event.note,
+            detail: event.detail,
             timestamp: new Date()
           }
         ]
@@ -1099,14 +1108,14 @@
         badge: 'update',
         tone: toneClass(event.phase || message.state || 'active'),
         detailTitle: `Execution update ${index + 1}`,
-        detail: {
+        detail: event.detail ?? {
           order: index + 1,
           message: event.message,
           phase: event.phase || '',
           tool: event.tool || '',
           timestamp: event.timestamp.toISOString()
         },
-        note: event.message || ''
+        note: event.note || event.message || ''
       });
     }
 
@@ -1217,9 +1226,12 @@
       statusEvents: Array.isArray(item.statusEvents)
         ? item.statusEvents.map((event) => ({
             id: String(event?.id || createMessageId()),
+            key: typeof event?.key === 'string' ? event.key : undefined,
             message: String(event?.message || ''),
             phase: typeof event?.phase === 'string' ? event.phase : undefined,
             tool: typeof event?.tool === 'string' ? event.tool : undefined,
+            note: typeof event?.note === 'string' ? event.note : undefined,
+            detail: event?.detail,
             timestamp: new Date(String(event?.timestamp || new Date().toISOString()))
           }))
         : [],
@@ -1748,16 +1760,23 @@
             appendStatusEvent(assistantMessageId, {
               message: `Model requested ${name}`,
               phase: 'tool_use',
-              tool: name
+              tool: name,
+              key: String(payload?.id || ''),
+              note: compactInputSummary(payload?.input),
+              detail: payload
             });
           },
           onToolResult: (payload?: StreamToolResultPayload) => {
             const name = String(payload?.name || '').trim();
             if (!name) return;
+            const failureText = executionDetailMessage(payload);
             appendStatusEvent(assistantMessageId, {
               message: payload?.ok === false ? `${name} failed` : `${name} completed`,
               phase: 'tool_result',
-              tool: name
+              tool: name,
+              key: String(payload?.id || ''),
+              note: failureText || compactInputSummary(payload?.input),
+              detail: payload
             });
           },
           onToolBatchStart: (payload?: StreamToolBatchPayload) => {
@@ -1778,15 +1797,27 @@
             });
           },
           onTransition: (payload?: StreamTransitionPayload) => {
+            const mentions = executionDetailList(payload, 'mentions').join(', ');
             appendStatusEvent(assistantMessageId, {
               message: summarizeTransition(payload),
-              phase: 'transition'
+              phase: 'transition',
+              key: [
+                String(payload?.reason || ''),
+                String(payload?.turn || ''),
+                String(payload?.retryCount || ''),
+                String(payload?.count || '')
+              ].join(':'),
+              note: mentions || executionDetailMessage(payload),
+              detail: payload
             });
           },
           onTerminal: (payload?: StreamTerminalPayload) => {
             appendStatusEvent(assistantMessageId, {
               message: summarizeTerminal(payload),
-              phase: 'terminal'
+              phase: 'terminal',
+              key: [String(payload?.reason || ''), String(payload?.turn || '')].join(':'),
+              note: executionDetailList(payload, 'mentions').join(', '),
+              detail: payload
             });
           },
           onUserQuestion: async (
