@@ -383,6 +383,9 @@
       repeated_tool_batch_recovery: 'Blocked repeated tool batch',
       tool_failure_recovery: 'Recovering after tool failures',
       next_turn: 'Continuing to next reasoning turn',
+      next_speaker_check: 'Checking whether the draft can finalize',
+      ungrounded_answer: 'Draft answer failed grounding check',
+      ungrounded_answer_retry: 'Retrying after grounding failure',
       final_answer: 'Final answer produced',
       fallback: 'Fallback answer produced',
       assistant_parse_retry: 'Retrying after malformed assistant output',
@@ -396,7 +399,16 @@
   function summarizeTerminal(payload?: StreamTerminalPayload): string {
     const reason = String(payload?.reason || '').trim();
     if (!reason) return 'Run completed';
-    return reason.replace(/_/g, ' ');
+    const labels: Record<string, string> = {
+      tool_failure: 'Run stopped after tool failure',
+      no_progress: 'Run stopped after making no progress',
+      repeated_tool_batch: 'Run stopped after repeating the same tool batch',
+      ungrounded_answer: 'Run stopped because the answer could not be grounded',
+      parse_error_budget: 'Run stopped after repeated malformed assistant output',
+      turn_budget: 'Run stopped after reaching the turn budget',
+      cancelled: 'Run cancelled'
+    };
+    return labels[reason] || reason.replace(/_/g, ' ');
   }
 
   function createMessageId() {
@@ -1661,7 +1673,7 @@
               message:
                 toolUses > 0
                   ? `Assistant emitted ${toolUses} tool request${toolUses === 1 ? '' : 's'}`
-                  : 'Assistant emitted answer text',
+                  : 'Assistant drafted answer text',
               phase: 'assistant_message'
             });
           },

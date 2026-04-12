@@ -9,9 +9,14 @@ router = APIRouter()
 
 
 @router.get("/conversations")
-async def list_conversations(page: int = 1, per_page: int = 20, redis = Depends(get_redis)):
+async def list_conversations(
+    page: int = 1,
+    per_page: int = 20,
+    session_id: str = "",
+    redis = Depends(get_redis),
+):
     svc = ConversationsService(redis)
-    data = await svc.list(page, per_page)
+    data = await svc.list(page, per_page, session_id=session_id)
     return ok(data)
 
 
@@ -19,6 +24,15 @@ async def list_conversations(page: int = 1, per_page: int = 20, redis = Depends(
 async def get_conversation(conv_id: str, redis = Depends(get_redis)):
     svc = ConversationsService(redis)
     data = await svc.get(conv_id)
+    if not data:
+        return err("NOT_FOUND", "conversation not found")
+    return ok(data)
+
+
+@router.get("/conversations/session/{session_id}")
+async def get_conversation_by_session(session_id: str, redis = Depends(get_redis)):
+    svc = ConversationsService(redis)
+    data = await svc.get_by_session(session_id)
     if not data:
         return err("NOT_FOUND", "conversation not found")
     return ok(data)

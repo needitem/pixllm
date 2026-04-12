@@ -13,6 +13,8 @@ class LlmChatMessage(BaseModel):
 class LlmChatCompletionRequest(BaseModel):
     model: str = config.VLLM_MODEL
     messages: List[LlmChatMessage] = Field(default_factory=list)
+    conversation_id: Optional[str] = None
+    session_id: Optional[str] = None
     tools: List[Dict[str, Any]] = Field(default_factory=list)
     tool_choice: Optional[Any] = None
     max_tokens: int = 1200
@@ -26,6 +28,8 @@ class LlmChatCompletionResponse(BaseModel):
     tool_calls: List[Dict[str, Any]] = Field(default_factory=list)
     finish_reason: str = ""
     usage: Dict[str, Any] = Field(default_factory=dict)
+    conversation_id: Optional[str] = None
+    session_id: Optional[str] = None
 
 
 class LlmTokenizeRequest(BaseModel):

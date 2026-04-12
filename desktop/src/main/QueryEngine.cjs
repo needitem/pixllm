@@ -115,6 +115,34 @@ function hashText(text) {
   return createHash('sha1').update(String(text || ''), 'utf8').digest('hex');
 }
 
+function resolveFallbackTerminalReason(terminalReason = '', failedStep = null) {
+  const reason = toStringValue(terminalReason);
+  if (reason) return reason;
+  return failedStep ? 'tool_failure' : 'turn_budget';
+}
+
+function buildFallbackAnswer({ terminalReason = '', failedStep = null } = {}) {
+  const reason = resolveFallbackTerminalReason(terminalReason, failedStep);
+  if (reason === 'tool_failure') {
+    return failedStep
+      ? `The desktop agent stopped after tool failures. Last error: ${toStringValue(failedStep?.observation?.error)}`
+      : 'The desktop agent stopped after tool failures.';
+  }
+  if (reason === 'no_progress') {
+    return 'The desktop agent stopped because it was repeating the same reasoning without making progress.';
+  }
+  if (reason === 'repeated_tool_batch') {
+    return 'The desktop agent stopped because it repeated the same tool batch without converging.';
+  }
+  if (reason === 'ungrounded_answer') {
+    return 'The desktop agent stopped because it could not produce a grounded final answer from the collected evidence.';
+  }
+  if (reason === 'parse_error_budget') {
+    return 'The desktop agent stopped because the assistant repeatedly returned malformed output.';
+  }
+  return 'The desktop agent reached its turn budget before producing a final answer.';
+}
+
 function messageCharLength(message) {
   return serializeBlocks(Array.isArray(message?.content) ? message.content : []).length;
 }
@@ -1899,18 +1927,12 @@ class QueryEngine {
       const readObservations = readObservationsFromTrace(runTrace);
       const primary = readObservations[0] || {};
       const failed = failedSteps(runTrace)[0];
-      const fallbackAnswer = failed
-        ? `The desktop agent stopped after tool failures. Last error: ${toStringValue(failed?.observation?.error)}`
-        : this.state.terminalReason === 'no_progress'
-          ? 'The desktop agent stopped because it was repeating the same reasoning without making progress.'
-          : this.state.terminalReason === 'repeated_tool_batch'
-            ? 'The desktop agent stopped because it repeated the same tool batch without converging.'
-            : this.state.terminalReason === 'ungrounded_answer'
-              ? 'The desktop agent stopped because it could not produce a grounded final answer from the collected evidence.'
-              : 'The desktop agent reached its turn budget before producing a final answer.';
-      if (!toStringValue(this.state.terminalReason)) {
-        this.state.terminalReason = failed ? 'tool_failure' : 'turn_budget';
-      }
+      const resolvedTerminalReason = resolveFallbackTerminalReason(this.state.terminalReason, failed);
+      const fallbackAnswer = buildFallbackAnswer({
+        terminalReason: resolvedTerminalReason,
+        failedStep: failed,
+      });
+      this.state.terminalReason = resolvedTerminalReason;
       await onToken(fallbackAnswer);
       this._recordTranscript({
         kind: 'fallback',
@@ -1942,4 +1964,6 @@ class QueryEngine {
 module.exports = {
   QueryEngine,
   LocalAgentEngine: QueryEngine,
+  resolveFallbackTerminalReason,
+  buildFallbackAnswer,
 };
