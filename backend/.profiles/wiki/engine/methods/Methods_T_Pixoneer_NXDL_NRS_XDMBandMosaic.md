@@ -1,0 +1,35 @@
+---
+title: Pixoneer.NXDL.NRS.XDMBandMosaic Methods
+aliases:
+  - XDMBandMosaic Methods
+  - Pixoneer.NXDL.NRS.XDMBandMosaic
+  - XDMBandMosaic
+symbols:
+  - XDMBandMosaic
+  - GetInputParam
+  - SetInputParam
+tags:
+  - engine
+  - methods
+  - api
+  - pixoneer
+  - nxdl
+  - nrs
+---
+
+# Overview
+- Namespace: `Pixoneer.NXDL.NRS`
+- Type: `XDMBandMosaic`
+- HTML source: `html/Methods_T_Pixoneer_NXDL_NRS_XDMBandMosaic.htm`
+- Type declaration: `Source/NXDLrs/XDMBandMosaic.h:130`
+- Method count: `2`
+
+## GetInputParam
+- Description: 모자이크를 위한 입력 매개변수를 가져온다.
+- Declaration: `Source/NXDLrs/XDMBandMosaic.h:148`
+- Implementation: `Source/NXDLrs/XDMBandMosaic.cpp:174`
+
+## SetInputParam
+- Description: 모자이크를 위한 입력 매개변수를 설정한다.
+- Declaration: `Source/NXDLrs/XDMBandMosaic.h:144`
+- Implementation: `Source/NXDLrs/XDMBandMosaic.cpp:99`

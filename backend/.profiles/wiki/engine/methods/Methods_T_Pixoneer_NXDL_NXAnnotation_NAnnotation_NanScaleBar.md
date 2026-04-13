@@ -1,0 +1,156 @@
+---
+title: Pixoneer.NXDL.NXAnnotation.NAnnotation.NanScaleBar Methods
+aliases:
+  - NanScaleBar Methods
+  - Pixoneer.NXDL.NXAnnotation.NAnnotation.NanScaleBar
+  - NanScaleBar
+symbols:
+  - NanScaleBar
+  - CalcRange
+  - ChangeTextPosition
+  - Clone
+  - GetFontName
+  - GetFontSize
+  - GetSelectionFontColor
+  - GetSelectionFontPatternBackColor
+  - GetSelectionFontPatternFillStyle
+  - GetSelectionFontSolidOpacity
+  - Set
+  - SetFontName
+  - SetFontSize
+  - SetSelectionBold
+  - SetSelectionFontPatternBackColor
+  - SetSelectionFontPatternFillStyle
+  - SetSelectionFontPatternForeColor
+  - SetSelectionFontSolidColor
+  - SetSelectionFontSolidOpacity
+  - SetSelectionItalic
+  - SetTextColor
+  - SetTextSizeUnit
+  - ToObjectString
+tags:
+  - engine
+  - methods
+  - api
+  - pixoneer
+  - nxdl
+  - nxannotation
+  - nannotation
+---
+
+# Overview
+- Namespace: `Pixoneer.NXDL.NXAnnotation.NAnnotation`
+- Type: `NanScaleBar`
+- HTML source: `html/Methods_T_Pixoneer_NXDL_NXAnnotation_NAnnotation_NanScaleBar.htm`
+- Type declaration: `not found`
+- Method count: `22`
+
+## CalcRange
+- Description: 객체의 최소, 최대 범위를 계산한다. (Overrides NanObjCalcRange)
+- Declaration: `not found`
+- Implementation: `not found`
+
+## ChangeTextPosition
+- Description: 축척과 축척 도시 위치를 계산한다.
+- Declaration: `not found`
+- Implementation: `not found`
+
+## Clone
+- Description: 객체를 복사한다. (Overrides NanObjClone)
+- Declaration: `not found`
+- Implementation: `not found`
+
+## GetFontName
+- Description: 글꼴 이름을 가져온다.
+- Declaration: `not found`
+- Implementation: `not found`
+
+## GetFontSize
+- Description: 글씨 크기(FontCount, 고정크기)을 가져온다.
+- Declaration: `not found`
+- Implementation: `not found`
+
+## GetSelectionFontColor
+- Description: 선택한 텍스트에 대한 글씨 색을 가져온다.
+- Declaration: `not found`
+- Implementation: `not found`
+
+## GetSelectionFontPatternBackColor
+- Description: 선택한 텍스트에 대한 채우기 배경색을 가져온다.
+- Declaration: `not found`
+- Implementation: `not found`
+
+## GetSelectionFontPatternFillStyle
+- Description: 선택한 텍스트에 대한 채우기 스타일을 가져온다.
+- Declaration: `not found`
+- Implementation: `not found`
+
+## GetSelectionFontSolidOpacity
+- Description: 선택한 텍스트에 대한 글씨 투명도를 가져온다.
+- Declaration: `not found`
+- Implementation: `not found`
+
+## Set
+- Description: NanScaleBar 객체의 위치를 설정한다.
+- Declaration: `not found`
+- Implementation: `not found`
+
+## SetFontName
+- Description: 글꼴을 설정한다.
+- Declaration: `not found`
+- Implementation: `not found`
+
+## SetFontSize
+- Description: 글씨 크기(FontCount, 고정크기)를 설정한다.
+- Declaration: `not found`
+- Implementation: `not found`
+
+## SetSelectionBold
+- Description: 글씨체를 Bold 로 설정하거나 해제한다.
+- Declaration: `not found`
+- Implementation: `not found`
+
+## SetSelectionFontPatternBackColor
+- Description: 선택한 텍스트에 대한 채우기 배경색을 설정한다.
+- Declaration: `not found`
+- Implementation: `not found`
+
+## SetSelectionFontPatternFillStyle
+- Description: 선택한 텍스트에 대한 채우기 스타일을 설정한다.
+- Declaration: `not found`
+- Implementation: `not found`
+
+## SetSelectionFontPatternForeColor
+- Description: 선택한 텍스트에 대한 채우기 전경색을 설정한다.
+- Declaration: `not found`
+- Implementation: `not found`
+
+## SetSelectionFontSolidColor
+- Description: 선택한 텍스트에 대한 글씨 색을 설정한다.
+- Declaration: `not found`
+- Implementation: `not found`
+
+## SetSelectionFontSolidOpacity
+- Description: 선택한 텍스트에 대한 투명도를 설정한다.
+- Declaration: `not found`
+- Implementation: `not found`
+
+## SetSelectionItalic
+- Description: 글씨체를 Italic 으로 설정하거나 해제한다.
+- Declaration: `not found`
+- Implementation: `not found`
+
+## SetTextColor
+- Description: 글씨 색을 설정한다. (Overrides NanObjSetTextColor(Color))
+- Declaration: `not found`
+- Implementation: `not found`
+
+## SetTextSizeUnit
+- Description: 텍스트 크기 단위(world 좌표 단위)를 설정한다.
+- Declaration: `not found`
+- Implementation: `not found`
+
+## ToObjectString
+- Description: 객체 class 이름을 가져온다.
+- Declaration: `not found`
+- Implementation: `not found`
