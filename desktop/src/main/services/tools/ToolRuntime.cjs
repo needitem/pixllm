@@ -5,6 +5,7 @@ const {
 } = require('../../utils/processUserInput/processUserInput.cjs');
 const { canUseTool: authorizeLocalToolUse, collectGroundedPaths } = require('../../hooks/useCanUseTool.cjs');
 const { findUngroundedSourceMentions } = require('../../query/sourceGuard.cjs');
+const { summarizeCompanyReferenceEvidence } = require('../../query/referenceEvidence.cjs');
 const { evaluateFinalAnswerPolicy } = require('../../query/finalizationPolicy.cjs');
 const { createToolResultBlock, toStringValue } = require('../../query.cjs');
 const { summarizeObservation, failedSteps } = require('../../queryTrace.cjs');
@@ -300,13 +301,20 @@ function getReferenceSearchLoopState({ trace = [], intent = {} } = {}) {
   const consecutiveReferenceSearches = consecutiveSuccessfulToolCount(trace, 'company_reference_search');
   const hasMutation = traceHasSuccessfulTool(trace, MUTATION_TOOL_NAMES);
   const hasExecution = traceHasSuccessfulTool(trace, EXECUTION_TOOL_NAMES);
+  const referenceEvidence = summarizeCompanyReferenceEvidence(trace);
   const blockedOnReferenceLoop = hasReferenceSearchEvidence(trace)
     && !hasMutation
     && !hasExecution;
+  const needsCodeGrounding = wantsCodeOutput
+    && blockedOnReferenceLoop
+    && consecutiveReferenceSearches >= MAX_REFERENCE_SEARCH_PASSES_FOR_CHANGE_REQUEST
+    && referenceEvidence.hasDocsOnlyEvidence
+    && !referenceEvidence.hasVerifiedCodeEvidence;
   const saturationMode = wantsCodeOutput
     ? (
       blockedOnReferenceLoop
       && consecutiveReferenceSearches >= MAX_REFERENCE_SEARCH_PASSES_FOR_CHANGE_REQUEST
+      && !needsCodeGrounding
         ? 'change'
         : ''
     )
@@ -316,7 +324,8 @@ function getReferenceSearchLoopState({ trace = [], intent = {} } = {}) {
         ? 'answer'
         : ''
     );
-  const saturated = Boolean(saturationMode)
+  const saturated = !needsCodeGrounding
+    && Boolean(saturationMode)
     && (
       wantsCodeOutput
         ? consecutiveReferenceSearches >= MAX_REFERENCE_SEARCH_PASSES_FOR_CHANGE_REQUEST
@@ -329,9 +338,17 @@ function getReferenceSearchLoopState({ trace = [], intent = {} } = {}) {
     hasMutation,
     hasExecution,
     blockedOnReferenceLoop,
+    needsCodeGrounding,
     saturated,
     saturationMode,
+    referenceEvidence,
   };
+}
+
+function referenceCodeGroundingMessage(loopState = {}) {
+  const evidence = loopState?.referenceEvidence || {};
+  const docCount = Number(evidence.docResultCount || 0) + Number(evidence.docChunkCount || 0);
+  return `Company reference search found doc/wiki guidance (${docCount} doc hits) but no verified code declaration or implementation. Use the wiki terms only as search hints. Next, narrow company_reference_search to real code evidence or inspect workspace files before writing code.`;
 }
 
 function referenceSearchSaturationMessage(loopState = {}) {
@@ -342,6 +359,9 @@ function referenceSearchSaturationMessage(loopState = {}) {
 }
 
 function referenceSearchSaturationTransition(loopState = {}) {
+  if (loopState?.needsCodeGrounding) {
+    return 'reference_search_needs_code_grounding';
+  }
   return loopState?.saturationMode === 'change'
     ? 'reference_search_saturated'
     : 'reference_search_answer_saturated';
@@ -474,6 +494,10 @@ class ToolRuntime {
     const hasFailures = failedSteps(trace).length > 0;
     const hasReadContext = traceHasSuccessfulTool(trace, READ_CONTEXT_TOOL_NAMES);
     const hasMutation = traceHasSuccessfulTool(trace, MUTATION_TOOL_NAMES);
+    const hasWorkspaceInspectionEvidence = traceHasSuccessfulTool(
+      trace,
+      new Set(['read_file', 'read_symbol_span', 'symbol_outline', 'symbol_neighborhood', 'lsp']),
+    );
     const referenceLoop = getReferenceSearchLoopState({ trace, intent });
     const workspaceAnswerLoop = getWorkspaceAnswerLoopState({ trace, intent });
     const narrowingPreferred = Boolean(this.requestContext?.narrowingPreferred);
@@ -486,6 +510,19 @@ class ToolRuntime {
 
     if ((intent.wantsChanges || intent.createLikely) && (turn > 1 || hasReadContext || hasFailures || hasMutation)) {
       for (const name of MUTATION_TOOL_NAMES) {
+        if (available.has(name)) active.add(name);
+      }
+    }
+
+    if (referenceLoop.needsCodeGrounding && !hasWorkspaceInspectionEvidence) {
+      for (const name of MUTATION_TOOL_NAMES) {
+        active.delete(name);
+      }
+      for (const name of EXECUTION_TOOL_NAMES) {
+        active.delete(name);
+      }
+      if (available.has('company_reference_search')) active.add('company_reference_search');
+      for (const name of WORKSPACE_PROGRESS_TOOL_NAMES) {
         if (available.has(name)) active.add(name);
       }
     }
@@ -546,29 +583,30 @@ class ToolRuntime {
   ensureGroundedFinalAnswer(answer, { trace = [], turn = 0 } = {}) {
     const unknownMentions = findUngroundedSourceMentions(answer, this.groundedSourcePaths(trace));
     const mentions = unknownMentions.slice(0, 8);
+    this.state.ungroundedAnswerRetries = 0;
     if (unknownMentions.length === 0) {
-      this.state.ungroundedAnswerRetries = 0;
-      return { ok: true, mentions: [] };
+      return { ok: true, mentions: [], warning: null };
     }
 
     this.recordTranscript({
-      kind: 'ungrounded_answer',
+      kind: 'ungrounded_answer_warning',
       turn,
       mentions,
     });
-    this.recordTransition('ungrounded_answer', {
+    this.recordTransition('ungrounded_answer_warning', {
       turn,
       count: unknownMentions.length,
       mentions,
     });
-    this.state.ungroundedAnswerRetries = Number(this.state.ungroundedAnswerRetries || 0) + 1;
     this.persistState();
     return {
-      ok: false,
-      type: 'grounding',
+      ok: true,
       mentions,
-      count: unknownMentions.length,
-      retryCount: Number(this.state.ungroundedAnswerRetries || 0),
+      warning: {
+        type: 'grounding',
+        mentions,
+        count: unknownMentions.length,
+      },
     };
   }
 
@@ -603,13 +641,13 @@ class ToolRuntime {
     }
 
     const grounded = this.ensureGroundedFinalAnswer(answer, { trace, turn });
-    if (!grounded?.ok) {
-      return grounded;
-    }
     return {
       ok: true,
       type: 'final',
-      details: policyResult.details || {},
+      details: {
+        ...(policyResult.details || {}),
+        groundingWarnings: grounded?.warning ? [grounded.warning] : [],
+      },
     };
   }
 
@@ -852,16 +890,20 @@ class ToolRuntime {
 
     if (
       onlyReferenceSearch
-      && referenceLoop.saturated
+      && (referenceLoop.saturated || referenceLoop.needsCodeGrounding)
       && (
-        (referenceLoop.saturationMode === 'change'
+        (referenceLoop.needsCodeGrounding
+          && referenceLoop.consecutiveReferenceSearches === MAX_REFERENCE_SEARCH_PASSES_FOR_CHANGE_REQUEST)
+        || (referenceLoop.saturationMode === 'change'
           && referenceLoop.consecutiveReferenceSearches === MAX_REFERENCE_SEARCH_PASSES_FOR_CHANGE_REQUEST)
         || (referenceLoop.saturationMode === 'answer'
           && referenceLoop.consecutiveReferenceSearches >= MAX_REFERENCE_SEARCH_PASSES_FOR_ANSWER_REQUEST)
       )
     ) {
       this.pushMetaUserMessage(
-        referenceSearchSaturationMessage(referenceLoop),
+        referenceLoop.needsCodeGrounding
+          ? referenceCodeGroundingMessage(referenceLoop)
+          : referenceSearchSaturationMessage(referenceLoop),
         {
           turn,
           hook: referenceSearchSaturationTransition(referenceLoop),

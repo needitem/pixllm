@@ -1,4 +1,5 @@
 const path = require('node:path');
+const { summarizeCompanyReferenceEvidence } = require('../query/referenceEvidence.cjs');
 
 const {
   grepItemsFromTrace,
@@ -73,25 +74,6 @@ function collectGroundedPaths({ trace = [], fileCache = {}, requestContext = {} 
   return Array.from(paths);
 }
 
-function companyReferenceEvidenceTypes(trace = []) {
-  const types = new Set();
-  for (const step of Array.isArray(trace) ? trace : []) {
-    if (toStringValue(step?.tool) !== 'company_reference_search' || step?.observation?.ok === false) {
-      continue;
-    }
-    const observation = step?.observation && typeof step.observation === 'object' ? step.observation : {};
-    for (const group of [observation.matches, observation.windows]) {
-      for (const item of Array.isArray(group) ? group : []) {
-        const evidenceType = toStringValue(item?.evidenceType || item?.evidence_type).toLowerCase();
-        if (evidenceType) {
-          types.add(evidenceType);
-        }
-      }
-    }
-  }
-  return types;
-}
-
 function collectReadPaths({ trace = [], fileCache = {} } = {}) {
   const paths = new Set();
   for (const item of readObservationsFromTrace(trace)) {
@@ -110,6 +92,45 @@ function classifyLspAction(action) {
   if (['workspace_symbols', 'references', 'callers'].includes(normalized)) return 'discovery';
   if (['document_symbols', 'read_symbol', 'diagnostics'].includes(normalized)) return 'path_read';
   return 'path_read';
+}
+
+const CODE_ARTIFACT_EXTENSIONS = new Set([
+  '.c',
+  '.cc',
+  '.cpp',
+  '.cs',
+  '.css',
+  '.go',
+  '.h',
+  '.hpp',
+  '.html',
+  '.java',
+  '.js',
+  '.json',
+  '.mjs',
+  '.py',
+  '.rs',
+  '.sql',
+  '.svelte',
+  '.ts',
+  '.tsx',
+  '.vb',
+  '.xaml',
+  '.xml',
+  '.yaml',
+  '.yml',
+  '.sln',
+  '.csproj',
+  '.vcxproj',
+  '.props',
+  '.targets',
+]);
+
+function isLikelyCodeArtifactPath(value = '') {
+  const normalized = normalizePath(value);
+  if (!normalized) return false;
+  if (/\.xaml\.cs$/i.test(normalized)) return true;
+  return CODE_ARTIFACT_EXTENSIONS.has(path.extname(normalized).toLowerCase());
 }
 
 function toolPathCandidates(toolName, input = {}) {
@@ -169,8 +190,9 @@ function authorizeToolUse({
   });
   const hasContext = groundedPaths.size > 0;
   const hasFailures = failedSteps(trace).length > 0;
-  const referenceEvidenceTypes = companyReferenceEvidenceTypes(trace);
-  const hasVerifiedReferenceCodeEvidence = ['declaration', 'implementation'].some((item) => referenceEvidenceTypes.has(item));
+  const referenceEvidence = summarizeCompanyReferenceEvidence(trace);
+  const hasVerifiedReferenceCodeEvidence = referenceEvidence.hasVerifiedCodeEvidence;
+  const hasWorkspaceInspectionEvidence = readPaths.size > 0;
 
   if (activeToolNames.size > 0 && !activeToolNames.has(normalizedTool)) {
     return permissionDenied({
@@ -280,11 +302,25 @@ function authorizeToolUse({
         suggestedTools: ['read_file', 'read_symbol_span'],
       });
     }
+    const codeArtifactTargets = pathCandidates.filter((value) => isLikelyCodeArtifactPath(value));
+    if (
+      codeArtifactTargets.length > 0
+      && Boolean(intent.createLikely || intent.wantsChanges)
+      && !hasWorkspaceInspectionEvidence
+      && referenceEvidence.hasDocsOnlyEvidence
+      && !hasVerifiedReferenceCodeEvidence
+    ) {
+      return permissionDenied({
+        toolName,
+        reason: 'reference_code_grounding_required',
+        message: `Reference wiki/doc results are only guidance. Before writing ${codeArtifactTargets[0]}, gather declaration or implementation evidence with company_reference_search or inspect real workspace code.`,
+        suggestedTools: ['company_reference_search', 'find_symbol', 'read_file'],
+      });
+    }
     if (
       Boolean(intent.createLikely)
-      && Boolean(requestContext?.prefersReferenceTools)
       && !hasContext
-      && referenceEvidenceTypes.size > 0
+      && referenceEvidence.hasDocEvidence
       && !hasVerifiedReferenceCodeEvidence
     ) {
       return permissionDenied({

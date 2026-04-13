@@ -387,10 +387,12 @@
       tool_failure_recovery: 'Recovering after tool failures',
       next_turn: 'Continuing to next reasoning turn',
       next_speaker_check: 'Checking whether the draft can finalize',
+      reference_search_needs_code_grounding: 'Company reference search needs real code grounding',
       reference_search_saturated: 'Company reference search saturated for code change',
       reference_search_answer_saturated: 'Company reference search saturated for answer',
       ungrounded_answer: 'Draft answer failed grounding check',
       ungrounded_answer_retry: 'Retrying after grounding failure',
+      ungrounded_answer_warning: 'Final answer kept with grounding warning',
       final_answer: 'Final answer produced',
       fallback: 'Fallback answer produced',
       assistant_parse_retry: 'Retrying after malformed assistant output',
@@ -400,7 +402,7 @@
     };
     const base = labels[reason] || reason.replace(/_/g, ' ');
     const count = Number(payload?.count || 0);
-    if ((reason === 'ungrounded_answer' || reason === 'ungrounded_answer_retry') && count > 0) {
+    if ((reason === 'ungrounded_answer' || reason === 'ungrounded_answer_retry' || reason === 'ungrounded_answer_warning') && count > 0) {
       return `${base} (${count} reference${count === 1 ? '' : 's'})`;
     }
     return base;

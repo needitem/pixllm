@@ -1260,6 +1260,7 @@ function buildSystemPrompt({
     '- Use write/write_file to create new workspace files or replace whole-file content, and use edit/replace_in_file for grounded in-place edits.',
     '- Do not use bash or powershell to create or edit files when write/edit tools are enabled.',
     '- Use company_reference_search for company engine source or internal reference material outside the workspace.',
+    '- Treat company_reference_search doc/wiki results as search guidance, not as API authority. Before writing code from reference material, gather declaration or implementation evidence or inspect real workspace code.',
     '- Treat backend reference evidence as read-only.',
     '- Only the tools enabled for this turn are available.',
     '- Ground code claims in tool responses already shown in the transcript.',

@@ -1,6 +1,7 @@
 const SOURCE_FILE_EXTENSIONS = new Set([
   'c',
   'cc',
+  'cjs',
   'cpp',
   'cxx',
   'cs',
@@ -14,11 +15,13 @@ const SOURCE_FILE_EXTENSIONS = new Set([
   'js',
   'json',
   'md',
+  'mjs',
   'pdf',
   'py',
   'rs',
   'rst',
   'sql',
+  'svelte',
   'ts',
   'tsx',
   'txt',
@@ -70,7 +73,7 @@ function isGroundedSource(mention, allowedPaths) {
     .map((item) => normalizeSourcePath(item))
     .filter(Boolean);
   if (known.includes(candidate)) return true;
-  return known.some((item) => item.endsWith(candidate) || candidate.endsWith(item));
+  return known.some((item) => item.endsWith(`/${candidate}`) || candidate.endsWith(`/${item}`));
 }
 
 function findUngroundedSourceMentions(answer, allowedPaths) {

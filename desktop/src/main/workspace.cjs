@@ -3,6 +3,7 @@ const { execFile } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const { createUnifiedDiff } = require('./tools/shared/unifiedDiff.cjs');
+const { evaluateWorkspaceShellRequest } = require('./workspaceShell.cjs');
 
 const IGNORED_DIRS = new Set([
   '.svn',
@@ -1304,58 +1305,7 @@ async function runBuild(workspacePath, tool, args) {
   };
 }
 
-function isDangerousShellCommand(commandText) {
-  const lowered = String(commandText || '').toLowerCase();
-  if (!lowered) return true;
-  if (/[;&><]/.test(lowered)) return true;
-  return [
-    /\bremove-item\b/,
-    /\bdel\b/,
-    /\berase\b/,
-    /\brmdir\b/,
-    /\brd\b/,
-    /\brm\b/,
-    /\bformat\b/,
-    /\bshutdown\b/,
-    /\brestart-computer\b/,
-    /\bstop-computer\b/,
-    /\bgit\s+reset\s+--hard\b/,
-    /\bgit\s+clean\b/,
-    /\bsvn\s+revert\b/,
-  ].some((pattern) => pattern.test(lowered));
-}
-
-function isAllowedShellCommand(commandText) {
-  const lowered = String(commandText || '').trim().toLowerCase();
-  if (!lowered) return false;
-  return [
-    /^git\s+(status|diff|show|log|branch)\b/,
-    /^svn\s+(status|diff|info|log)\b/,
-    /^dotnet\b/,
-    /^msbuild\b/,
-    /^cmake\b/,
-    /^ninja\b/,
-    /^pytest\b/,
-    /^python\b/,
-    /^node\b/,
-    /^npm\b/,
-    /^pnpm\b/,
-    /^yarn\b/,
-    /^rg\b/,
-    /^get-childitem\b/,
-    /^get-content\b/,
-    /^select-string\b/,
-    /^test-path\b/,
-    /^resolve-path\b/,
-    /^ls\b/,
-    /^dir\b/,
-    /^type\b/,
-    /^cat\b/,
-  ].some((pattern) => pattern.test(lowered));
-}
-
 async function runWorkspaceShell(workspacePath, commandText, options = {}) {
-  const script = String(commandText || '').trim();
   let normalizedPath;
   try {
     normalizedPath = await normalizeWorkspacePath(workspacePath);
@@ -1363,52 +1313,42 @@ async function runWorkspaceShell(workspacePath, commandText, options = {}) {
     return invalidWorkspaceResult(error);
   }
 
-  if (!script) {
+  const shellRequest = evaluateWorkspaceShellRequest(commandText);
+  if (!shellRequest.ok) {
     return {
       ok: false,
       code: 1,
       stdout: '',
       stderr: '',
-      error: 'empty_command',
+      error: shellRequest.error,
+      message: shellRequest.message,
     };
   }
-  if (isDangerousShellCommand(script)) {
-    return {
-      ok: false,
-      code: 1,
-      stdout: '',
-      stderr: '',
-      error: 'command_rejected_by_safety_policy',
-      message: 'Shell rejected this command by safety policy. Use write/edit tools for workspace file changes.',
-    };
-  }
-  if (!isAllowedShellCommand(script)) {
-    return {
-      ok: false,
-      code: 1,
-      stdout: '',
-      stderr: '',
-      error: 'command_not_in_allowed_shell_prefixes',
-      message: 'Shell only allows approved read/build/test prefixes. Use write/edit tools for workspace file creation or modification.',
-    };
+
+  if (shellRequest.locationPath) {
+    try {
+      normalizedPath = await safeResolve(normalizedPath, shellRequest.locationPath);
+    } catch (error) {
+      return invalidWorkspaceResult(error);
+    }
   }
 
   const timeoutMs = Math.max(1_000, Math.min(Number(options.timeoutMs || options.timeout_ms || SHELL_TIMEOUT_MS), BUILD_TIMEOUT_MS));
   let lastResult = null;
   for (const candidate of powershellExecutableCandidates()) {
-    lastResult = await runCommand(candidate, ['-NoLogo', '-NoProfile', '-Command', script], normalizedPath, {
+    lastResult = await runCommand(candidate, ['-NoLogo', '-NoProfile', '-Command', shellRequest.executableCommand], normalizedPath, {
       timeoutMs,
     });
     if (lastResult.ok || lastResult.stdout || lastResult.stderr) {
       return {
         ...lastResult,
-        command: script,
+        command: shellRequest.requestedCommand,
       };
     }
   }
   return {
     ...(lastResult || invalidWorkspaceResult(new Error('powershell_unavailable'))),
-    command: script,
+    command: shellRequest.requestedCommand,
   };
 }
 

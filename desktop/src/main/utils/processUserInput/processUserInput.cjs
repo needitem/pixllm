@@ -400,6 +400,9 @@ function summarizeRequestContext(context = {}) {
 
   if (context.prefersReferenceTools) {
     lines.push('Prefer company_reference_search for company engine or internal reference material before using local file tools.');
+    if (intent.wantsChanges || intent.createLikely) {
+      lines.push('Reference wiki/docs can orient the search, but code generation still requires declaration or implementation evidence, or grounded workspace inspection.');
+    }
   }
 
   const initialToolNames = Array.isArray(context.initialToolNames) ? context.initialToolNames : [];

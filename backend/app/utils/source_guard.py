@@ -5,6 +5,7 @@ from typing import Iterable, List
 _SOURCE_FILE_EXTENSIONS = {
     "c",
     "cc",
+    "cjs",
     "cpp",
     "cxx",
     "cs",
@@ -18,6 +19,7 @@ _SOURCE_FILE_EXTENSIONS = {
     "js",
     "json",
     "md",
+    "mjs",
     "pdf",
     "py",
     "rs",
@@ -25,6 +27,7 @@ _SOURCE_FILE_EXTENSIONS = {
     "ts",
     "tsx",
     "txt",
+    "svelte",
     "xml",
     "xaml",
     "yaml",
@@ -71,13 +74,13 @@ def extract_answer_file_mentions(answer: str) -> List[str]:
 
 
 def is_grounded_source(mention: str, allowed_paths: Iterable[str]) -> bool:
-    candidate = normalize_source_path(mention)
+    candidate = normalize_source_path(mention).split(":", 1)[0]
     if not candidate:
         return True
     allowed = {normalize_source_path(item) for item in list(allowed_paths or []) if str(item or "").strip()}
     if candidate in allowed:
         return True
-    return any(path.endswith(candidate) or candidate.endswith(path) for path in allowed)
+    return any(path.endswith(f"/{candidate}") or candidate.endswith(f"/{path}") for path in allowed)
 
 
 def find_ungrounded_source_mentions(answer: str, allowed_paths: Iterable[str]) -> List[str]:

@@ -119,7 +119,6 @@ function answerAcknowledgesMissingVerification(answer = '') {
     /\bmissing reference\b/,
     /\bnot found in the workspace\b/,
     /\bnot found in the reference\b/,
-    /\bunknown\b/,
     /\bunclear\b/,
     /\bblocker\b/,
     /\bneed the sdk docs\b/,
@@ -144,7 +143,7 @@ function requestNeedsGroundedChangeEvidence(requestContext = {}) {
   const intent = requestContext?.intent && typeof requestContext.intent === 'object'
     ? requestContext.intent
     : {};
-  return Boolean(intent.wantsChanges || intent.wantsAnalysis);
+  return Boolean(intent.wantsChanges);
 }
 
 function evaluateFinalAnswerPolicy({
