@@ -10,6 +10,7 @@ from . import config
 from .core.policy import SecurityPolicy
 from .envelopes import err, ApiError
 from .deps import init_state, close_state, state
+from .metrics import metric_path_label, metrics_registry
 from .observability import (
     configure_logger,
     log_event,
@@ -38,6 +39,26 @@ from .routers import (
 
 
 api_logger = configure_logger()
+
+
+def _build_exception_response(request: Request, exc: Exception) -> JSONResponse:
+    if isinstance(exc, ApiError):
+        status_code = exc.status_code
+        payload = err(exc.code, exc.message)
+    elif isinstance(exc, HTTPException):
+        status_code = exc.status_code
+        payload = err("HTTP_ERROR", exc.detail)
+    elif isinstance(exc, RequestValidationError):
+        status_code = 422
+        payload = err("VALIDATION_ERROR", str(exc))
+    else:
+        status_code = 500
+        payload = err("INTERNAL_SERVER_ERROR", "internal server error")
+    return JSONResponse(
+        status_code=status_code,
+        content=payload,
+        headers=request_id_headers(request),
+    )
 
 
 @asynccontextmanager
@@ -87,16 +108,23 @@ async def api_request_middleware(request: Request, call_next):
         return response
     except Exception as exc:
         log_exception(api_logger, request, exc)
-        response = JSONResponse(
-            status_code=500,
-            content=err("INTERNAL_SERVER_ERROR", "internal server error"),
-            headers=request_id_headers(request),
+        metrics_registry.record_exception(
+            method=request.method,
+            path=metric_path_label(request),
+            error_type=exc.__class__.__name__,
         )
+        response = _build_exception_response(request, exc)
         return response
     finally:
         duration_ms = (perf_counter() - started_at) * 1000
         if response is not None:
             response.headers.update(request_id_headers(request))
+            metrics_registry.record_http_request(
+                method=request.method,
+                path=metric_path_label(request),
+                status_code=response.status_code,
+                duration_ms=duration_ms,
+            )
             log_request(
                 api_logger,
                 request,
@@ -108,39 +136,28 @@ async def api_request_middleware(request: Request, call_next):
 
 @app.exception_handler(ApiError)
 async def api_error_handler(request: Request, exc: ApiError):
-    return JSONResponse(
-        status_code=exc.status_code,
-        content=err(exc.code, exc.message),
-        headers=request_id_headers(request),
-    )
+    return _build_exception_response(request, exc)
 
 
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
-    return JSONResponse(
-        status_code=exc.status_code,
-        content=err("HTTP_ERROR", exc.detail),
-        headers=request_id_headers(request),
-    )
+    return _build_exception_response(request, exc)
 
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    return JSONResponse(
-        status_code=422,
-        content=err("VALIDATION_ERROR", str(exc)),
-        headers=request_id_headers(request),
-    )
+    return _build_exception_response(request, exc)
 
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
     log_exception(api_logger, request, exc)
-    return JSONResponse(
-        status_code=500,
-        content=err("INTERNAL_SERVER_ERROR", "internal server error"),
-        headers=request_id_headers(request),
+    metrics_registry.record_exception(
+        method=request.method,
+        path=metric_path_label(request),
+        error_type=exc.__class__.__name__,
     )
+    return _build_exception_response(request, exc)
 
 
 app.include_router(auth.router, prefix=config.API_PREFIX, tags=["auth"])

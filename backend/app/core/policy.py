@@ -29,6 +29,8 @@ class SecurityPolicy:
             return True
         if path.startswith(f"{config.API_PREFIX}/health/"):
             return True
+        if path == f"{config.API_PREFIX}/metrics":
+            return True
         return False
 
     @staticmethod

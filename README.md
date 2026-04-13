@@ -95,6 +95,16 @@ docker compose up -d --build
 curl http://127.0.0.1:8000/api/v1/health
 ```
 
+메트릭과 대시보드:
+
+```bash
+curl http://127.0.0.1:8000/api/v1/metrics
+```
+
+- Prometheus: `http://127.0.0.1:9090`
+- Grafana: `http://127.0.0.1:3001`
+- Grafana 기본 계정: `.env`의 `GRAFANA_ADMIN_USER`, `GRAFANA_ADMIN_PASSWORD`
+
 ### 데스크톱 실행
 
 ```bash
