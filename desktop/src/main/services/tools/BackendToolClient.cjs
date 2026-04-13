@@ -47,7 +47,7 @@ function deriveWikiId({ wikiId = '', workspacePath = '' } = {}) {
   return normalizeWikiId(tail) || 'shared';
 }
 
-async function collectBackendEvidence({
+async function lookupBackendReferenceContext({
   baseUrl = '',
   apiToken = '',
   sessionId = '',
@@ -66,7 +66,7 @@ async function collectBackendEvidence({
   }
 
   const response = await fetch(
-    buildRequestTarget(normalizedBaseUrl, '/v1/tool-api/orchestrate/collect_evidence'),
+    buildRequestTarget(normalizedBaseUrl, '/v1/tool-api/orchestrate/lookup_sources_and_code'),
     {
       method: 'POST',
       headers: buildHeaders(apiToken),
@@ -287,9 +287,9 @@ async function appendBackendWikiLog({
 module.exports = {
   appendBackendWikiLog,
   bootstrapBackendWiki,
-  collectBackendEvidence,
   deriveWikiId,
   getBackendWikiContext,
+  lookupBackendReferenceContext,
   readBackendWikiPage,
   searchBackendWiki,
   writeBackendWikiPage,

@@ -6,9 +6,9 @@ from ..envelopes import ApiError
 from ..schemas.tool_api import (
     CheckAccessRequest,
     CiteBundleRequest,
-    CollectEvidenceRequest,
     GetDocMetadataRequest,
     ListRepoFilesRequest,
+    LookupSourcesAndCodeRequest,
     OpenDocChunksRequest,
     ReadCodeRequest,
     RunBuildRequest,
@@ -23,9 +23,9 @@ from ..schemas.tool_api import (
 from ..core.document_store import DocumentStoreService
 from ..services.tools.support import normalize_citation_items, submit_feedback
 from ..services.tools.runtime import (
-    collect_evidence_bundle,
     get_doc_metadata,
     list_repo_files,
+    lookup_sources_and_code,
     open_doc_chunks,
     read_code_lines,
     run_build,
@@ -257,15 +257,15 @@ async def code_run_build(
     return ok(result)
 
 
-@router.post("/orchestrate/collect_evidence")
-async def orchestrate_collect_evidence(
-    request: CollectEvidenceRequest,
+@router.post("/orchestrate/lookup_sources_and_code")
+async def orchestrate_lookup_sources_and_code(
+    request: LookupSourcesAndCodeRequest,
     redis=Depends(get_redis),
     search_svc=Depends(get_search_svc),
     embed_model=Depends(get_embed_model),
     code_tools=Depends(get_code_tools),
 ):
-    result = await collect_evidence_bundle(
+    result = await lookup_sources_and_code(
         redis,
         search_svc,
         embed_model,

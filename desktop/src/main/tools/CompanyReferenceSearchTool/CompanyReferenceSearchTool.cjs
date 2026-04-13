@@ -1,4 +1,4 @@
-const { collectBackendEvidence } = require('../../services/tools/BackendToolClient.cjs');
+const { lookupBackendReferenceContext } = require('../../services/tools/BackendToolClient.cjs');
 const { defineLocalTool } = require('../../Tool.cjs');
 const {
   toStringValue,
@@ -165,7 +165,7 @@ function CompanyReferenceSearchTool() {
       }
 
       try {
-        const result = await collectBackendEvidence({
+        const result = await lookupBackendReferenceContext({
           baseUrl,
           apiToken,
           sessionId: toStringValue(context.sessionId),

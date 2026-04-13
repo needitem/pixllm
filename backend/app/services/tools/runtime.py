@@ -11,7 +11,7 @@ from .code_runtime import (
 from .codebase import extract_symbol_query_candidates
 from .build_runtime import run_build
 from .doc_runtime import (
-    collect_evidence_bundle as _collect_evidence_bundle_impl,
+    lookup_sources_and_code as _lookup_sources_and_code_impl,
     get_doc_metadata as _get_doc_metadata_impl,
     open_doc_chunks as _open_doc_chunks_impl,
     search_docs as _search_docs_impl,
@@ -275,7 +275,7 @@ async def _collect_code_evidence_async(
     return code_search_result, code_windows, trace_steps
 
 
-async def collect_evidence_bundle(
+async def lookup_sources_and_code(
     redis,
     search_svc,
     embed_model,
@@ -293,7 +293,7 @@ async def collect_evidence_bundle(
     search_only: bool = False,
     collection: Optional[str] = None,
 ) -> Dict[str, Any]:
-    return await _collect_evidence_bundle_impl(
+    return await _lookup_sources_and_code_impl(
         redis=redis,
         search_svc=search_svc,
         embed_model=embed_model,

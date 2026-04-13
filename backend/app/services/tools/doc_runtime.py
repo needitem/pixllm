@@ -295,7 +295,7 @@ async def collect_wiki_anchor_code_windows(
     return windows
 
 
-async def collect_evidence_bundle(
+async def lookup_sources_and_code(
     *,
     redis,
     search_svc=None,

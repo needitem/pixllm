@@ -90,7 +90,7 @@ class ReadCodeRequest(BaseModel):
     session_id: Optional[str] = None
 
 
-class CollectEvidenceRequest(BaseModel):
+class LookupSourcesAndCodeRequest(BaseModel):
     session_id: str
     user_id: Optional[str] = None
     query: str
