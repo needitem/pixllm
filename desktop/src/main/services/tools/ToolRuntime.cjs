@@ -349,6 +349,9 @@ function getReferenceSearchLoopState({ trace = [], intent = {} } = {}) {
 function referenceCodeGroundingMessage(loopState = {}) {
   const evidence = loopState?.referenceEvidence || {};
   const docCount = Number(evidence.docResultCount || 0) + Number(evidence.docChunkCount || 0);
+  if (loopState?.allowSeededWorkspaceArtifact) {
+    return `Company reference search found doc/wiki guidance (${docCount} doc hits) but no verified code declaration or implementation. If this request creates a new workspace file, stop searching and write the new workspace-relative file now. Otherwise inspect existing workspace files before editing code.`;
+  }
   return `Company reference search found doc/wiki guidance (${docCount} doc hits) but no verified code declaration or implementation. Use the wiki terms only as search hints. Next, narrow company_reference_search to real code evidence or inspect workspace files before writing code.`;
 }
 
@@ -502,6 +505,7 @@ class ToolRuntime {
     const referenceLoop = getReferenceSearchLoopState({ trace, intent });
     const workspaceAnswerLoop = getWorkspaceAnswerLoopState({ trace, intent });
     const narrowingPreferred = Boolean(this.requestContext?.narrowingPreferred);
+    const allowSeededWorkspaceArtifact = Boolean(this.workspacePath && intent.createLikely);
 
     if (referenceLoop.saturated) {
       active.delete('company_reference_search');
@@ -516,8 +520,10 @@ class ToolRuntime {
     }
 
     if (referenceLoop.needsCodeGrounding && !hasWorkspaceInspectionEvidence) {
-      for (const name of MUTATION_TOOL_NAMES) {
-        active.delete(name);
+      if (!allowSeededWorkspaceArtifact) {
+        for (const name of MUTATION_TOOL_NAMES) {
+          active.delete(name);
+        }
       }
       for (const name of EXECUTION_TOOL_NAMES) {
         active.delete(name);
@@ -882,6 +888,7 @@ class ToolRuntime {
     const intent = this.requestContext?.intent && typeof this.requestContext.intent === 'object'
       ? this.requestContext.intent
       : {};
+    const allowSeededWorkspaceArtifact = Boolean(this.workspacePath && intent.createLikely);
     const referenceLoop = getReferenceSearchLoopState({
       trace: this.state.trace,
       intent,
@@ -903,7 +910,10 @@ class ToolRuntime {
     ) {
       this.pushMetaUserMessage(
         referenceLoop.needsCodeGrounding
-          ? referenceCodeGroundingMessage(referenceLoop)
+          ? referenceCodeGroundingMessage({
+            ...referenceLoop,
+            allowSeededWorkspaceArtifact,
+          })
           : referenceSearchSaturationMessage(referenceLoop),
         {
           turn,

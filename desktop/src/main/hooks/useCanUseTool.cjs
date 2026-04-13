@@ -144,6 +144,26 @@ function toolPathCandidates(toolName, input = {}) {
   return [];
 }
 
+function canSeedNewWorkspaceArtifactFromReference({
+  intent = {},
+  pathCandidates = [],
+  unknownPaths = [],
+  codeArtifactTargets = [],
+  referenceEvidence = {},
+  hasVerifiedReferenceCodeEvidence = false,
+  hasWorkspaceInspectionEvidence = false,
+} = {}) {
+  if (!Boolean(intent?.createLikely)) return false;
+  if (pathCandidates.length === 0 || unknownPaths.length === 0) return false;
+  if (unknownPaths.length !== pathCandidates.length) return false;
+  if (codeArtifactTargets.length === 0) return false;
+  if (hasWorkspaceInspectionEvidence) return false;
+  if (!pathCandidates.every((value) => isWorkspaceRelativePath(value))) return false;
+  if (!Boolean(referenceEvidence?.hasDocsOnlyEvidence)) return false;
+  if (hasVerifiedReferenceCodeEvidence) return false;
+  return true;
+}
+
 function permissionDenied({ toolName, reason, message, suggestedTools = [] }) {
   return {
     allow: false,
@@ -302,6 +322,16 @@ function authorizeToolUse({
     const creatingNewWorkspacePath = Boolean(intent.createLikely)
       && unknownPaths.length > 0
       && unknownPaths.every((value) => isWorkspaceRelativePath(value));
+    const codeArtifactTargets = pathCandidates.filter((value) => isLikelyCodeArtifactPath(value));
+    const canSeedWorkspaceArtifact = canSeedNewWorkspaceArtifactFromReference({
+      intent,
+      pathCandidates,
+      unknownPaths,
+      codeArtifactTargets,
+      referenceEvidence,
+      hasVerifiedReferenceCodeEvidence,
+      hasWorkspaceInspectionEvidence,
+    });
     if (unknownPaths.length > 0 && !creatingNewWorkspacePath) {
       return permissionDenied({
         toolName,
@@ -318,13 +348,13 @@ function authorizeToolUse({
         suggestedTools: ['read_file', 'read_symbol_span'],
       });
     }
-    const codeArtifactTargets = pathCandidates.filter((value) => isLikelyCodeArtifactPath(value));
     if (
       codeArtifactTargets.length > 0
       && Boolean(intent.createLikely || intent.wantsChanges)
       && !hasWorkspaceInspectionEvidence
       && referenceEvidence.hasDocsOnlyEvidence
       && !hasVerifiedReferenceCodeEvidence
+      && !canSeedWorkspaceArtifact
     ) {
       return permissionDenied({
         toolName,
@@ -338,6 +368,7 @@ function authorizeToolUse({
       && !hasContext
       && referenceEvidence.hasDocEvidence
       && !hasVerifiedReferenceCodeEvidence
+      && !canSeedWorkspaceArtifact
     ) {
       return permissionDenied({
         toolName,
