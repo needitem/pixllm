@@ -2,10 +2,19 @@ from fastapi import APIRouter, Depends
 
 from ..deps import get_redis, get_minio, get_search_svc, get_embed_model, get_vllm_client, get_orchestrator
 from ..envelopes import ok
-from ..services.health.service import build_health_response
+from ..services.health.service import (
+    build_health_response,
+    build_liveness_response,
+    build_readiness_response,
+)
 
 
 router = APIRouter()
+
+
+@router.get("/health/live")
+async def live():
+    return ok(build_liveness_response())
 
 
 @router.get("/health")
@@ -18,6 +27,25 @@ async def health(
     orchestrator=Depends(get_orchestrator),
 ):
     return ok(await build_health_response(
+        redis=redis,
+        minio=minio,
+        search_svc=search_svc,
+        embed_model=embed_model,
+        vllm_client=vllm_client,
+        orchestration_policy=orchestrator,
+    ))
+
+
+@router.get("/health/ready")
+async def ready(
+    redis=Depends(get_redis),
+    minio=Depends(get_minio),
+    search_svc=Depends(get_search_svc),
+    embed_model=Depends(get_embed_model),
+    vllm_client=Depends(get_vllm_client),
+    orchestrator=Depends(get_orchestrator),
+):
+    return ok(await build_readiness_response(
         redis=redis,
         minio=minio,
         search_svc=search_svc,

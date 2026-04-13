@@ -4,6 +4,7 @@ import shutil
 import inspect
 from types import SimpleNamespace
 from pathlib import Path
+from datetime import datetime, timezone
 
 import redis
 try:
@@ -17,6 +18,18 @@ except Exception:  # pragma: no cover - optional in lightweight tests
 
 from ... import config
 from ...utils.health import aggregate_status
+
+
+def _timestamp() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def build_liveness_response() -> dict:
+    return {
+        "status": "ok",
+        "service": config.APP_NAME,
+        "checked_at": _timestamp(),
+    }
 
 
 def check_http(url: str, timeout: int = 2) -> bool:
@@ -119,8 +132,18 @@ async def build_health_response(
 
     return {
         "status": aggregate_status(components),
+        "service": config.APP_NAME,
         "components": components,
         "embedding_model": embedding_model,
+        "checked_at": _timestamp(),
+    }
+
+
+async def build_readiness_response(**kwargs) -> dict:
+    payload = await build_health_response(**kwargs)
+    return {
+        **payload,
+        "ready": str(payload.get("status") or "") == "ok",
     }
 
 
