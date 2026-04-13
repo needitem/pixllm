@@ -743,8 +743,5 @@ function createLocalToolCollection({
 }
 
 module.exports = {
-  DEFAULT_LIMITS,
-  getAllLocalBaseTools,
   createLocalToolCollection,
-  createTools: createLocalToolCollection,
 };

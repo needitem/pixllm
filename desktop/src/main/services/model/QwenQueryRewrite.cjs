@@ -196,16 +196,6 @@ async function analyzePromptSemantics({
   }
 }
 
-async function rewritePromptForSearch(args = {}) {
-  const semantics = await analyzePromptSemantics(args);
-  return {
-    searchTerms: semantics.searchTerms,
-    symbolHints: semantics.symbolHints,
-    notes: semantics.notes,
-  };
-}
-
 module.exports = {
   analyzePromptSemantics,
-  rewritePromptForSearch,
 };

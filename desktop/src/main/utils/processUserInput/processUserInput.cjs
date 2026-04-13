@@ -558,9 +558,6 @@ function processUserInput({ prompt = '', workspacePath = '', selectedFilePath = 
 
 module.exports = {
   processUserInput,
-  toWorkspaceRelativePath,
-  createRunRequestContext,
   applySemanticAnalysis,
   summarizeRequestContext,
-  parsePromptDirectives,
 };

@@ -204,5 +204,4 @@ function evaluateFinalAnswerPolicy({
 
 module.exports = {
   evaluateFinalAnswerPolicy,
-  summarizeTraceEvidence,
 };

@@ -97,6 +97,5 @@ async function requireFreshWorkspaceRead({
 }
 
 module.exports = {
-  cacheEntryForPath,
   requireFreshWorkspaceRead,
 };

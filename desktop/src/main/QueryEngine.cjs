@@ -1989,7 +1989,4 @@ class QueryEngine {
 
 module.exports = {
   QueryEngine,
-  LocalAgentEngine: QueryEngine,
-  resolveFallbackTerminalReason,
-  buildFallbackAnswer,
 };

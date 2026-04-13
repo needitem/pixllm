@@ -949,7 +949,4 @@ class ToolRuntime {
 
 module.exports = {
   ToolRuntime,
-  LocalAgentRuntime: ToolRuntime,
-  getReferenceSearchLoopState,
-  getWorkspaceAnswerLoopState,
 };

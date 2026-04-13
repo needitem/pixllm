@@ -280,24 +280,6 @@ async function readSettingsFile(rootPath, filePath) {
   };
 }
 
-async function readMarkdownCollection(rootPath, filePath, category, extra = {}) {
-  const resolved = await resolveExistingPath(rootPath, filePath);
-  if (!resolved) return null;
-  const content = await readTextFileLimited(resolved);
-  const parsed = parseMarkdownFrontmatter(content);
-  const fallbackName = path.basename(resolved, path.extname(resolved));
-  return {
-    category,
-    name: String(parsed.attributes.name || extra.name || fallbackName),
-    path: toWorkspaceRelativePath(rootPath, resolved),
-    sourcePath: resolved,
-    summary: String(parsed.attributes.description || summarizeText(parsed.body || content)),
-    content: clipText(content),
-    frontmatter: parsed.attributes,
-    ...extra,
-  };
-}
-
 function buildProjectContextSummary(context) {
   const counts = {
     memory: Array.isArray(context?.memoryFiles) ? context.memoryFiles.length : 0,
@@ -317,7 +299,6 @@ module.exports = {
   collectWorkspaceMemoryFiles,
   normalizeWorkspacePath,
   parseMarkdownFrontmatter,
-  readMarkdownCollection,
   readMemoryEntry,
   readSettingsFile,
   readTextFileLimited,

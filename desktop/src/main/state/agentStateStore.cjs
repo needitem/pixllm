@@ -84,19 +84,7 @@ function saveAgentState({ sessionId = '', workspacePath = '', payload = {} } = {
   return target;
 }
 
-function clearAgentState({ sessionId = '', workspacePath = '' } = {}) {
-  const target = statePath(sessionId, workspacePath);
-  if (fs.existsSync(target)) {
-    fs.unlinkSync(target);
-  }
-  const stateKey = buildStateKey(sessionId, workspacePath);
-  const nextIndex = loadStateIndex().filter((entry) => String(entry?.key || '').trim() !== stateKey);
-  saveStateIndex(nextIndex);
-}
-
 module.exports = {
   loadAgentState,
   saveAgentState,
-  clearAgentState,
-  loadStateIndex,
 };

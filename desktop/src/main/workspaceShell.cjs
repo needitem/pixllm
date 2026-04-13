@@ -123,8 +123,5 @@ function evaluateWorkspaceShellRequest(commandText) {
 }
 
 module.exports = {
-  stripLeadingWorkspaceLocationChange,
-  isDangerousShellCommand,
-  isAllowedShellCommand,
   evaluateWorkspaceShellRequest,
 };

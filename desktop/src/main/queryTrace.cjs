@@ -580,22 +580,11 @@ function inferCodeRelations(readObservations, relatedFiles) {
 }
 
 module.exports = {
-  normalizePath,
-  parseLineRange,
-  uniq,
-  stepSucceeded,
-  successfulSteps,
   failedSteps,
-  isTraceCandidatePath,
-  grepQueriesFromTrace,
   grepItemsFromTrace,
   listFilesFromTrace,
-  readWindowsFromTrace,
   readObservationsFromTrace,
   symbolOutlinesFromTrace,
   referencePathsFromTrace,
   summarizeObservation,
-  extractIdentifiers,
-  pickRepresentativeEvidence,
-  inferCodeRelations,
 };

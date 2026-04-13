@@ -384,13 +384,7 @@ function canUseTool(payload = {}) {
   return authorizeToolUse(payload);
 }
 
-function wrappedCanUseTool(payload = {}) {
-  return canUseTool(payload);
-}
-
 module.exports = {
   canUseTool,
-  wrappedCanUseTool,
-  authorizeToolUse,
   collectGroundedPaths,
 };

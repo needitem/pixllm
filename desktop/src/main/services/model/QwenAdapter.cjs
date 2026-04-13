@@ -1271,12 +1271,8 @@ function buildSystemPrompt({
 }
 
 module.exports = {
-  stripAssistantWrappers,
-  stripThinkingBlocks,
   parseAssistantResponse,
   extractStreamingToolCalls,
   flattenMessagesForModel,
   buildSystemPrompt,
-  renderToolCatalog,
-  normalizePromptToolDefinition,
 };

@@ -82,8 +82,5 @@ function findUngroundedSourceMentions(answer, allowedPaths) {
 }
 
 module.exports = {
-  normalizeSourcePath,
-  extractAnswerFileMentions,
-  isGroundedSource,
   findUngroundedSourceMentions,
 };

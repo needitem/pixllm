@@ -63,98 +63,6 @@ async function collectMarkdownFilesFromRoots(rootPath, relativeDirs, options = {
   return results;
 }
 
-async function discoverProjectContextItems(rootPath) {
-  const items = [];
-  const seen = new Set();
-  const pushItem = (item) => {
-    if (!item) return;
-    const dedupeKey = `${item.category}:${String(item.path || item.sourcePath || '').toLowerCase()}`;
-    if (seen.has(dedupeKey)) return;
-    seen.add(dedupeKey);
-    items.push(item);
-  };
-
-  const memoryFiles = await collectWorkspaceMemoryFiles(rootPath, null, []);
-  for (const filePath of memoryFiles) {
-    const item = await readMemoryEntry(rootPath, filePath, isRootContextFile(rootPath, filePath) ? 'root' : 'ancestor');
-    pushItem(item);
-  }
-
-  const settingsFiles = SETTINGS_PATHS.map((relativePath) => path.join(rootPath, relativePath));
-  for (const filePath of settingsFiles) {
-    const item = await readSettingsFile(rootPath, filePath);
-    if (!item) continue;
-    pushItem({
-      category: 'settings',
-      name: path.basename(filePath),
-      path: item.path,
-      sourcePath: item.sourcePath,
-      summary: item.summary,
-      content: item.rawPreview,
-      parsed: item.parsed,
-      error: item.error,
-    });
-  }
-
-  const skillFiles = await collectMarkdownFilesFromRoots(rootPath, SKILL_DIRS, {
-    allowedNames: ['SKILL.md'],
-  });
-  for (const filePath of skillFiles) {
-    const baseDir = resolveCollectionBase(rootPath, SKILL_DIRS, filePath);
-    const relDir = path.relative(baseDir, path.dirname(filePath));
-    const content = await readTextFileLimited(filePath);
-    const parsed = parseMarkdownFrontmatter(content);
-    pushItem({
-      category: 'skill',
-      name: String(parsed.attributes.name || (relDir === '' ? path.basename(path.dirname(filePath)) : toPosixPath(relDir))),
-      path: toWorkspaceRelativePath(rootPath, filePath),
-      sourcePath: filePath,
-      summary: String(parsed.attributes.description || summarizeText(parsed.body || content)),
-      content: clipText(content),
-      frontmatter: parsed.attributes,
-      skillName: relDir === '' ? path.basename(path.dirname(filePath)) : toPosixPath(relDir),
-    });
-  }
-
-  const commandFiles = await collectMarkdownFilesFromRoots(rootPath, COMMAND_DIRS);
-  for (const filePath of commandFiles) {
-    const baseDir = resolveCollectionBase(rootPath, COMMAND_DIRS, filePath);
-    const rel = path.relative(baseDir, filePath);
-    const content = await readTextFileLimited(filePath);
-    const parsed = parseMarkdownFrontmatter(content);
-    pushItem({
-      category: 'command',
-      name: String(parsed.attributes.name || toPosixPath(rel).replace(/\.md$/i, '')),
-      path: toWorkspaceRelativePath(rootPath, filePath),
-      sourcePath: filePath,
-      commandPath: toPosixPath(rel),
-      summary: String(parsed.attributes.description || summarizeText(parsed.body || content)),
-      content: clipText(content),
-      frontmatter: parsed.attributes,
-    });
-  }
-
-  const agentFiles = await collectMarkdownFilesFromRoots(rootPath, AGENT_DIRS);
-  for (const filePath of agentFiles) {
-    const baseDir = resolveCollectionBase(rootPath, AGENT_DIRS, filePath);
-    const rel = path.relative(baseDir, filePath);
-    const content = await readTextFileLimited(filePath);
-    const parsed = parseMarkdownFrontmatter(content);
-    pushItem({
-      category: 'agent',
-      name: String(parsed.attributes.name || path.basename(filePath, path.extname(filePath))),
-      path: toWorkspaceRelativePath(rootPath, filePath),
-      sourcePath: filePath,
-      agentPath: toPosixPath(rel),
-      summary: String(parsed.attributes.description || summarizeText(parsed.body || content)),
-      content: clipText(content),
-      frontmatter: parsed.attributes,
-    });
-  }
-
-  return items;
-}
-
 async function loadProjectContext(options = {}) {
   const workspacePath = await normalizeWorkspacePath(options.workspacePath);
   const selectedFileResolvedPath = await resolveExistingPath(workspacePath, options.selectedFilePath);
@@ -303,6 +211,5 @@ async function loadProjectContext(options = {}) {
 }
 
 module.exports = {
-  discoverProjectContextItems,
   loadProjectContext,
 };

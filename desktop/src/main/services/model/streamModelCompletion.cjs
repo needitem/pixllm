@@ -690,5 +690,4 @@ module.exports = {
   callModelCompletion,
   countPromptTokens,
   streamModelCompletion,
-  resolveMode,
 };

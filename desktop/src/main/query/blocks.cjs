@@ -160,7 +160,6 @@ module.exports = {
   createToolResultBlock,
   normalizeAssistantBlocks,
   normalizeMessageBlocks,
-  renderBlock,
   serializeBlocks,
   extractTextFromBlocks,
   toolUseBlocks,

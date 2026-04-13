@@ -344,8 +344,6 @@ function defineLocalTool(definition = {}) {
 }
 
 module.exports = {
-  buildTool: defineLocalTool,
-  toolMatchesName,
   findToolByName,
   defineLocalTool,
   normalizeToolInvocation,
