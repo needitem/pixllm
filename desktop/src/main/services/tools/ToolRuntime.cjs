@@ -14,6 +14,7 @@ const EXECUTION_TOOL_NAMES = new Set(['run_build', 'bash', 'powershell', 'task_c
 const RUNTIME_TASK_READ_TOOL_NAMES = new Set(['terminal_capture', 'task_get', 'task_list', 'task_output']);
 const META_RECOVERY_TOOL_NAMES = new Set(['ask_user_question', 'tool_search']);
 const MAX_REFERENCE_SEARCH_PASSES_FOR_CHANGE_REQUEST = 3;
+const MAX_REFERENCE_SEARCH_PASSES_FOR_ANSWER_REQUEST = 4;
 const READ_CONTEXT_TOOL_NAMES = new Set([
   'list_files',
   'glob',
@@ -194,24 +195,53 @@ function getReferenceSearchLoopState({ trace = [], intent = {} } = {}) {
   const wantsCodeOutput = Boolean(intent?.wantsChanges || intent?.createLikely);
   const successfulReferenceSearches = successfulToolCount(trace, 'company_reference_search');
   const consecutiveReferenceSearches = consecutiveSuccessfulToolCount(trace, 'company_reference_search');
-  const hasWorkspaceProgress = traceHasSuccessfulTool(trace, WORKSPACE_PROGRESS_TOOL_NAMES);
   const hasMutation = traceHasSuccessfulTool(trace, MUTATION_TOOL_NAMES);
   const hasExecution = traceHasSuccessfulTool(trace, EXECUTION_TOOL_NAMES);
-  const saturated = wantsCodeOutput
-    && hasReferenceSearchEvidence(trace)
-    && !hasWorkspaceProgress
+  const blockedOnReferenceLoop = hasReferenceSearchEvidence(trace)
     && !hasMutation
-    && !hasExecution
-    && consecutiveReferenceSearches >= MAX_REFERENCE_SEARCH_PASSES_FOR_CHANGE_REQUEST;
+    && !hasExecution;
+  const saturationMode = wantsCodeOutput
+    ? (
+      blockedOnReferenceLoop
+      && consecutiveReferenceSearches >= MAX_REFERENCE_SEARCH_PASSES_FOR_CHANGE_REQUEST
+        ? 'change'
+        : ''
+    )
+    : (
+      blockedOnReferenceLoop
+      && consecutiveReferenceSearches >= MAX_REFERENCE_SEARCH_PASSES_FOR_ANSWER_REQUEST
+        ? 'answer'
+        : ''
+    );
+  const saturated = Boolean(saturationMode)
+    && (
+      wantsCodeOutput
+        ? consecutiveReferenceSearches >= MAX_REFERENCE_SEARCH_PASSES_FOR_CHANGE_REQUEST
+        : consecutiveReferenceSearches >= MAX_REFERENCE_SEARCH_PASSES_FOR_ANSWER_REQUEST
+    );
   return {
     wantsCodeOutput,
     successfulReferenceSearches,
     consecutiveReferenceSearches,
-    hasWorkspaceProgress,
     hasMutation,
     hasExecution,
+    blockedOnReferenceLoop,
     saturated,
+    saturationMode,
   };
+}
+
+function referenceSearchSaturationMessage(loopState = {}) {
+  if (loopState?.saturationMode === 'change') {
+    return 'You already have enough company reference evidence for this code change. Stop calling company_reference_search. Use workspace tools next: inspect the target folder, then create or edit a workspace-relative file to implement the request.';
+  }
+  return 'You already have enough company reference evidence to answer the user. Stop calling company_reference_search. Answer now using the evidence already collected, and mark any still-missing detail as unverified instead of searching again.';
+}
+
+function referenceSearchSaturationTransition(loopState = {}) {
+  return loopState?.saturationMode === 'change'
+    ? 'reference_search_saturated'
+    : 'reference_search_answer_saturated';
 }
 
 function buildToolResultStreamPayload({
@@ -688,19 +718,26 @@ class ToolRuntime {
     if (
       onlyReferenceSearch
       && referenceLoop.saturated
-      && referenceLoop.consecutiveReferenceSearches === MAX_REFERENCE_SEARCH_PASSES_FOR_CHANGE_REQUEST
+      && (
+        (referenceLoop.saturationMode === 'change'
+          && referenceLoop.consecutiveReferenceSearches === MAX_REFERENCE_SEARCH_PASSES_FOR_CHANGE_REQUEST)
+        || (referenceLoop.saturationMode === 'answer'
+          && referenceLoop.consecutiveReferenceSearches >= MAX_REFERENCE_SEARCH_PASSES_FOR_ANSWER_REQUEST)
+      )
     ) {
       this.pushMetaUserMessage(
-        'You already have enough company reference evidence for this code change. Stop calling company_reference_search. Use workspace tools next: inspect the target folder, then create or edit a workspace-relative file to implement the request.',
+        referenceSearchSaturationMessage(referenceLoop),
         {
           turn,
-          hook: 'reference_search_saturated',
+          hook: referenceSearchSaturationTransition(referenceLoop),
+          saturationMode: referenceLoop.saturationMode,
           successfulReferenceSearches: referenceLoop.successfulReferenceSearches,
           consecutiveReferenceSearches: referenceLoop.consecutiveReferenceSearches,
         },
       );
-      this.recordTransition('reference_search_saturated', {
+      this.recordTransition(referenceSearchSaturationTransition(referenceLoop), {
         turn,
+        saturationMode: referenceLoop.saturationMode,
         successfulReferenceSearches: referenceLoop.successfulReferenceSearches,
         consecutiveReferenceSearches: referenceLoop.consecutiveReferenceSearches,
       });
@@ -736,4 +773,5 @@ class ToolRuntime {
 module.exports = {
   ToolRuntime,
   LocalAgentRuntime: ToolRuntime,
+  getReferenceSearchLoopState,
 };

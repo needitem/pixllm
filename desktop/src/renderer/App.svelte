@@ -387,6 +387,8 @@
       tool_failure_recovery: 'Recovering after tool failures',
       next_turn: 'Continuing to next reasoning turn',
       next_speaker_check: 'Checking whether the draft can finalize',
+      reference_search_saturated: 'Company reference search saturated for code change',
+      reference_search_answer_saturated: 'Company reference search saturated for answer',
       ungrounded_answer: 'Draft answer failed grounding check',
       ungrounded_answer_retry: 'Retrying after grounding failure',
       final_answer: 'Final answer produced',
