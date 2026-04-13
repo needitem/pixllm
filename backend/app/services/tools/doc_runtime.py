@@ -134,6 +134,9 @@ async def collect_sources(
     search_only: bool,
 ) -> List[Dict[str, Any]]:
     wiki_rows = list(search_wiki(query=query, top_k=min(top_k, doc_open_limit), max_chars=max_chars).get("results", []) or [])
+    if wiki_rows:
+        return merge_doc_sources([wiki_rows])[:doc_open_limit]
+
     doc_rows = list(
         (
             await search_docs(

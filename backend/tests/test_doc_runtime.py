@@ -14,6 +14,38 @@ from app.services.tools import doc_runtime
 
 
 class LookupSourcesAndCodeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_collect_sources_prefers_wiki_and_skips_doc_search_when_wiki_exists(self):
+        wiki_rows = [
+            {
+                "chunk_id": "wiki:workflow#section-1",
+                "doc_id": "wiki:workflow",
+                "source_url": "workflows/imageview-xdm-display-workflow.md",
+                "file_path": "workflows/imageview-xdm-display-workflow.md",
+                "heading_path": "ImageView XDM Display Workflow > Verified Steps",
+                "paragraph_range": "section:1",
+                "text": "verified steps",
+            }
+        ]
+
+        with patch.object(doc_runtime, "search_wiki", return_value={"results": wiki_rows, "chunks": wiki_rows}), \
+             patch.object(doc_runtime, "search_docs", new=AsyncMock(side_effect=AssertionError("search_docs should not run when wiki results exist"))):
+            sources = await doc_runtime.collect_sources(
+                redis=None,
+                search_svc=None,
+                embed_model=None,
+                session_id="sess",
+                query="ImageView XDM load display",
+                filters=None,
+                top_k=5,
+                doc_open_limit=5,
+                max_chars=800,
+                active_collection="documents",
+                search_only=False,
+            )
+
+        self.assertEqual(len(sources), 1)
+        self.assertEqual(sources[0]["source_url"], "workflows/imageview-xdm-display-workflow.md")
+
     async def test_doc_lookup_stays_doc_only(self):
         sources = [
             {
