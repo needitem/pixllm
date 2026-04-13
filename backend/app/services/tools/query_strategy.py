@@ -15,6 +15,13 @@ _CALL_LIKE_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\s*\(")
 _MEMBER_CALL_RE = re.compile(r"(?:\.|->)[A-Za-z_][A-Za-z0-9_]*\s*\(")
 _MEMBER_ASSIGN_RE = re.compile(r"(?:\.|->)?[A-Za-z_][A-Za-z0-9_]*\s*=")
 _DEFINITION_HINT_RE = re.compile(r"\b(?:class|struct|interface|enum|record|namespace|module|typedef|def|function)\b")
+_COMMENT_LINE_RE = re.compile(r"^\s*(?:>>\s*)?(?:\d+\s*:\s*)?(?:///{1,2}|/\*+|\*)")
+_SNIPPET_PREFIX_RE = re.compile(r"^\s*(?:>>\s*)?(?:\d+\s*:\s*)?")
+_EXAMPLE_HINT_RE = re.compile(r"<(?:example|code)>|(?:sample|example|demo|usage)\b", re.IGNORECASE)
+_DECLARATION_SIGNATURE_RE = re.compile(
+    r"\b(?:public|private|protected|internal|static|virtual|override|sealed|abstract|extern|inline|template|partial|ref)?\s*"
+    r"(?:class|struct|interface|enum|record|namespace)\b"
+)
 _USAGE_CODE_EXTENSIONS = (".cs", ".cpp", ".c", ".h", ".hpp", ".cc", ".hh", ".py", ".ts", ".tsx", ".js", ".jsx", ".java", ".kt")
 
 
@@ -93,6 +100,39 @@ def is_usage_entrypoint_file(path: str) -> bool:
     return False
 
 
+def _clean_usage_line(text: str) -> str:
+    return _SNIPPET_PREFIX_RE.sub("", str(text or "")).strip()
+
+
+def primary_usage_line(match_text: str) -> str:
+    for line in str(match_text or "").splitlines():
+        if line.lstrip().startswith(">>"):
+            return _clean_usage_line(line)
+    for line in str(match_text or "").splitlines():
+        cleaned = _clean_usage_line(line)
+        if cleaned:
+            return cleaned
+    return ""
+
+
+def is_comment_usage_line(text: str) -> bool:
+    return bool(_COMMENT_LINE_RE.search(str(text or "")))
+
+
+def is_usage_example_text(text: str) -> bool:
+    lines = [line for line in str(text or "").splitlines() if line.strip()]
+    comment_code_lines = 0
+    for line in lines:
+        if not is_comment_usage_line(line):
+            continue
+        cleaned = _clean_usage_line(line)
+        if _EXAMPLE_HINT_RE.search(cleaned):
+            return True
+        if re.search(r"\b(using|public|private|protected|internal|class|struct|interface|enum|if|for|while|return|new)\b", cleaned):
+            comment_code_lines += 1
+    return comment_code_lines >= 2
+
+
 def usage_match_evidence(
     item: Dict[str, Any],
     *,
@@ -115,11 +155,25 @@ def usage_match_evidence(
     preferred_symbol_in_text = 1.0 if any(compact in text_compact for compact in preferred_compacts) else 0.0
     preferred_symbol_invocation = 0.0
     preferred_symbol_new_expression = 0.0
-    lowered_text = match_text.lower()
+    primary_line = primary_usage_line(match_text)
+    lowered_text = primary_line.lower()
+    lowered_full_text = match_text.lower()
+    is_comment_line = is_comment_usage_line(primary_line)
+    is_example_comment = is_comment_line and is_usage_example_text(match_text)
+    declaration_hint = bool(_DECLARATION_SIGNATURE_RE.search(lowered_text) or _DEFINITION_HINT_RE.search(lowered_text))
+    implementation_hint = bool(
+        not is_comment_line
+        and (
+            _CALL_LIKE_RE.search(primary_line)
+            or _MEMBER_CALL_RE.search(primary_line)
+            or _MEMBER_ASSIGN_RE.search(primary_line)
+            or " new " in f" {lowered_text} "
+        )
+    )
     for term in preferred_terms:
-        if f"{term}(" in lowered_text or f".{term}(" in lowered_text or f"->{term}(" in lowered_text:
+        if f"{term}(" in lowered_full_text or f".{term}(" in lowered_full_text or f"->{term}(" in lowered_full_text:
             preferred_symbol_invocation = 1.0
-        if f"new {term}" in lowered_text:
+        if f"new {term}" in lowered_full_text:
             preferred_symbol_new_expression = 1.0
 
     return {
@@ -127,6 +181,10 @@ def usage_match_evidence(
         "is_source_extension": 1.0 if file_name.endswith(_USAGE_CODE_EXTENSIONS) else 0.0,
         "is_test_path": 1.0 if any(token in normalized_path for token in _USAGE_TEST_PATH_HINTS) else 0.0,
         "is_generated_path": 1.0 if any(token in normalized_path for token in _USAGE_GENERATED_PATH_HINTS) else 0.0,
+        "is_comment_line": 1.0 if is_comment_line else 0.0,
+        "is_example_comment": 1.0 if is_example_comment else 0.0,
+        "is_declaration_line": 1.0 if declaration_hint and not is_comment_line else 0.0,
+        "is_implementation_line": 1.0 if implementation_hint else 0.0,
         "query_path_overlap": float(query_path_overlap),
         "query_text_overlap": float(query_text_overlap),
         "preferred_symbol_in_path": preferred_symbol_in_path,
@@ -140,22 +198,53 @@ def usage_match_evidence(
     }
 
 
+def classify_usage_match_type(
+    item: Dict[str, Any],
+    *,
+    query_text: str = "",
+    preferred_symbol: str = "",
+) -> str:
+    evidence = usage_match_evidence(item, query_text=query_text, preferred_symbol=preferred_symbol)
+    if evidence["is_example_comment"]:
+        return "example"
+    if evidence["is_declaration_line"]:
+        return "declaration"
+    if evidence["is_implementation_line"]:
+        return "implementation"
+    if evidence["is_comment_line"]:
+        return "comment_reference"
+    return "reference"
+
+
 def _usage_match_rank_key(
     item: Dict[str, Any],
     *,
     query_text: str = "",
     preferred_symbol: str = "",
-) -> Tuple[int, int, int, int, int, int, int, int, int, int, int]:
+) -> Tuple[int, int, int, int, int, int, int, int, int, int, int, int, int]:
     evidence = usage_match_evidence(item, query_text=query_text, preferred_symbol=preferred_symbol)
     path = normalize_usage_path(str(item.get("path") or ""))
+    evidence_type = classify_usage_match_type(item, query_text=query_text, preferred_symbol=preferred_symbol)
+    evidence_rank = {
+        "declaration": 5,
+        "implementation": 4,
+        "reference": 3,
+        "comment_reference": 2,
+        "example": 1,
+    }.get(evidence_type, 0)
     return (
-        int(bool(evidence["preferred_symbol_invocation"])),
+        evidence_rank,
         int(bool(evidence["preferred_symbol_in_text"])),
         int(bool(evidence["preferred_symbol_in_path"])),
+        int(bool(evidence["preferred_symbol_invocation"])),
+        int(bool(evidence["preferred_symbol_new_expression"])),
+        int(bool(evidence["is_implementation_line"])),
+        int(bool(evidence["is_declaration_line"])),
         int(min(evidence["query_text_overlap"], 5.0)),
         int(min(evidence["query_path_overlap"], 4.0)),
         int(bool(evidence["is_source_extension"])),
-        -int(bool(evidence["has_definition_hint"])),
+        -int(bool(evidence["is_example_comment"])),
+        -int(bool(evidence["is_comment_line"])),
         -int(bool(evidence["is_test_path"])),
         -int(bool(evidence["is_generated_path"])),
         int(min(evidence["member_call_count"], 4.0) + min(evidence["call_count"], 4.0)),
@@ -175,7 +264,12 @@ def prioritize_usage_matches(
         ),
         reverse=True,
     )
-    return ranked
+    output: List[Dict[str, str]] = []
+    for item in ranked:
+        row = dict(item)
+        row["evidence_type"] = classify_usage_match_type(row, query_text=query_text, preferred_symbol=preferred_symbol)
+        output.append(row)
+    return output
 
 
 def parse_line_range(line_range: str) -> Tuple[int, int]:

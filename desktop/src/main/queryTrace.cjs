@@ -340,6 +340,7 @@ function summarizeObservation(toolName, observation, maxChars = 16000) {
           text: String(item?.text || item?.match || '').slice(0, 240),
           symbol: item?.symbol || '',
           matchKind: item?.matchKind || item?.match_kind || '',
+          evidenceType: item?.evidenceType || item?.evidence_type || '',
         }))
         : [],
       windows: Array.isArray(payload.windows)
@@ -347,6 +348,8 @@ function summarizeObservation(toolName, observation, maxChars = 16000) {
           path: item?.path || '',
           lineRange: item?.lineRange || item?.line_range || '',
           truncated: Boolean(item?.truncated),
+          matchKind: item?.matchKind || item?.match_kind || '',
+          evidenceType: item?.evidenceType || item?.evidence_type || '',
           content: String(item?.content || '').slice(0, Math.min(1800, maxChars)),
         }))
         : [],

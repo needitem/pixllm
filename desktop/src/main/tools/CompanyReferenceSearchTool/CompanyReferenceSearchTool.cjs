@@ -43,6 +43,7 @@ function normalizeReferenceMatch(item) {
     text: toStringValue(item?.match || item?.text),
     symbol: toStringValue(item?.symbol),
     matchKind: toStringValue(item?.match_kind || item?.matchKind),
+    evidenceType: toStringValue(item?.evidence_type || item?.evidenceType),
     source: 'company_reference_search',
   };
 }
@@ -60,6 +61,8 @@ function normalizeReferenceWindow(item) {
     })(),
     content: String(item?.content || ''),
     truncated: Boolean(item?.truncated),
+    matchKind: toStringValue(item?.match_kind || item?.matchKind),
+    evidenceType: toStringValue(item?.evidence_type || item?.evidenceType),
   };
 }
 
@@ -119,6 +122,7 @@ function CompanyReferenceSearchTool() {
           text: stringSchema('Matched text snippet'),
           symbol: stringSchema('Matched symbol name'),
           matchKind: stringSchema('Match kind'),
+          evidenceType: stringSchema('Evidence type such as declaration, implementation, or example'),
           source: stringSchema('Evidence source'),
         }), 'Code matches'),
         windows: arraySchema(objectSchema({
@@ -128,6 +132,8 @@ function CompanyReferenceSearchTool() {
           endLine: integerSchema('Window end line', { minimum: 0 }),
           content: stringSchema('Window content'),
           truncated: booleanSchema('Whether the content was truncated'),
+          matchKind: stringSchema('Window match kind'),
+          evidenceType: stringSchema('Window evidence type such as declaration, implementation, or example'),
         }), 'Opened code windows'),
         doc_results: arraySchema(objectSchema({
           doc_id: stringSchema('Document id'),

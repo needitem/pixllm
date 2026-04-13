@@ -215,8 +215,22 @@ async def _collect_code_evidence_async(
             query_text=query,
             preferred_symbol=(symbol_candidates[0] if symbol_candidates else ""),
         )
+    high_confidence_matches = [
+        row for row in merged_matches
+        if str(row.get("evidence_type") or "").strip().lower() in {"declaration", "implementation"}
+    ]
+    if high_confidence_matches:
+        merged_matches = [*high_confidence_matches, *[
+            row for row in merged_matches
+            if row not in high_confidence_matches
+        ]]
     code_search_result["matches"] = merged_matches
     code_search_result["truncated"] = len(merged_matches) > capped_limit
+    code_search_result["evidence_summary"] = {
+        "declaration_count": sum(1 for row in merged_matches if str(row.get("evidence_type") or "").lower() == "declaration"),
+        "implementation_count": sum(1 for row in merged_matches if str(row.get("evidence_type") or "").lower() == "implementation"),
+        "example_count": sum(1 for row in merged_matches if str(row.get("evidence_type") or "").lower() == "example"),
+    }
 
     if search_only:
         trace_steps.append({"step": "read_code_windows", "status": "skipped", "count": 0, "reason": "search_only"})
@@ -253,6 +267,9 @@ async def _collect_code_evidence_async(
             continue
         seen_windows.add(window_key)
         per_path_count[path] = per_path_count.get(path, 0) + 1
+        window["evidence_type"] = str(match.get("evidence_type") or "")
+        if match.get("match_kind"):
+            window["match_kind"] = str(match.get("match_kind") or "")
         code_windows.append(window)
 
     trace_steps.append({"step": "read_code_windows", "status": "ok", "count": len(code_windows), "max_windows": max_windows})

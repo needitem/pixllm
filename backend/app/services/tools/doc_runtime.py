@@ -7,6 +7,7 @@ from ..retrieval.service import run_retrieval
 from ...core.policy import SecurityPolicy
 from .access import register_doc_search, resolve_tool_user_context
 from .support import build_citations, clamp_int, normalize_doc_item, qdrant_point_id
+from .wiki_runtime import search_wiki
 
 
 async def search_docs(
@@ -132,6 +133,17 @@ async def collect_doc_evidence(
 ) -> Tuple[Dict[str, Any], List[Dict[str, Any]], List[Dict[str, Any]]]:
     trace_steps: List[Dict[str, Any]] = []
     doc_chunks: List[Dict[str, Any]] = []
+    wiki_search = search_wiki(query=query, top_k=min(capped_top_k, doc_open_limit), max_chars=max_chars)
+    wiki_rows = list(wiki_search.get("results", []) or [])
+    wiki_chunks = list(wiki_search.get("chunks", []) or [])
+    trace_steps.append(
+        {
+            "step": "search_wiki",
+            "status": "ok" if wiki_rows else "skipped",
+            "result_count": len(wiki_rows),
+            "reason": wiki_search.get("reason"),
+        }
+    )
 
     doc_search = await search_docs(
         redis,
@@ -145,11 +157,19 @@ async def collect_doc_evidence(
     )
     trace_steps.append({"step": "search_docs", "status": "ok" if not doc_search.get("reason") else "skipped", "result_count": len(doc_search.get("results", [])), "reason": doc_search.get("reason")})
 
-    doc_rows = list(doc_search.get("results", []) or [])
+    doc_rows = [*wiki_rows, *list(doc_search.get("results", []) or [])]
     if search_only:
+        doc_search["results"] = doc_rows
+        doc_chunks = wiki_chunks[:doc_open_limit]
         trace_steps.append({"step": "open_doc_chunks", "status": "skipped", "opened_count": 0, "reason": "search_only"})
     else:
-        chunk_ids = [r.get("chunk_id") for r in doc_rows if r.get("chunk_id")][:doc_open_limit]
+        doc_chunks = wiki_chunks[:doc_open_limit]
+        remaining_doc_slots = max(0, doc_open_limit - len(doc_chunks))
+        chunk_ids = [
+            r.get("chunk_id")
+            for r in doc_rows
+            if r.get("chunk_id") and not str(r.get("chunk_id") or "").startswith("wiki:")
+        ][:remaining_doc_slots]
         opened = await open_doc_chunks(
             redis,
             search_svc,
@@ -159,8 +179,12 @@ async def collect_doc_evidence(
             session_id=session_id,
             explicit_reference=False,
         )
-        doc_chunks = opened.get("chunks", [])
+        doc_chunks.extend(opened.get("chunks", []))
         trace_steps.append({"step": "open_doc_chunks", "status": "ok" if not opened.get("reason") else "skipped", "opened_count": len(doc_chunks), "reason": opened.get("reason")})
+
+    doc_search["results"] = doc_rows
+    doc_search["wiki_result_count"] = len(wiki_rows)
+    doc_search["wiki_query_time_ms"] = wiki_search.get("query_time_ms", 0.0)
 
     return doc_search, doc_chunks, trace_steps
 

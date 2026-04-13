@@ -73,6 +73,25 @@ function collectGroundedPaths({ trace = [], fileCache = {}, requestContext = {} 
   return Array.from(paths);
 }
 
+function companyReferenceEvidenceTypes(trace = []) {
+  const types = new Set();
+  for (const step of Array.isArray(trace) ? trace : []) {
+    if (toStringValue(step?.tool) !== 'company_reference_search' || step?.observation?.ok === false) {
+      continue;
+    }
+    const observation = step?.observation && typeof step.observation === 'object' ? step.observation : {};
+    for (const group of [observation.matches, observation.windows]) {
+      for (const item of Array.isArray(group) ? group : []) {
+        const evidenceType = toStringValue(item?.evidenceType || item?.evidence_type).toLowerCase();
+        if (evidenceType) {
+          types.add(evidenceType);
+        }
+      }
+    }
+  }
+  return types;
+}
+
 function collectReadPaths({ trace = [], fileCache = {} } = {}) {
   const paths = new Set();
   for (const item of readObservationsFromTrace(trace)) {
@@ -150,6 +169,8 @@ function authorizeToolUse({
   });
   const hasContext = groundedPaths.size > 0;
   const hasFailures = failedSteps(trace).length > 0;
+  const referenceEvidenceTypes = companyReferenceEvidenceTypes(trace);
+  const hasVerifiedReferenceCodeEvidence = ['declaration', 'implementation'].some((item) => referenceEvidenceTypes.has(item));
 
   if (activeToolNames.size > 0 && !activeToolNames.has(normalizedTool)) {
     return permissionDenied({
@@ -257,6 +278,20 @@ function authorizeToolUse({
         reason: 'read_required_before_write',
         message: `Read ${unreadPaths[0]} before overwriting it so the change is grounded in current file content.`,
         suggestedTools: ['read_file', 'read_symbol_span'],
+      });
+    }
+    if (
+      Boolean(intent.createLikely)
+      && Boolean(requestContext?.prefersReferenceTools)
+      && !hasContext
+      && referenceEvidenceTypes.size > 0
+      && !hasVerifiedReferenceCodeEvidence
+    ) {
+      return permissionDenied({
+        toolName,
+        reason: 'reference_contract_evidence_required',
+        message: 'Do not generate new code from example-only reference snippets. Gather verified declaration or implementation evidence first.',
+        suggestedTools: ['company_reference_search', 'find_symbol', 'read_file'],
       });
     }
     return permissionAllowed();

@@ -9,6 +9,7 @@ from ..retrieval.query_rewrite import build_query_rewrite
 from ...core.policy import SecurityPolicy
 from .access import register_code_search, register_listed_files
 from .codebase import extract_symbol_query_candidates
+from .query_strategy import classify_usage_match_type
 from .support import clamp_int, decode_file, is_safe_regex, is_subpath, parse_query_or_regex
 
 
@@ -136,6 +137,8 @@ def code_tool_results_to_rows(
     results: Sequence[Dict[str, Any]],
     code_tools,
     path_filter: Optional[str],
+    query_text: str = "",
+    preferred_symbol: str = "",
 ) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     filter_norm = (path_filter or "").strip().replace("\\", "/")
@@ -156,6 +159,11 @@ def code_tool_results_to_rows(
             row["match_kind"] = payload.get("match_kind")
         if payload.get("symbol"):
             row["symbol"] = payload.get("symbol")
+        row["evidence_type"] = payload.get("evidence_type") or classify_usage_match_type(
+            row,
+            query_text=query_text,
+            preferred_symbol=preferred_symbol or str(payload.get("symbol") or ""),
+        )
         rows.append(row)
 
     return rows
@@ -405,7 +413,13 @@ async def search_code(
         if symbol_lookup is None:
             continue
         symbol_results, _ = symbol_lookup
-        symbol_rows = code_tool_results_to_rows(symbol_results, code_tools, path_filter)
+        symbol_rows = code_tool_results_to_rows(
+            symbol_results,
+            code_tools,
+            path_filter,
+            query_text=q,
+            preferred_symbol=symbol,
+        )
         if not symbol_rows:
             continue
         symbol_lookup_log.append({"symbol": symbol, "match_count": len(symbol_rows)})
@@ -415,7 +429,13 @@ async def search_code(
 
     for candidate in iter_code_query_variants(q):
         results, _ = code_tools.search(query=candidate["query"], top_k=max_rows, repo_filter=None)
-        variant_rows = code_tool_results_to_rows(results, code_tools, path_filter)[:max_rows]
+        variant_rows = code_tool_results_to_rows(
+            results,
+            code_tools,
+            path_filter,
+            query_text=q,
+            preferred_symbol=(symbol_lookup_log[0]["symbol"] if symbol_lookup_log else ""),
+        )[:max_rows]
         variant_log.append(
             {
                 "query": candidate["query"],
@@ -474,7 +494,13 @@ async def find_symbol(
         return {"symbol": normalized_symbol, "matches": [], "reason": "symbol_lookup_unavailable"}
 
     results, _ = symbol_lookup
-    rows = code_tool_results_to_rows(results, code_tools, path_filter)
+    rows = code_tool_results_to_rows(
+        results,
+        code_tools,
+        path_filter,
+        query_text=normalized_symbol,
+        preferred_symbol=normalized_symbol,
+    )
     rows = dedupe_code_rows(rows)[: clamp_int(limit, 1, 50)]
     await register_code_rows(redis, session_id, rows)
     return {"symbol": normalized_symbol, "matches": rows, "truncated": len(rows) >= clamp_int(limit, 1, 50)}
