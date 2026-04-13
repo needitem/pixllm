@@ -1,12 +1,9 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { safeStorage } = require('electron');
-const {
-  ensureDesktopDataRoot,
-  migrateLegacyFile
-} = require('./storage_paths.cjs');
+const { ensureDesktopDataRoot } = require('./storage_paths.cjs');
 
-const SETTINGS_KEYS = ['serverBaseUrl', 'apiToken', 'llmBaseUrl', 'llmApiToken', 'workspacePath', 'selectedModel', 'recentWorkspaces'];
+const SETTINGS_KEYS = ['serverBaseUrl', 'apiToken', 'llmBaseUrl', 'llmApiToken', 'workspacePath', 'selectedModel', 'sharedWikiId', 'recentWorkspaces'];
 const ENCRYPTED_TOKEN_PREFIX = 'enc:v1:';
 
 function settingsPath() {
@@ -21,6 +18,7 @@ function defaultSettings() {
     llmApiToken: process.env.PIXLLM_LLM_API_TOKEN || '',
     workspacePath: '',
     selectedModel: 'qwen3.5-27b',
+    sharedWikiId: '',
     recentWorkspaces: []
   };
 }
@@ -45,6 +43,7 @@ function normalizeWorkspaceList(list) {
 
 function finalizeSettings(source) {
   const workspacePath = typeof source?.workspacePath === 'string' ? source.workspacePath.trim() : '';
+  const sharedWikiId = typeof source?.sharedWikiId === 'string' ? source.sharedWikiId.trim() : '';
   const recentWorkspaces = normalizeWorkspaceList([
     workspacePath,
     ...(Array.isArray(source?.recentWorkspaces) ? source.recentWorkspaces : [])
@@ -53,6 +52,7 @@ function finalizeSettings(source) {
   return {
     ...source,
     workspacePath,
+    sharedWikiId,
     recentWorkspaces
   };
 }
@@ -116,7 +116,6 @@ function normalizeSettings(source) {
 
 function readStoredSettings() {
   const target = settingsPath();
-  migrateLegacyFile('settings.json', target);
   if (!fs.existsSync(target)) {
     return {};
   }

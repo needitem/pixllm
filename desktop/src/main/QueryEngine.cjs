@@ -55,6 +55,11 @@ const NO_WORKSPACE_TOOL_NAMES = Object.freeze([
   'tool_search',
   'config',
   'company_reference_search',
+  'wiki_bootstrap',
+  'wiki_search',
+  'wiki_read',
+  'wiki_write',
+  'wiki_append_log',
 ]);
 function toSerializableTraceStep(step = {}) {
   return {
@@ -322,7 +327,7 @@ function summarizeStructuredToolResult(name = '', payload = {}) {
   }
 
   const docItems = summarizeStructuredItems(
-    Array.isArray(payload?.doc_chunks) && payload.doc_chunks.length > 0 ? payload.doc_chunks : payload?.doc_results,
+    payload?.sources,
     (item) => {
       const path = toStringValue(item?.file_path || item?.path || item?.source_url || item?.sourceUrl);
       const heading = toStringValue(item?.heading_path || item?.paragraph_range || item?.line_range);
@@ -331,11 +336,7 @@ function summarizeStructuredToolResult(name = '', payload = {}) {
     3,
   );
   if (docItems.length > 0) {
-    const count = Array.isArray(payload?.doc_chunks) && payload.doc_chunks.length > 0
-      ? payload.doc_chunks.length
-      : Array.isArray(payload?.doc_results)
-        ? payload.doc_results.length
-        : docItems.length;
+    const count = Array.isArray(payload?.sources) ? payload.sources.length : docItems.length;
     lines.push(`docs(${count}): ${docItems.join('; ')}`);
   }
 
@@ -613,6 +614,7 @@ class QueryEngine {
     serverApiToken = '',
     llmBaseUrl = '',
     llmApiToken = '',
+    sharedWikiId = '',
     model = '',
     selectedFilePath = '',
     sessionId = '',
@@ -623,6 +625,7 @@ class QueryEngine {
     this.serverApiToken = toStringValue(serverApiToken || apiToken);
     this.llmBaseUrl = toStringValue(llmBaseUrl);
     this.llmApiToken = toStringValue(llmApiToken);
+    this.sharedWikiId = toStringValue(sharedWikiId);
     this.baseUrl = this.llmBaseUrl || this.serverBaseUrl;
     this.apiToken = this.llmApiToken || this.serverApiToken;
     this.model = toStringValue(model);
@@ -652,6 +655,7 @@ class QueryEngine {
       getBackendConfig: () => ({
         baseUrl: this.serverBaseUrl,
         apiToken: this.serverApiToken,
+        sharedWikiId: this.sharedWikiId,
       }),
       allowedToolNames: this.workspacePath ? null : NO_WORKSPACE_TOOL_NAMES,
     });
@@ -671,6 +675,7 @@ class QueryEngine {
     serverApiToken = '',
     llmBaseUrl = '',
     llmApiToken = '',
+    sharedWikiId = '',
     model = '',
     selectedFilePath = '',
   } = {}) {
@@ -678,6 +683,7 @@ class QueryEngine {
     this.serverApiToken = toStringValue(serverApiToken) || this.serverApiToken || toStringValue(apiToken) || this.apiToken;
     this.llmBaseUrl = toStringValue(llmBaseUrl) || this.llmBaseUrl;
     this.llmApiToken = toStringValue(llmApiToken) || this.llmApiToken;
+    this.sharedWikiId = toStringValue(sharedWikiId) || this.sharedWikiId;
     this.baseUrl = this.llmBaseUrl || toStringValue(baseUrl) || this.baseUrl || this.serverBaseUrl;
     this.apiToken = this.llmApiToken || toStringValue(apiToken) || this.apiToken || this.serverApiToken;
     this.model = toStringValue(model) || this.model;

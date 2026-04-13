@@ -152,6 +152,7 @@
     llmApiToken: '',
     workspacePath: '',
     selectedModel: 'qwen3.5-27b',
+    sharedWikiId: '',
     recentWorkspaces: []
   };
   let settings: DesktopSettings = { ...DEFAULT_SETTINGS };
@@ -1431,6 +1432,7 @@
       const llmBaseUrl = settingsForm.llmBaseUrl.trim();
       const llmApiToken = settingsForm.llmApiToken.trim();
       const selectedModel = settingsForm.selectedModel.trim();
+      const sharedWikiId = settingsForm.sharedWikiId.trim();
 
       if (!serverBaseUrl || !selectedModel) {
         settingsSaveError = 'Server API URL and chat model are required.';
@@ -1442,7 +1444,8 @@
         apiToken,
         llmBaseUrl,
         llmApiToken,
-        selectedModel
+        selectedModel,
+        sharedWikiId
       });
       applyLoadedSettings(next);
       settingsSaveMessage = 'Settings saved.';
@@ -1715,6 +1718,7 @@
           serverApiToken: settings.apiToken,
           llmBaseUrl: settings.llmBaseUrl,
           llmApiToken: settings.llmApiToken,
+          sharedWikiId: settings.sharedWikiId,
           selectedFilePath,
           sessionId: selectedSessionId || '',
           historyMessages
@@ -2565,6 +2569,10 @@
               <label class="field">
                 <span>Chat Model</span>
                 <input bind:value={settingsForm.selectedModel} placeholder="qwen3.5-27b" />
+              </label>
+              <label class="field">
+                <span>Shared Wiki ID</span>
+                <input bind:value={settingsForm.sharedWikiId} placeholder="project-wiki" />
               </label>
             </div>
             <div class="actions compact-actions">

@@ -1,13 +1,17 @@
-import asyncio
+import re
 from types import SimpleNamespace
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from ... import config
 from ..retrieval.service import run_retrieval
 from ...core.policy import SecurityPolicy
-from .access import register_doc_search, resolve_tool_user_context
-from .support import build_citations, clamp_int, normalize_doc_item, qdrant_point_id
+from .access import register_code_search, register_doc_search, resolve_tool_user_context
+from .code_runtime import read_code_lines
+from .query_strategy import expand_line_window, parse_line_range
+from .support import build_citations, clamp_int, dedupe_doc_items, normalize_doc_item, qdrant_point_id
 from .wiki_runtime import search_wiki
+
+_WIKI_SOURCE_REF_RE = re.compile(r"\b(Source/[^`:\s]+):(\d+)(?:-(\d+))?\b")
 
 
 async def search_docs(
@@ -115,78 +119,180 @@ async def get_doc_metadata(doc_store, doc_id: str) -> Dict[str, Any]:
     return {"doc_id": doc_id, "found": True, "document": document, "current_revision": current_revision, "recent_revisions": revisions}
 
 
-async def collect_doc_evidence(
+async def collect_sources(
     *,
     redis,
     search_svc,
     embed_model,
-    doc_store,
     session_id: str,
     query: str,
     filters: Optional[Dict[str, Any]],
-    capped_top_k: int,
+    top_k: int,
     doc_open_limit: int,
     max_chars: int,
-    capped_limit: int,
-    search_only: bool,
     active_collection: str,
-) -> Tuple[Dict[str, Any], List[Dict[str, Any]], List[Dict[str, Any]]]:
-    trace_steps: List[Dict[str, Any]] = []
-    doc_chunks: List[Dict[str, Any]] = []
-    wiki_search = search_wiki(query=query, top_k=min(capped_top_k, doc_open_limit), max_chars=max_chars)
-    wiki_rows = list(wiki_search.get("results", []) or [])
-    wiki_chunks = list(wiki_search.get("chunks", []) or [])
-    trace_steps.append(
-        {
-            "step": "search_wiki",
-            "status": "ok" if wiki_rows else "skipped",
-            "result_count": len(wiki_rows),
-            "reason": wiki_search.get("reason"),
-        }
+    search_only: bool,
+) -> List[Dict[str, Any]]:
+    wiki_rows = list(search_wiki(query=query, top_k=min(top_k, doc_open_limit), max_chars=max_chars).get("results", []) or [])
+    doc_rows = list(
+        (
+            await search_docs(
+                redis,
+                search_svc,
+                embed_model,
+                query=query,
+                filters=filters,
+                top_k=top_k,
+                collection=active_collection,
+                session_id=session_id,
+            )
+        ).get("results", [])
+        or []
     )
+    if search_only:
+        return merge_doc_sources([wiki_rows, doc_rows])[:doc_open_limit]
 
-    doc_search = await search_docs(
+    remaining = max(0, doc_open_limit - len(wiki_rows[:doc_open_limit]))
+    chunk_ids = [
+        row.get("chunk_id")
+        for row in doc_rows
+        if row.get("chunk_id") and not str(row.get("chunk_id") or "").startswith("wiki:")
+    ][:remaining]
+    opened = await open_doc_chunks(
         redis,
         search_svc,
-        embed_model,
-        query=query,
-        filters=filters,
-        top_k=capped_top_k,
+        chunk_ids=chunk_ids,
+        max_chars=max_chars,
         collection=active_collection,
         session_id=session_id,
+        explicit_reference=False,
     )
-    trace_steps.append({"step": "search_docs", "status": "ok" if not doc_search.get("reason") else "skipped", "result_count": len(doc_search.get("results", [])), "reason": doc_search.get("reason")})
+    return merge_doc_sources([wiki_rows, opened.get("chunks", []), doc_rows])[:doc_open_limit]
 
-    doc_rows = [*wiki_rows, *list(doc_search.get("results", []) or [])]
+
+def is_docs_only_request(*, response_type: str, mode: str) -> bool:
+    requested = str(mode or "auto").strip().lower()
+    return requested == "docs" or (requested not in {"code", "hybrid"} and str(response_type or "").strip().lower() == "doc_lookup")
+
+
+def extract_wiki_source_anchors(doc_chunks: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    anchors: List[Dict[str, Any]] = []
+    seen = set()
+    for chunk in doc_chunks or []:
+        if str(chunk.get("source_url") or "").strip() and not str(chunk.get("source_url") or "").strip().startswith("methods/"):
+            continue
+        text = str(chunk.get("text") or "")
+        if not text:
+            continue
+        for raw_line in text.splitlines():
+            line = str(raw_line or "").strip()
+            if not line:
+                continue
+            lowered = line.lower()
+            evidence_type = "reference"
+            if "declaration:" in lowered or "type declaration:" in lowered:
+                evidence_type = "declaration"
+            elif "implementation:" in lowered:
+                evidence_type = "implementation"
+            for match in _WIKI_SOURCE_REF_RE.finditer(line):
+                path = str(match.group(1) or "").strip().replace("\\", "/")
+                start_line = max(1, int(match.group(2) or 1))
+                end_line = max(start_line, int(match.group(3) or match.group(2) or start_line))
+                key = (path, start_line, end_line, evidence_type)
+                if key in seen:
+                    continue
+                seen.add(key)
+                anchors.append(
+                    {
+                        "path": path,
+                        "line_range": f"{start_line}-{end_line}",
+                        "evidence_type": evidence_type,
+                        "source_url": chunk.get("source_url"),
+                        "heading_path": chunk.get("heading_path"),
+                    }
+                )
+    return anchors
+
+
+def merge_code_windows(groups: Sequence[Sequence[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+    merged: List[Dict[str, Any]] = []
+    seen = set()
+    for group in groups or []:
+        for row in group or []:
+            key = (str(row.get("path") or "").strip(), str(row.get("line_range") or "").strip())
+            if not key[0] or key in seen:
+                continue
+            seen.add(key)
+            merged.append(row)
+    return merged
+
+
+def merge_doc_sources(groups: Sequence[Sequence[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+    merged: List[Dict[str, Any]] = []
+    for group in groups or []:
+        merged.extend(list(group or []))
+    return dedupe_doc_items(merged)
+
+
+async def collect_wiki_anchor_code_windows(
+    *,
+    redis,
+    session_id: str,
+    code_tools,
+    doc_chunks: Sequence[Dict[str, Any]],
+    max_chars: int,
+    max_line_span: int,
+    response_type: str,
+    code_window_cap: int,
+    search_only: bool,
+) -> List[Dict[str, Any]]:
+    anchors = extract_wiki_source_anchors(doc_chunks)
+    if not anchors or code_tools is None:
+        return []
+
     if search_only:
-        doc_search["results"] = doc_rows
-        doc_chunks = wiki_chunks[:doc_open_limit]
-        trace_steps.append({"step": "open_doc_chunks", "status": "skipped", "opened_count": 0, "reason": "search_only"})
-    else:
-        doc_chunks = wiki_chunks[:doc_open_limit]
-        remaining_doc_slots = max(0, doc_open_limit - len(doc_chunks))
-        chunk_ids = [
-            r.get("chunk_id")
-            for r in doc_rows
-            if r.get("chunk_id") and not str(r.get("chunk_id") or "").startswith("wiki:")
-        ][:remaining_doc_slots]
-        opened = await open_doc_chunks(
-            redis,
-            search_svc,
-            chunk_ids=chunk_ids,
+        await register_code_search(redis, session_id, anchors)
+        return []
+
+    windows: List[Dict[str, Any]] = []
+    seen = set()
+    per_path_count: Dict[str, int] = {}
+    per_path_cap = 2
+    max_windows = min(clamp_int(code_window_cap, 1, 24), max(4, len(anchors)))
+
+    for anchor in anchors:
+        if len(windows) >= max_windows:
+            break
+        path = str(anchor.get("path") or "").strip()
+        if not path or per_path_count.get(path, 0) >= per_path_cap:
+            continue
+        start_line, end_line = parse_line_range(str(anchor.get("line_range") or "1-1"))
+        start_line, end_line = expand_line_window(start_line, end_line, response_type, max_line_span)
+        window = read_code_lines(
+            code_tools,
+            path=path,
+            start_line=start_line,
+            end_line=end_line,
+            max_line_span=max_line_span,
             max_chars=max_chars,
-            collection=active_collection,
-            session_id=session_id,
-            explicit_reference=False,
         )
-        doc_chunks.extend(opened.get("chunks", []))
-        trace_steps.append({"step": "open_doc_chunks", "status": "ok" if not opened.get("reason") else "skipped", "opened_count": len(doc_chunks), "reason": opened.get("reason")})
+        if not window.get("found"):
+            continue
+        key = (str(window.get("path") or "").strip(), str(window.get("line_range") or "").strip())
+        if key in seen:
+            continue
+        seen.add(key)
+        per_path_count[path] = per_path_count.get(path, 0) + 1
+        window["evidence_type"] = str(anchor.get("evidence_type") or "reference")
+        if anchor.get("source_url"):
+            window["source_url"] = anchor.get("source_url")
+        if anchor.get("heading_path"):
+            window["heading_path"] = anchor.get("heading_path")
+        windows.append(window)
 
-    doc_search["results"] = doc_rows
-    doc_search["wiki_result_count"] = len(wiki_rows)
-    doc_search["wiki_query_time_ms"] = wiki_search.get("query_time_ms", 0.0)
-
-    return doc_search, doc_chunks, trace_steps
+    if windows:
+        await register_code_search(redis, session_id, windows)
+    return windows
 
 
 async def collect_evidence_bundle(
@@ -195,7 +301,6 @@ async def collect_evidence_bundle(
     search_svc=None,
     embed_model=None,
     code_tools=None,
-    doc_store,
     session_id: str,
     user_id: Optional[str],
     query: str,
@@ -208,7 +313,6 @@ async def collect_evidence_bundle(
     response_type: str,
     search_only: bool,
     collection: Optional[str],
-    route_collect_mode,
     collect_code_evidence_async,
     state=None,
 ) -> Dict[str, Any]:
@@ -217,12 +321,8 @@ async def collect_evidence_bundle(
         embed_model = embed_model if embed_model is not None else getattr(state, "embed_model", None)
         code_tools = code_tools if code_tools is not None else getattr(state, "code_tools", None)
 
-    trace: List[Dict[str, Any]] = []
-    context = await resolve_tool_user_context(redis, session_id=session_id, user_id=user_id)
-    trace.append({"step": "resolve_user_context", "status": "ok", "session_id": context.get("session_id")})
-
-    resolved_mode = route_collect_mode(response_type=response_type, mode=mode)
-    trace.append({"step": "route_intent", "status": "ok", "requested_mode": mode, "resolved_mode": resolved_mode})
+    await resolve_tool_user_context(redis, session_id=session_id, user_id=user_id)
+    docs_only = is_docs_only_request(response_type=response_type, mode=mode)
 
     capped_top_k = clamp_int(top_k, 1, 50)
     capped_limit = clamp_int(limit, 1, 50)
@@ -230,31 +330,34 @@ async def collect_evidence_bundle(
     code_window_cap = clamp_int(config.CHAT_TOOL_CODE_MAX_WINDOWS, 4, 24)
     active_collection = collection or config.RAG_DEFAULT_COLLECTION
 
-    doc_search: Dict[str, Any] = {"results": [], "top_k": capped_top_k}
-    code_search_result: Dict[str, Any] = {"matches": [], "limit": capped_limit}
-    doc_chunks: List[Dict[str, Any]] = []
-    code_windows: List[Dict[str, Any]] = []
+    sources = await collect_sources(
+        redis=redis,
+        search_svc=search_svc,
+        embed_model=embed_model,
+        session_id=session_id,
+        query=query,
+        filters=filters,
+        top_k=capped_top_k,
+        doc_open_limit=doc_open_limit,
+        max_chars=max_chars,
+        active_collection=active_collection,
+        search_only=search_only,
+    )
+    wiki_code_windows = await collect_wiki_anchor_code_windows(
+        redis=redis,
+        session_id=session_id,
+        code_tools=code_tools,
+        doc_chunks=sources,
+        max_chars=max_chars,
+        max_line_span=max_line_span,
+        response_type=response_type,
+        code_window_cap=code_window_cap,
+        search_only=search_only,
+    )
+    code_windows = wiki_code_windows
 
-    if resolved_mode == "docs":
-        doc_search, doc_chunks, doc_trace = await collect_doc_evidence(
-            redis=redis,
-            search_svc=search_svc,
-            embed_model=embed_model,
-            doc_store=doc_store,
-            session_id=session_id,
-            query=query,
-            filters=filters,
-            capped_top_k=capped_top_k,
-            doc_open_limit=doc_open_limit,
-            max_chars=max_chars,
-            capped_limit=capped_limit,
-            search_only=search_only,
-            active_collection=active_collection,
-        )
-        trace.extend(doc_trace)
-
-    if resolved_mode == "code":
-        code_search_result, code_windows, code_trace = await collect_code_evidence_async(
+    if not docs_only:
+        _, searched_code_windows, _ = await collect_code_evidence_async(
             redis=redis,
             code_tools=code_tools,
             session_id=session_id,
@@ -266,53 +369,11 @@ async def collect_evidence_bundle(
             search_only=search_only,
             code_window_cap=code_window_cap,
         )
-        trace.extend(code_trace)
-
-    if resolved_mode == "hybrid":
-        (doc_search, doc_chunks, doc_trace), (code_search_result, code_windows, code_trace) = await asyncio.gather(
-            collect_doc_evidence(
-                redis=redis,
-                search_svc=search_svc,
-                embed_model=embed_model,
-                doc_store=doc_store,
-                session_id=session_id,
-                query=query,
-                filters=filters,
-                capped_top_k=capped_top_k,
-                doc_open_limit=doc_open_limit,
-                max_chars=max_chars,
-                capped_limit=capped_limit,
-                search_only=search_only,
-                active_collection=active_collection,
-            ),
-            collect_code_evidence_async(
-                redis=redis,
-                code_tools=code_tools,
-                session_id=session_id,
-                query=query,
-                capped_limit=capped_limit,
-                max_chars=max_chars,
-                max_line_span=max_line_span,
-                response_type=response_type,
-                search_only=search_only,
-                code_window_cap=code_window_cap,
-            ),
-        )
-        trace.extend(doc_trace)
-        trace.extend(code_trace)
+        code_windows = merge_code_windows([wiki_code_windows, searched_code_windows])
 
     return {
-        "session_id": session_id,
-        "user_id": user_id or "anonymous",
         "query": query,
-        "requested_mode": mode,
-        "resolved_mode": resolved_mode,
-        "evidence": {"docs": {"search": doc_search, "chunks": doc_chunks}, "code": {"search": code_search_result, "windows": code_windows}},
-        "citations": build_citations(doc_chunks, code_windows),
-        "trace": trace,
-        "policy": {
-            "flow": "context->search->open/read",
-            "caps": {"top_k_max": 50, "limit_max": 50, "max_chars_max": 12000, "max_line_span_max": 500},
-            "collection": active_collection,
-        },
+        "sources": sources,
+        "code_windows": code_windows,
+        "citations": build_citations(sources, code_windows),
     }

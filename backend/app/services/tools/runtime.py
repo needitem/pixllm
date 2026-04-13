@@ -21,7 +21,6 @@ from .query_strategy import (
     expand_line_window,
     parse_line_range,
     prioritize_usage_matches,
-    route_collect_mode,
 )
 from .support import (
     clamp_int,
@@ -281,7 +280,6 @@ async def collect_evidence_bundle(
     search_svc,
     embed_model,
     code_tools,
-    doc_store,
     session_id: str,
     user_id: Optional[str],
     query: str,
@@ -300,7 +298,6 @@ async def collect_evidence_bundle(
         search_svc=search_svc,
         embed_model=embed_model,
         code_tools=code_tools,
-        doc_store=doc_store,
         session_id=session_id,
         user_id=user_id,
         query=query,
@@ -313,7 +310,6 @@ async def collect_evidence_bundle(
         response_type=response_type,
         search_only=search_only,
         collection=collection,
-        route_collect_mode=route_collect_mode,
         collect_code_evidence_async=_collect_code_evidence_async,
     )
 

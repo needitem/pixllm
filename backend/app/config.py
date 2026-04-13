@@ -76,7 +76,7 @@ CODE_TOOL_ENABLED = env_bool("CODE_TOOL_ENABLED", True)
 CODE_SEARCH_ROOTS = env_list("CODE_SEARCH_ROOTS", "")
 CODE_SEARCH_EXCLUDE_GLOBS = env_list(
     "CODE_SEARCH_EXCLUDE_GLOBS",
-    "!.git,!node_modules,!dist,!build,!out,!vendor,!backend/tests/**,!app/tests/**,!*.min.js,!*.min.css,!*.lock",
+    "!.git,!node_modules,!dist,!build,!out,!vendor,!*.min.js,!*.min.css,!*.lock",
 )
 CODE_SEARCH_MAX_RESULTS = env_int("CODE_SEARCH_MAX_RESULTS", 50)
 CODE_SEARCH_CONTEXT_LINES = env_int("CODE_SEARCH_CONTEXT_LINES", 10)

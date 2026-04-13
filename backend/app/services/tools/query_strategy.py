@@ -3,7 +3,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from ... import config
-from ..retrieval.mode_policy import default_mode_for_response_type
 from .query_terms import compact_token as _compact_text
 from .query_terms import extract_query_compacts, extract_query_terms
 from .query_terms import split_identifier_parts
@@ -30,19 +29,6 @@ def clamp_int(value: int, low: int, high: int) -> int:
 
 
 _USAGE_CODE_RESPONSE_TYPES = {"api_lookup"}
-
-
-def route_collect_mode(response_type: str, mode: str) -> str:
-    """Resolve the collect mode ('code', 'docs', or 'hybrid') for a given response_type.
-
-    Priority:
-    1. Explicit caller override ('docs', 'code', or 'hybrid' in `mode`) wins.
-    2. Falls back to the canonical response_type → mode mapping from routing_arbitration.
-    """
-    requested = str(mode or "auto").strip().lower()
-    if requested in {"docs", "code", "hybrid"}:
-        return requested
-    return default_mode_for_response_type(response_type)
 
 
 def code_match_key(item: Dict[str, str]) -> str:

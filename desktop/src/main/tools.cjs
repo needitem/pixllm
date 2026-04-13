@@ -20,6 +20,13 @@ const { RunBuildTool } = require('./tools/RunBuildTool/RunBuildTool.cjs');
 const { PowerShellTool } = require('./tools/PowerShellTool/PowerShellTool.cjs');
 const { createTaskTools } = require('./tools/TaskTools/TaskTools.cjs');
 const {
+  WikiAppendLogTool,
+  WikiBootstrapTool,
+  WikiReadTool,
+  WikiSearchTool,
+  WikiWriteTool,
+} = require('./tools/SharedWikiTools/SharedWikiTools.cjs');
+const {
   toPositiveInt,
   toStringValue,
   objectSchema,
@@ -122,7 +129,7 @@ async function projectContextSearchCall(input, context) {
 
 async function configCall(input) {
   const action = toStringValue(input.action || 'get').toLowerCase();
-  const allowedKeys = new Set(['serverBaseUrl', 'llmBaseUrl', 'workspacePath', 'selectedModel']);
+  const allowedKeys = new Set(['serverBaseUrl', 'llmBaseUrl', 'workspacePath', 'selectedModel', 'sharedWikiId']);
   if (action === 'get') {
     const settings = loadSettings();
     const key = toStringValue(input.key);
@@ -349,6 +356,11 @@ function getAllLocalBaseTools(limits = {}) {
         return projectContextSearchCall(input, context);
       },
     }),
+    WikiBootstrapTool(),
+    WikiSearchTool(),
+    WikiReadTool(),
+    WikiWriteTool(),
+    WikiAppendLogTool(),
     defineLocalTool({
       name: 'config',
       aliases: ['Config'],

@@ -1,10 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
-const {
-  ensureDesktopDataRoot,
-  legacyUserDataRoot
-} = require('./storage_paths.cjs');
+const { ensureDesktopDataRoot } = require('./storage_paths.cjs');
 
 function sessionsRoot() {
   return path.join(ensureDesktopDataRoot(), 'sessions');
@@ -155,48 +152,13 @@ function writeIndex(items) {
   writeJson(sessionsIndexPath(), items);
 }
 
-function loadLegacySessionsArray() {
-  const legacyCandidates = [
-    path.join(legacyUserDataRoot(), 'sessions.json'),
-    path.join(ensureDesktopDataRoot(), 'sessions.json')
-  ];
-  for (const target of legacyCandidates) {
-    const parsed = readJson(target, null);
-    if (Array.isArray(parsed)) {
-      return parsed;
-    }
-  }
-  return [];
-}
-
-function migrateLegacySessionsIfNeeded() {
-  ensureSessionsLayout();
-  const currentIndex = readIndex();
-  if (Array.isArray(currentIndex) && currentIndex.length > 0) {
-    return;
-  }
-
-  const legacy = loadLegacySessionsArray();
-  if (!legacy.length) {
-    return;
-  }
-
-  const normalized = legacy.map((session) => normalizeSession(session));
-  for (const session of normalized) {
-    writeJson(sessionItemPath(session.id), session);
-  }
-  writeIndex(normalized.map((session) => stripMessages(session)));
-}
-
 function loadSessionBody(sessionId) {
   ensureSessionsLayout();
-  migrateLegacySessionsIfNeeded();
   return readJson(sessionItemPath(sessionId), null);
 }
 
 function loadSessionIndex() {
   ensureSessionsLayout();
-  migrateLegacySessionsIfNeeded();
   return readIndex();
 }
 

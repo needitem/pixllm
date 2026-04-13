@@ -20,14 +20,17 @@ function summarizeCompanyReferenceEvidence(trace = []) {
     const observation = step?.observation && typeof step.observation === 'object' ? step.observation : {};
     const matches = Array.isArray(observation.matches) ? observation.matches : [];
     const windows = Array.isArray(observation.windows) ? observation.windows : [];
-    const docResults = Array.isArray(observation.doc_results) ? observation.doc_results : [];
-    const docChunks = Array.isArray(observation.doc_chunks) ? observation.doc_chunks : [];
+    const sources = Array.isArray(observation.sources)
+      ? observation.sources
+      : [
+          ...(Array.isArray(observation.doc_results) ? observation.doc_results : []),
+          ...(Array.isArray(observation.doc_chunks) ? observation.doc_chunks : []),
+        ];
     const citations = Array.isArray(observation.citations) ? observation.citations : [];
 
     codeMatchCount += matches.length;
     codeWindowCount += windows.length;
-    docResultCount += docResults.length;
-    docChunkCount += docChunks.length;
+    docResultCount += sources.length;
     citationCount += citations.length;
 
     for (const item of [...matches, ...windows]) {

@@ -29,7 +29,6 @@
 
 - `01-overview`: 현재 제품 구조와 실행 경로 개요
 - `02-design`: desktop loop, Qwen adapter, tool/runtime, UI, backend evidence 설계
-- `03-test`: 수동 검증 기록
 - `05-reference`: 비교 문서와 참고 자료
 
 주의:

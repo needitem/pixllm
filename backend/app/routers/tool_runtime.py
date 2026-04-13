@@ -265,13 +265,11 @@ async def orchestrate_collect_evidence(
     embed_model=Depends(get_embed_model),
     code_tools=Depends(get_code_tools),
 ):
-    doc_store = DocumentStoreService(redis)
     result = await collect_evidence_bundle(
         redis,
         search_svc,
         embed_model,
         code_tools,
-        doc_store=doc_store,
         session_id=request.session_id,
         user_id=request.user_id,
         query=request.query,

@@ -13,9 +13,6 @@ class SecurityPolicy:
     _PRIMARY_SESSION_PREFIX = "tool_policy:session:"
     _PRIMARY_CHUNKS_PREFIX = "tool_policy:chunks:"
     _PRIMARY_PATHS_PREFIX = "tool_policy:paths:"
-    _LEGACY_SESSION_PREFIX = "pixllm:session:"
-    _LEGACY_CHUNKS_PREFIX = "pixllm:session:"
-    _LEGACY_PATHS_PREFIX = "pixllm:session:"
 
     @staticmethod
     def is_session_auth_exempt(path: str) -> bool:
@@ -115,31 +112,15 @@ class SecurityPolicy:
         return f"{SecurityPolicy._PRIMARY_CHUNKS_PREFIX}{key}"
 
     @staticmethod
-    def _legacy_paths_key(key: str) -> str:
-        return f"{SecurityPolicy._LEGACY_PATHS_PREFIX}{key}:paths"
-
-    @staticmethod
-    def _legacy_chunks_key(key: str) -> str:
-        return f"{SecurityPolicy._LEGACY_CHUNKS_PREFIX}{key}:chunks"
-
-    @staticmethod
     def _session_key(key: str) -> str:
         return f"{SecurityPolicy._PRIMARY_SESSION_PREFIX}{key}"
 
     @staticmethod
-    def _legacy_session_key(key: str) -> str:
-        return f"{SecurityPolicy._LEGACY_SESSION_PREFIX}{key}"
-
-    @staticmethod
     async def _get_session_field(redis, key: str, field: str) -> Optional[str]:
-        for session_key in (SecurityPolicy._session_key(key), SecurityPolicy._legacy_session_key(key)):
-            try:
-                value = await redis.hget(session_key, field)
-            except Exception:
-                value = None
-            if value is not None:
-                return value
-        return None
+        try:
+            return await redis.hget(SecurityPolicy._session_key(key), field)
+        except Exception:
+            return None
 
     @staticmethod
     async def _read_known_members(redis, *keys: str) -> set[str]:
@@ -160,11 +141,7 @@ class SecurityPolicy:
     async def _ensure_session(redis, key: str) -> None:
         try:
             ttl = max(60, int(config.TOOL_POLICY_SESSION_TTL_SEC or 60))
-            exists = False
-            for session_key in (SecurityPolicy._session_key(key), SecurityPolicy._legacy_session_key(key)):
-                if await redis.exists(session_key):
-                    exists = True
-                    break
+            exists = await redis.exists(SecurityPolicy._session_key(key))
             if not exists:
                 await redis.hset(
                     SecurityPolicy._session_key(key),
@@ -184,7 +161,7 @@ class SecurityPolicy:
         if key is None or redis is None:
             if config.TOOL_POLICY_STRICT:
                 return {"allow": False, "reason": "context_required"}
-            return {"allow": True, "reason": "legacy_no_session"}
+            return {"allow": True, "reason": "no_session"}
 
         await cls._ensure_session(redis, key)
         resolved = await cls._get_session_field(redis, key, "context_resolved")
@@ -211,7 +188,7 @@ class SecurityPolicy:
         if key is None or redis is None:
             if config.TOOL_POLICY_STRICT:
                 return {"allow": False, "reason": "context_required", "unknown_chunk_ids": cleaned}
-            return {"allow": True, "reason": "legacy_no_session", "unknown_chunk_ids": []}
+            return {"allow": True, "reason": "no_session", "unknown_chunk_ids": []}
 
         await cls._ensure_session(redis, key)
         resolved = await cls._get_session_field(redis, key, "context_resolved")
@@ -222,7 +199,7 @@ class SecurityPolicy:
         if search_used != "1":
             return {"allow": False, "reason": "search_required", "unknown_chunk_ids": cleaned}
 
-        known = await cls._read_known_members(redis, cls._chunks_key(key), cls._legacy_chunks_key(key))
+        known = await cls._read_known_members(redis, cls._chunks_key(key))
 
         unknown = [cid for cid in cleaned if cid not in known]
         return {
@@ -248,7 +225,7 @@ class SecurityPolicy:
         if key is None or redis is None:
             if config.TOOL_POLICY_STRICT:
                 return {"allow": False, "reason": "context_required", "unknown_paths": [clean_path] if clean_path else []}
-            return {"allow": True, "reason": "legacy_no_session", "unknown_paths": []}
+            return {"allow": True, "reason": "no_session", "unknown_paths": []}
 
         await cls._ensure_session(redis, key)
         resolved = await cls._get_session_field(redis, key, "context_resolved")
@@ -262,7 +239,7 @@ class SecurityPolicy:
         if not clean_path:
             return {"allow": True, "reason": "ok", "unknown_paths": []}
 
-        known_paths = await cls._read_known_members(redis, cls._paths_key(key), cls._legacy_paths_key(key))
+        known_paths = await cls._read_known_members(redis, cls._paths_key(key))
         is_member = clean_path in known_paths
 
         unknown = [] if is_member else [clean_path]

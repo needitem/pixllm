@@ -186,11 +186,17 @@ function referencePathsFromTrace(trace) {
     for (const item of Array.isArray(observation.windows) ? observation.windows : []) {
       paths.push(item?.path);
     }
+    for (const item of Array.isArray(observation.sources) ? observation.sources : []) {
+      paths.push(item?.file_path);
+      paths.push(item?.path);
+    }
     for (const item of Array.isArray(observation.doc_results) ? observation.doc_results : []) {
       paths.push(item?.file_path);
+      paths.push(item?.path);
     }
     for (const item of Array.isArray(observation.doc_chunks) ? observation.doc_chunks : []) {
       paths.push(item?.file_path);
+      paths.push(item?.path);
     }
     for (const item of Array.isArray(observation.citations) ? observation.citations : []) {
       paths.push(item?.path);
@@ -330,8 +336,6 @@ function summarizeObservation(toolName, observation, maxChars = 16000) {
     return {
       ok: Boolean(payload.ok),
       query: payload.query || '',
-      requested_mode: payload.requested_mode || '',
-      resolved_mode: payload.resolved_mode || '',
       matches: Array.isArray(payload.matches)
         ? payload.matches.slice(0, 20).map((item) => ({
           path: item?.path || '',
@@ -353,19 +357,8 @@ function summarizeObservation(toolName, observation, maxChars = 16000) {
           content: String(item?.content || '').slice(0, Math.min(1800, maxChars)),
         }))
         : [],
-      doc_results: Array.isArray(payload.doc_results)
-        ? payload.doc_results.slice(0, 8).map((item) => ({
-          doc_id: item?.doc_id || '',
-          chunk_id: item?.chunk_id || '',
-          file_path: item?.file_path || '',
-          source_url: item?.source_url || '',
-          heading_path: item?.heading_path || '',
-          paragraph_range: item?.paragraph_range || '',
-          text: String(item?.text || '').slice(0, 240),
-        }))
-        : [],
-      doc_chunks: Array.isArray(payload.doc_chunks)
-        ? payload.doc_chunks.slice(0, 6).map((item) => ({
+      sources: Array.isArray(payload.sources)
+        ? payload.sources.slice(0, 8).map((item) => ({
           doc_id: item?.doc_id || '',
           chunk_id: item?.chunk_id || '',
           file_path: item?.file_path || '',
@@ -377,7 +370,6 @@ function summarizeObservation(toolName, observation, maxChars = 16000) {
         }))
         : [],
       citations: Array.isArray(payload.citations) ? payload.citations.slice(0, 12) : [],
-      trace: Array.isArray(payload.trace) ? payload.trace.slice(0, 12) : [],
       error: payload.error || '',
       message: payload.message || '',
     };

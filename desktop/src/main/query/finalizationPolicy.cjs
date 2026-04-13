@@ -48,6 +48,7 @@ function extractCandidatePaths(trace = []) {
       observation.items,
       observation.matches,
       observation.windows,
+      observation.sources,
       observation.doc_results,
       observation.doc_chunks,
       observation.citations,

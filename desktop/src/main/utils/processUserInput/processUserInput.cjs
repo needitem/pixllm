@@ -52,6 +52,13 @@ const TOOL_GROUPS = {
   reference: [
     'company_reference_search',
   ],
+  wiki: [
+    'wiki_bootstrap',
+    'wiki_search',
+    'wiki_read',
+    'wiki_write',
+    'wiki_append_log',
+  ],
   config: [
     'config',
   ],
@@ -187,15 +194,21 @@ function normalizeFocus(focus = {}) {
     mentionsConfig: Boolean(focus?.mentionsConfig),
     mentionsTodo: Boolean(focus?.mentionsTodo),
     mentionsRuntimeTask: Boolean(focus?.mentionsRuntimeTask),
+    mentionsWiki: Boolean(focus?.mentionsWiki),
   };
 }
 
 function analyzeFocus(prompt, directives = {}) {
+  const source = toStringValue(prompt);
+  const lowered = source.toLowerCase();
   return normalizeFocus({
     mentionsCompanyReference: Boolean(directives.reference || directives.hybrid),
     mentionsConfig: Boolean(directives.config),
     mentionsTodo: false,
     mentionsRuntimeTask: false,
+    mentionsWiki:
+      /\b(wiki|obsidian|backlink|knowledge ?base|index\.md|log\.md|schema\.md|vault)\b/i.test(lowered)
+      || /위키|옵시디언|백링크|지식\s*베이스|볼트/.test(source),
   });
 }
 
@@ -228,6 +241,7 @@ function deriveEvidencePreference({
   hasDirectWorkspaceTargets = false,
 } = {}) {
   if (!hasWorkspacePath) return 'reference';
+  if (focus.mentionsWiki) return 'workspace';
   if (directives.workspace) return 'workspace';
   if (directives.reference) return 'reference';
   if (directives.hybrid) return 'hybrid';
@@ -272,6 +286,9 @@ function deriveInitialToolNames({
   }
   if (focus.mentionsConfig) {
     addTools(names, TOOL_GROUPS.config);
+  }
+  if (focus.mentionsWiki) {
+    addTools(names, TOOL_GROUPS.wiki);
   }
   if (focus.mentionsTodo) {
     addTools(names, TOOL_GROUPS.todo);
@@ -318,6 +335,14 @@ function deriveInitialToolNames({
           ? TOOL_GROUPS.focused_workspace_discovery
           : TOOL_GROUPS.workspace_discovery,
       );
+    }
+  }
+
+  if (focus.mentionsWiki && hasWorkspacePath) {
+    addTools(names, TOOL_GROUPS.workspace_discovery);
+    addTools(names, TOOL_GROUPS.path_read);
+    if (intent.wantsChanges || intent.createLikely) {
+      addTools(names, TOOL_GROUPS.mutation);
     }
   }
 
@@ -403,6 +428,12 @@ function summarizeRequestContext(context = {}) {
     if (intent.wantsChanges || intent.createLikely) {
       lines.push('Reference wiki/docs can orient the search, but code generation still requires declaration or implementation evidence, or grounded workspace inspection.');
     }
+  }
+
+  if (context.focus?.mentionsWiki) {
+    lines.push('Wiki requests should use the backend-managed shared wiki tools, not backend reference evidence.');
+    lines.push('If the shared wiki is missing, initialize it with `wiki_bootstrap` before creating or editing pages.');
+    lines.push('For wiki maintenance, keep `SCHEMA.md`, `index.md`, and `log.md` consistent with shared wiki page updates.');
   }
 
   const initialToolNames = Array.isArray(context.initialToolNames) ? context.initialToolNames : [];
@@ -493,6 +524,7 @@ function buildRequestContext(context = {}) {
       explicitPaths,
       selectedFilePath: normalizedSelectedFilePath,
       intent,
+      focus,
       directives,
       languageProfile,
       evidencePreference,
@@ -529,7 +561,7 @@ function applySemanticAnalysis(context = {}, analysis = {}) {
   const nextFocus = mergeBooleanFlags(
     normalizeFocus(context.focus),
     normalizeFocus(analysis.focus),
-    ['mentionsCompanyReference', 'mentionsConfig', 'mentionsTodo', 'mentionsRuntimeTask'],
+    ['mentionsCompanyReference', 'mentionsConfig', 'mentionsTodo', 'mentionsRuntimeTask', 'mentionsWiki'],
   );
   return buildRequestContext({
     ...context,

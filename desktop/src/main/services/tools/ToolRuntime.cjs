@@ -196,7 +196,7 @@ function collectObservationPaths(observation = {}) {
   if (payload.path) {
     paths.push(payload.path);
   }
-  for (const group of [payload.items, payload.matches, payload.windows, payload.doc_results, payload.doc_chunks, payload.citations]) {
+  for (const group of [payload.items, payload.matches, payload.windows, payload.sources, payload.doc_results, payload.doc_chunks, payload.citations]) {
     for (const item of Array.isArray(group) ? group : []) {
       paths.push(item?.path);
       paths.push(item?.file_path);
@@ -243,6 +243,7 @@ function hasReferenceSearchEvidence(trace = []) {
     return (
       (Array.isArray(observation?.matches) && observation.matches.length > 0)
       || (Array.isArray(observation?.windows) && observation.windows.length > 0)
+      || (Array.isArray(observation?.sources) && observation.sources.length > 0)
       || (Array.isArray(observation?.doc_results) && observation.doc_results.length > 0)
       || (Array.isArray(observation?.doc_chunks) && observation.doc_chunks.length > 0)
       || (Array.isArray(observation?.citations) && observation.citations.length > 0)

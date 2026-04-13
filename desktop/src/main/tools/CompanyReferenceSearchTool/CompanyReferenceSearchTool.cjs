@@ -34,20 +34,6 @@ function parseStartLine(value) {
   return match ? Math.max(1, Number(match[1] || 0)) : 0;
 }
 
-function normalizeReferenceMatch(item) {
-  const lineRange = toStringValue(item?.line_range || item?.lineRange);
-  return {
-    path: normalizeReferencePath(item?.path),
-    lineRange,
-    line: parseStartLine(lineRange),
-    text: toStringValue(item?.match || item?.text),
-    symbol: toStringValue(item?.symbol),
-    matchKind: toStringValue(item?.match_kind || item?.matchKind),
-    evidenceType: toStringValue(item?.evidence_type || item?.evidenceType),
-    source: 'company_reference_search',
-  };
-}
-
 function normalizeReferenceWindow(item) {
   const lineRange = toStringValue(item?.line_range || item?.lineRange);
   return {
@@ -113,18 +99,6 @@ function CompanyReferenceSearchTool() {
       properties: {
         ok: booleanSchema('Whether evidence collection succeeded'),
         query: stringSchema('Original query'),
-        requested_mode: stringSchema('Requested mode'),
-        resolved_mode: stringSchema('Resolved mode'),
-        matches: arraySchema(objectSchema({
-          path: stringSchema('Matched file path'),
-          lineRange: stringSchema('Matched line range'),
-          line: integerSchema('Matched start line', { minimum: 0 }),
-          text: stringSchema('Matched text snippet'),
-          symbol: stringSchema('Matched symbol name'),
-          matchKind: stringSchema('Match kind'),
-          evidenceType: stringSchema('Evidence type such as declaration, implementation, or example'),
-          source: stringSchema('Evidence source'),
-        }), 'Code matches'),
         windows: arraySchema(objectSchema({
           path: stringSchema('Window file path'),
           lineRange: stringSchema('Window line range'),
@@ -135,17 +109,7 @@ function CompanyReferenceSearchTool() {
           matchKind: stringSchema('Window match kind'),
           evidenceType: stringSchema('Window evidence type such as declaration, implementation, or example'),
         }), 'Opened code windows'),
-        doc_results: arraySchema(objectSchema({
-          doc_id: stringSchema('Document id'),
-          chunk_id: stringSchema('Chunk id'),
-          file_path: stringSchema('Document file path'),
-          source_url: stringSchema('Document source URL'),
-          heading_path: stringSchema('Document heading path'),
-          paragraph_range: stringSchema('Document paragraph range'),
-          text: stringSchema('Document excerpt'),
-          truncated: booleanSchema('Whether the excerpt was truncated'),
-        }), 'Doc search results'),
-        doc_chunks: arraySchema(objectSchema({
+        sources: arraySchema(objectSchema({
           doc_id: stringSchema('Document id'),
           chunk_id: stringSchema('Chunk id'),
           file_path: stringSchema('Document file path'),
@@ -153,8 +117,8 @@ function CompanyReferenceSearchTool() {
           heading_path: stringSchema('Document heading path'),
           paragraph_range: stringSchema('Document paragraph range'),
           text: stringSchema('Chunk text'),
-          truncated: booleanSchema('Whether the chunk text was truncated'),
-        }), 'Opened doc chunks'),
+          truncated: booleanSchema('Whether the source text was truncated'),
+        }), 'Source excerpts'),
         error: stringSchema('Error code'),
         message: stringSchema('Human-readable status'),
       },
@@ -165,16 +129,14 @@ function CompanyReferenceSearchTool() {
     isConcurrencySafe: () => true,
     getObservationEvidenceKinds: (observation) => {
       const windows = Array.isArray(observation?.windows) ? observation.windows : [];
-      const docChunks = Array.isArray(observation?.doc_chunks) ? observation.doc_chunks : [];
+      const sources = Array.isArray(observation?.sources) ? observation.sources : [];
       const hasInspection = windows.some((item) => toStringValue(item?.content))
-        || docChunks.some((item) => toStringValue(item?.content));
+        || sources.some((item) => toStringValue(item?.text));
       if (hasInspection) {
         return ['inspection', 'reference'];
       }
-      const matches = Array.isArray(observation?.matches) ? observation.matches : [];
-      const docResults = Array.isArray(observation?.doc_results) ? observation.doc_results : [];
       const citations = Array.isArray(observation?.citations) ? observation.citations : [];
-      if (matches.length > 0 || docResults.length > 0 || citations.length > 0) {
+      if (sources.length > 0 || citations.length > 0) {
         return ['discovery', 'reference'];
       }
       return ['reference'];
@@ -216,37 +178,23 @@ function CompanyReferenceSearchTool() {
           maxChars: clampInt(input.max_chars || input.maxChars, 200, 12000, 12000),
           maxLineSpan: clampInt(input.max_line_span || input.maxLineSpan, 1, 500, 200),
         });
-        const matches = (Array.isArray(result?.evidence?.code?.search?.matches) ? result.evidence.code.search.matches : [])
-          .map((item) => normalizeReferenceMatch(item))
-          .filter((item) => item.path);
-        const windows = (Array.isArray(result?.evidence?.code?.windows) ? result.evidence.code.windows : [])
+        const windows = (Array.isArray(result?.code_windows) ? result.code_windows : [])
           .map((item) => normalizeReferenceWindow(item))
           .filter((item) => item.path);
-        const docResults = (Array.isArray(result?.evidence?.docs?.search?.results) ? result.evidence.docs.search.results : [])
-          .map((item) => normalizeDocEvidenceItem(item));
-        const docChunks = (Array.isArray(result?.evidence?.docs?.chunks) ? result.evidence.docs.chunks : [])
+        const sources = (Array.isArray(result?.sources) ? result.sources : [])
           .map((item) => normalizeDocEvidenceItem(item));
         const citations = (Array.isArray(result?.citations) ? result.citations : [])
           .map((item) => normalizeCitationItem(item));
-        const trace = Array.isArray(result?.trace) ? result.trace.slice(0, 16) : [];
         const messageParts = [];
-        if (matches.length > 0) messageParts.push(`${matches.length} code matches`);
         if (windows.length > 0) messageParts.push(`${windows.length} code windows`);
-        if (docResults.length > 0) messageParts.push(`${docResults.length} doc results`);
-        if (docChunks.length > 0) messageParts.push(`${docChunks.length} doc chunks`);
+        if (sources.length > 0) messageParts.push(`${sources.length} sources`);
 
         return {
           ok: true,
           query: toStringValue(result?.query || query),
-          requested_mode: toStringValue(result?.requested_mode || input.mode || 'code'),
-          resolved_mode: toStringValue(result?.resolved_mode || input.mode || 'code'),
-          matches,
           windows,
-          doc_results: docResults,
-          doc_chunks: docChunks,
+          sources,
           citations,
-          trace,
-          policy: result?.policy && typeof result.policy === 'object' ? result.policy : {},
           message: messageParts.length > 0
             ? `Collected ${messageParts.join(', ')} from backend reference sources.`
             : 'No backend reference evidence matched the query.',

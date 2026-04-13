@@ -28,6 +28,7 @@ from .routers import (
     conversations,
     prompts,
     knowledge,
+    wiki,
     imports,
     health,
     tools,
@@ -168,6 +169,7 @@ app.include_router(search.router, prefix=config.API_PREFIX, tags=["search"])
 app.include_router(conversations.router, prefix=config.API_PREFIX, tags=["conversations"])
 app.include_router(prompts.router, prefix=config.API_PREFIX, tags=["prompts"])
 app.include_router(knowledge.router, prefix=config.API_PREFIX, tags=["knowledge"])
+app.include_router(wiki.router, prefix=config.API_PREFIX, tags=["wiki"])
 app.include_router(imports.router, prefix=config.API_PREFIX, tags=["files"])
 app.include_router(tools.router, prefix=config.API_PREFIX, tags=["tools"])
 

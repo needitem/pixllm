@@ -214,6 +214,22 @@ function authorizeToolUse({
     });
   }
 
+  if (['wiki_search', 'wiki_read'].includes(normalizedTool)) {
+    return permissionAllowed();
+  }
+
+  if (['wiki_bootstrap', 'wiki_write', 'wiki_append_log'].includes(normalizedTool)) {
+    if (intent.wantsChanges || requestContext?.focus?.mentionsWiki || hasContext || hasFailures) {
+      return permissionAllowed();
+    }
+    return permissionDenied({
+      toolName,
+      reason: 'wiki_change_intent_required',
+      message: 'Do not mutate the shared wiki before the user explicitly asks for wiki setup or a wiki change.',
+      suggestedTools: ['wiki_search', 'wiki_read'],
+    });
+  }
+
   if ([
     'todo_read',
     'todo_write',

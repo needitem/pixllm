@@ -221,6 +221,7 @@ export async function streamLocalAgentChat(
     serverApiToken?: string;
     llmBaseUrl?: string;
     llmApiToken?: string;
+    sharedWikiId?: string;
     selectedFilePath?: string;
     sessionId?: string;
     historyMessages?: Array<{ role: string; content: string }>;
