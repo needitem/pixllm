@@ -39,7 +39,7 @@ function uniq(items) {
 }
 
 function stepSucceeded(step) {
-  return Boolean(step?.observation?.ok);
+  return step?.observation?.ok !== false;
 }
 
 function successfulSteps(trace, tool) {
