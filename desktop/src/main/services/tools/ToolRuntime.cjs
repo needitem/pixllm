@@ -15,6 +15,9 @@ const RUNTIME_TASK_READ_TOOL_NAMES = new Set(['terminal_capture', 'task_get', 't
 const META_RECOVERY_TOOL_NAMES = new Set(['ask_user_question', 'tool_search']);
 const MAX_REFERENCE_SEARCH_PASSES_FOR_CHANGE_REQUEST = 3;
 const MAX_REFERENCE_SEARCH_PASSES_FOR_ANSWER_REQUEST = 4;
+const ANSWER_SEARCH_LOOKBACK_TURNS = 3;
+const MIN_ANSWER_SEARCH_TURNS_BEFORE_SATURATION = 4;
+const MIN_ANSWER_SEARCH_STEPS_BEFORE_SATURATION = 6;
 const READ_CONTEXT_TOOL_NAMES = new Set([
   'list_files',
   'glob',
@@ -33,6 +36,14 @@ const READ_CONTEXT_TOOL_NAMES = new Set([
 const WORKSPACE_PROGRESS_TOOL_NAMES = new Set(
   Array.from(READ_CONTEXT_TOOL_NAMES).filter((name) => name !== 'company_reference_search'),
 );
+const WORKSPACE_ANSWER_SATURATION_TOOL_NAMES = new Set(Array.from(READ_CONTEXT_TOOL_NAMES));
+const BROAD_WORKSPACE_DISCOVERY_TOOL_NAMES = new Set([
+  'list_files',
+  'glob',
+  'project_context_search',
+  'find_callers',
+  'find_references',
+]);
 
 function summarizeToolRequests(toolUses, describeTool = null) {
   return (Array.isArray(toolUses) ? toolUses : [])
@@ -160,6 +171,53 @@ function successfulToolCount(trace = [], name = '') {
   )).length;
 }
 
+function normalizeTracePath(value = '') {
+  return toStringValue(value).replace(/\\/g, '/');
+}
+
+function uniquePaths(items = []) {
+  const seen = new Set();
+  const output = [];
+  for (const item of Array.isArray(items) ? items : []) {
+    const normalized = normalizeTracePath(item);
+    if (!normalized) continue;
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    output.push(normalized);
+  }
+  return output;
+}
+
+function collectObservationPaths(observation = {}) {
+  const payload = observation && typeof observation === 'object' ? observation : {};
+  const paths = [];
+  if (payload.path) {
+    paths.push(payload.path);
+  }
+  for (const group of [payload.items, payload.matches, payload.windows, payload.doc_results, payload.doc_chunks, payload.citations]) {
+    for (const item of Array.isArray(group) ? group : []) {
+      paths.push(item?.path);
+      paths.push(item?.file_path);
+    }
+  }
+  return uniquePaths(paths);
+}
+
+function stepTurn(step = {}) {
+  return Math.max(0, Number(step?.round || 0));
+}
+
+function countOccurrences(items = []) {
+  const counts = new Map();
+  for (const item of Array.isArray(items) ? items : []) {
+    const key = normalizeTracePath(item).toLowerCase();
+    if (!key) continue;
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  return counts;
+}
+
 function consecutiveSuccessfulToolCount(trace = [], name = '') {
   const normalized = toStringValue(name);
   if (!normalized) return 0;
@@ -189,6 +247,51 @@ function hasReferenceSearchEvidence(trace = []) {
       || (Array.isArray(observation?.citations) && observation.citations.length > 0)
     );
   });
+}
+
+function getWorkspaceAnswerLoopState({ trace = [], intent = {} } = {}) {
+  const answerOriented = !Boolean(intent?.wantsChanges || intent?.createLikely || intent?.wantsExecution);
+  const successfulReadContextSteps = (Array.isArray(trace) ? trace : [])
+    .filter((step) => READ_CONTEXT_TOOL_NAMES.has(toStringValue(step?.tool)) && step?.observation?.ok !== false);
+  const turns = Array.from(new Set(successfulReadContextSteps.map((step) => stepTurn(step)).filter(Boolean))).sort((a, b) => a - b);
+  const recentTurns = turns.slice(-ANSWER_SEARCH_LOOKBACK_TURNS);
+  const recentTurnSet = new Set(recentTurns);
+  const recentSteps = successfulReadContextSteps.filter((step) => recentTurnSet.has(stepTurn(step)));
+  const earlierSteps = successfulReadContextSteps.filter((step) => !recentTurnSet.has(stepTurn(step)));
+  const earlierPaths = new Set(
+    earlierSteps.flatMap((step) => collectObservationPaths(step?.observation)).map((item) => item.toLowerCase()),
+  );
+  const recentPaths = uniquePaths(recentSteps.flatMap((step) => collectObservationPaths(step?.observation)));
+  const newRecentPaths = recentPaths.filter((item) => !earlierPaths.has(item.toLowerCase()));
+  const repeatedReadTargetCounts = countOccurrences(
+    recentSteps
+      .filter((step) => ['read_file', 'read_symbol_span'].includes(toStringValue(step?.tool)))
+      .map((step) => step?.observation?.path),
+  );
+  const repeatedReadTargets = Array.from(repeatedReadTargetCounts.entries())
+    .filter(([, count]) => count >= 2)
+    .map(([path]) => path);
+  const hasGroundedReadEvidence = traceHasSuccessfulTool(
+    trace,
+    new Set(['read_file', 'read_symbol_span', 'symbol_outline', 'symbol_neighborhood', 'company_reference_search']),
+  );
+  const saturated = answerOriented
+    && hasGroundedReadEvidence
+    && turns.length >= MIN_ANSWER_SEARCH_TURNS_BEFORE_SATURATION
+    && recentSteps.length >= MIN_ANSWER_SEARCH_STEPS_BEFORE_SATURATION
+    && newRecentPaths.length === 0
+    && (repeatedReadTargets.length > 0 || recentPaths.length <= 2);
+
+  return {
+    answerOriented,
+    saturated,
+    recentTurnCount: recentTurns.length,
+    recentStepCount: recentSteps.length,
+    recentTurns,
+    recentPaths,
+    newRecentPaths,
+    repeatedReadTargets,
+  };
 }
 
 function getReferenceSearchLoopState({ trace = [], intent = {} } = {}) {
@@ -242,6 +345,14 @@ function referenceSearchSaturationTransition(loopState = {}) {
   return loopState?.saturationMode === 'change'
     ? 'reference_search_saturated'
     : 'reference_search_answer_saturated';
+}
+
+function workspaceAnswerSaturationMessage(loopState = {}) {
+  const repeatedTargets = Array.isArray(loopState?.repeatedReadTargets) ? loopState.repeatedReadTargets.slice(0, 3) : [];
+  const repeatedText = repeatedTargets.length > 0
+    ? ` Recent reads kept revisiting: ${repeatedTargets.join(', ')}.`
+    : '';
+  return `Recent workspace searches are revisiting the same files without discovering new paths. Stop searching and answer using the evidence already collected.${repeatedText} If a detail remains uncertain, say it is unverified.`;
 }
 
 function buildToolResultStreamPayload({
@@ -364,6 +475,8 @@ class ToolRuntime {
     const hasReadContext = traceHasSuccessfulTool(trace, READ_CONTEXT_TOOL_NAMES);
     const hasMutation = traceHasSuccessfulTool(trace, MUTATION_TOOL_NAMES);
     const referenceLoop = getReferenceSearchLoopState({ trace, intent });
+    const workspaceAnswerLoop = getWorkspaceAnswerLoopState({ trace, intent });
+    const narrowingPreferred = Boolean(this.requestContext?.narrowingPreferred);
 
     if (referenceLoop.saturated) {
       active.delete('company_reference_search');
@@ -389,6 +502,18 @@ class ToolRuntime {
     if (hasFailures) {
       for (const name of META_RECOVERY_TOOL_NAMES) {
         if (available.has(name)) active.add(name);
+      }
+    }
+
+    if (narrowingPreferred && !hasFailures && turn < 3 && !hasReadContext) {
+      for (const name of BROAD_WORKSPACE_DISCOVERY_TOOL_NAMES) {
+        active.delete(name);
+      }
+    }
+
+    if (workspaceAnswerLoop.saturated) {
+      for (const name of WORKSPACE_ANSWER_SATURATION_TOOL_NAMES) {
+        active.delete(name);
       }
     }
 
@@ -500,6 +625,16 @@ class ToolRuntime {
             })
           : false;
       });
+  }
+
+  getWorkspaceAnswerLoopState(trace = this.state?.trace) {
+    const intent = this.requestContext?.intent && typeof this.requestContext.intent === 'object'
+      ? this.requestContext.intent
+      : {};
+    return getWorkspaceAnswerLoopState({
+      trace: Array.isArray(trace) ? trace : [],
+      intent,
+    });
   }
 
   _recordToolExecution({
@@ -774,4 +909,5 @@ module.exports = {
   ToolRuntime,
   LocalAgentRuntime: ToolRuntime,
   getReferenceSearchLoopState,
+  getWorkspaceAnswerLoopState,
 };

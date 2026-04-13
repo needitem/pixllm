@@ -595,6 +595,7 @@ function initialState({ historyMessages = [] } = {}) {
     repeatedToolBatchCount: 0,
     pendingAssistantContinuation: '',
     ungroundedAnswerRetries: 0,
+    workspaceAnswerSaturationNotifiedTurn: 0,
     noProgressTurns: 0,
     lastProgressSignature: '',
     terminalReason: '',
@@ -719,6 +720,7 @@ class QueryEngine {
       repeatedToolBatchCount: Number(restored.repeatedToolBatchCount || 0),
       pendingAssistantContinuation: toStringValue(restored.pendingAssistantContinuation),
       ungroundedAnswerRetries: Number(restored.ungroundedAnswerRetries || 0),
+      workspaceAnswerSaturationNotifiedTurn: Number(restored.workspaceAnswerSaturationNotifiedTurn || 0),
       noProgressTurns: Number(restored.noProgressTurns || 0),
       lastProgressSignature: toStringValue(restored.lastProgressSignature),
       terminalReason: toStringValue(restored.terminalReason),
@@ -754,6 +756,7 @@ class QueryEngine {
       repeatedToolBatchCount: Number(this.state.repeatedToolBatchCount || 0),
       pendingAssistantContinuation: toStringValue(this.state.pendingAssistantContinuation),
       ungroundedAnswerRetries: Number(this.state.ungroundedAnswerRetries || 0),
+      workspaceAnswerSaturationNotifiedTurn: Number(this.state.workspaceAnswerSaturationNotifiedTurn || 0),
       noProgressTurns: Number(this.state.noProgressTurns || 0),
       lastProgressSignature: toStringValue(this.state.lastProgressSignature),
       terminalReason: toStringValue(this.state.terminalReason),
@@ -1516,6 +1519,28 @@ class QueryEngine {
         }
 
         const activeToolNames = this._activeToolNames(turn);
+        const workspaceAnswerLoop = this.runtime.getWorkspaceAnswerLoopState();
+        if (
+          workspaceAnswerLoop?.saturated
+          && Number(this.state.workspaceAnswerSaturationNotifiedTurn || 0) !== turn
+        ) {
+          this.state.workspaceAnswerSaturationNotifiedTurn = turn;
+          this._pushMetaUserMessage(
+            'Recent workspace searches are revisiting the same files without discovering new paths. Stop searching and answer using the evidence already collected. If a detail remains uncertain, say it is unverified.',
+            {
+              turn,
+              hook: 'workspace_search_answer_saturated',
+              recentPaths: Array.isArray(workspaceAnswerLoop?.recentPaths) ? workspaceAnswerLoop.recentPaths.slice(0, 6) : [],
+              repeatedReadTargets: Array.isArray(workspaceAnswerLoop?.repeatedReadTargets) ? workspaceAnswerLoop.repeatedReadTargets.slice(0, 4) : [],
+            },
+          );
+          this._recordTransition('workspace_search_answer_saturated', {
+            turn,
+            recentPaths: Array.isArray(workspaceAnswerLoop?.recentPaths) ? workspaceAnswerLoop.recentPaths.length : 0,
+            repeatedReadTargets: Array.isArray(workspaceAnswerLoop?.repeatedReadTargets) ? workspaceAnswerLoop.repeatedReadTargets.length : 0,
+          });
+          this._persistState();
+        }
         const toolDefinitions = await this._describeTools(activeToolNames);
         const systemPrompt = buildSystemPrompt({
           workspacePath: this.workspacePath,

@@ -25,6 +25,10 @@ const TOOL_GROUPS = {
     'find_callers',
     'find_references',
   ],
+  focused_workspace_discovery: [
+    'grep',
+    'find_symbol',
+  ],
   path_read: [
     'lsp',
     'read_symbol_span',
@@ -243,6 +247,7 @@ function deriveInitialToolNames({
   explicitPaths = [],
   hasWorkspacePath = false,
   evidencePreference = 'workspace',
+  hasFocusedSymbols = false,
 } = {}) {
   const names = new Set();
   addTools(names, TOOL_GROUPS.always);
@@ -275,6 +280,12 @@ function deriveInitialToolNames({
     addTools(names, TOOL_GROUPS.runtime_tasks);
   }
 
+  const prefersFocusedWorkspaceDiscovery = hasWorkspacePath
+    && hasFocusedSymbols
+    && !intent.wantsChanges
+    && !intent.wantsExecution
+    && (!Array.isArray(explicitPaths) || explicitPaths.length === 0);
+
   if (evidencePreference === 'reference') {
     addTools(names, TOOL_GROUPS.reference);
     if (hasWorkspacePath) {
@@ -282,19 +293,31 @@ function deriveInitialToolNames({
     }
     if (intent.compareLikely || intent.wantsChanges) {
       addTools(names, TOOL_GROUPS.workspace_discovery);
+    } else if (prefersFocusedWorkspaceDiscovery) {
+      addTools(names, TOOL_GROUPS.focused_workspace_discovery);
     }
   } else if (evidencePreference === 'hybrid') {
     addTools(names, TOOL_GROUPS.reference);
-    addTools(names, TOOL_GROUPS.workspace_discovery);
     if (hasWorkspacePath) {
       addTools(names, TOOL_GROUPS.path_read);
     }
+    addTools(
+      names,
+      prefersFocusedWorkspaceDiscovery
+        ? TOOL_GROUPS.focused_workspace_discovery
+        : TOOL_GROUPS.workspace_discovery,
+    );
   } else {
     if (hasWorkspacePath) {
       addTools(names, TOOL_GROUPS.path_read);
     }
     if (intent.wantsAnalysis || intent.compareLikely || intent.wantsChanges || intent.wantsExecution) {
-      addTools(names, TOOL_GROUPS.workspace_discovery);
+      addTools(
+        names,
+        prefersFocusedWorkspaceDiscovery
+          ? TOOL_GROUPS.focused_workspace_discovery
+          : TOOL_GROUPS.workspace_discovery,
+      );
     }
   }
 
@@ -403,6 +426,7 @@ function buildRequestContext(context = {}) {
       .map((candidate) => toWorkspaceRelativePath(workspacePath, candidate) || normalizePath(candidate))
       .filter(Boolean),
   );
+  const promptIdentifierHints = extractIdentifierHints(prompt);
   const normalizedSelectedFilePath = toWorkspaceRelativePath(workspacePath, context.selectedFilePath) || normalizePath(context.selectedFilePath);
   const allowedDirectPaths = uniq([
     ...(Array.isArray(context.allowedDirectPaths) ? context.allowedDirectPaths : []),
@@ -426,11 +450,19 @@ function buildRequestContext(context = {}) {
     explicitPaths,
     hasWorkspacePath,
     evidencePreference,
+    hasFocusedSymbols: promptIdentifierHints.length > 0,
   }));
   const prefersReferenceTools = focus.mentionsCompanyReference || evidencePreference !== 'workspace';
+  const narrowingPreferred = Boolean(
+    hasWorkspacePath
+      && promptIdentifierHints.length > 0
+      && !intent.wantsChanges
+      && !intent.wantsExecution
+      && allowedDirectPaths.length === 0,
+  );
   const searchHints = uniqStrings(context.searchHints, 8);
   const symbolHints = uniqStrings([
-    ...extractIdentifierHints(prompt),
+    ...promptIdentifierHints,
     ...(Array.isArray(context.symbolHints) ? context.symbolHints : []),
   ], 6);
   const rewriteNotes = toStringValue(context.rewriteNotes).slice(0, 240);
@@ -448,6 +480,7 @@ function buildRequestContext(context = {}) {
     languageProfile,
     evidencePreference,
     prefersReferenceTools,
+    narrowingPreferred,
     searchHints,
     symbolHints,
     rewriteNotes,
@@ -461,6 +494,7 @@ function buildRequestContext(context = {}) {
       languageProfile,
       evidencePreference,
       prefersReferenceTools,
+      narrowingPreferred,
       searchHints,
       symbolHints,
       rewriteNotes,

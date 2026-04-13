@@ -10,6 +10,7 @@ const PROMPT_SEMANTICS_SYSTEM_PROMPT = [
   'Return JSON only with these fields:',
   '{"intent":{"wants_changes":false,"wants_execution":false,"wants_analysis":false,"create_likely":false,"compare_likely":false},"focus":{"mentions_company_reference":false,"mentions_config":false,"mentions_todo":false,"mentions_runtime_task":false},"search_terms":["short English code-search phrases"],"symbol_hints":["ExactIdentifier"],"notes":"brief optional note","confidence":"low|medium|high"}',
   'Rules:',
+  '- Asking how to use an API, how to load/display a file, usage steps, or "방법/어떻게/알려줘" style guidance counts as wants_analysis=true unless the user explicitly asks you to create or edit code.',
   '- Creating or writing a sample, demo, viewer, program, prototype, or example counts as wants_changes=true and usually create_likely=true.',
   '- Asking to explain, inspect, review, trace, compare, or locate existing code counts as wants_analysis=true.',
   '- Asking to build, run, test, benchmark, execute commands, or debug runtime failures counts as wants_execution=true.',
@@ -84,6 +85,8 @@ function extractIdentifierHints(prompt = '') {
 function fallbackPromptSemantics(prompt = '') {
   const source = toStringValue(prompt);
   const lowered = source.toLowerCase();
+  const asksHowTo = /\b(how|how to|usage|use|guide|steps|show me how|load|display|render|open)\b/i.test(lowered)
+    || /방법|어떻게|알려줘|사용법|로드|불러|열|도시|표시|띄우/i.test(source);
   return sanitizeSemanticPayload({
     intent: {
       wants_changes: /\b(fix|change|edit|modify|refactor|implement|add|improve|update|rewrite|create|write|patch|make|build)\b/i.test(lowered)
@@ -92,9 +95,10 @@ function fallbackPromptSemantics(prompt = '') {
         || /빌드|테스트|실행|검증/i.test(source),
       wants_analysis: /\b(analy(?:s|z)|compare|review|inspect|investigate|trace|understand|audit|explain|summari(?:s|z)e|search|find|locat(?:e|ion)|look up|open|read)\b/i.test(lowered)
         || /\b(flow|implementation|codebase|workspace|symbol|reference)\b/i.test(lowered)
-        || /어디서|어디에|위치|흐름|분석|비교|리뷰|파악|설명|요약|찾|검색|열어|읽/i.test(source),
+        || /어디서|어디에|위치|흐름|분석|비교|리뷰|파악|설명|요약|찾|검색|열어|읽/i.test(source)
+        || asksHowTo,
       create_likely: /\b(create|add|new file|new test|scaffold|generate|sample|demo|prototype|viewer|program|app)\b/i.test(lowered)
-        || /생성|추가|파일|만들|작성|개발|예제|샘플|프로그램|뷰어/i.test(source),
+        || /생성|추가|만들|작성|개발|예제|샘플|프로그램|뷰어/i.test(source),
       compare_likely: /\b(compare|diff|versus|vs)\b/i.test(lowered)
         || /비교|차이/i.test(source),
     },
