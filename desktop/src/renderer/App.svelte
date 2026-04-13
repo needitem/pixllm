@@ -152,7 +152,7 @@
     llmApiToken: '',
     workspacePath: '',
     selectedModel: 'qwen3.5-27b',
-    sharedWikiId: '',
+    sharedWikiId: 'engine',
     recentWorkspaces: []
   };
   let settings: DesktopSettings = { ...DEFAULT_SETTINGS };

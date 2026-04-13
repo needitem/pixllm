@@ -1,18 +1,30 @@
-import json
 import re
-from pathlib import PurePosixPath
-from typing import Any, Dict, Iterable, List, Optional
-from urllib.parse import quote
+import time
+from pathlib import Path, PurePosixPath
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+import yaml
+
+from ... import config
 from ...utils.time import now_iso
 
+_BACKEND_ROOT = Path(__file__).resolve().parents[3]
 
-def _slugify(value: str, fallback: str = "default") -> str:
+
+def _slugify(value: str, fallback: str = "engine") -> str:
     raw = str(value or "").strip().lower()
     if not raw:
         return fallback
     slug = re.sub(r"[^a-z0-9._-]+", "-", raw).strip("._-")
     return slug[:80] or fallback
+
+
+def wiki_parent_root() -> Path:
+    return _BACKEND_ROOT / config.ORCHESTRATION_CONFIG_DIR / "wiki"
+
+
+def wiki_root(wiki_id: str = "engine") -> Path:
+    return wiki_parent_root() / _slugify(wiki_id, "engine")
 
 
 def _normalize_page_path(value: str) -> str:
@@ -25,20 +37,19 @@ def _normalize_page_path(value: str) -> str:
     return normalized
 
 
-def _read_frontmatter(raw_text: str) -> tuple[Dict[str, Any], str]:
+def _read_frontmatter(raw_text: str) -> Tuple[Dict[str, Any], str]:
     text = str(raw_text or "")
     if not text.startswith("---\n"):
         return {}, text
     end = text.find("\n---\n", 4)
     if end < 0:
         return {}, text
-    attributes: Dict[str, Any] = {}
-    for line in text[4:end].splitlines():
-        match = re.match(r"^([A-Za-z0-9_-]+)\s*:\s*(.+?)\s*$", line)
-        if not match:
-            continue
-        attributes[str(match.group(1)).strip()] = str(match.group(2)).strip().strip("\"'")
-    return attributes, text[end + 5 :]
+    try:
+        meta = yaml.safe_load(text[4:end]) or {}
+    except Exception:
+        meta = {}
+    body = text[end + 5 :]
+    return meta if isinstance(meta, dict) else {}, body
 
 
 def _extract_title(path: str, content: str) -> str:
@@ -54,7 +65,10 @@ def _extract_title(path: str, content: str) -> str:
 
 
 def _extract_summary(content: str) -> str:
-    _meta, body = _read_frontmatter(content)
+    meta, body = _read_frontmatter(content)
+    description = str(meta.get("description") or "").strip()
+    if description:
+        return description[:240]
     lines = [line.strip() for line in str(body or "").splitlines() if line.strip()]
     if not lines:
         return ""
@@ -65,7 +79,7 @@ def _infer_kind(path: str) -> str:
     lowered = str(path or "").lower()
     if lowered == "schema.md":
         return "schema"
-    if lowered == "index.md":
+    if lowered == "index.md" or lowered.endswith("method-wiki-index.md"):
         return "index"
     if lowered == "log.md":
         return "log"
@@ -83,6 +97,8 @@ def _infer_kind(path: str) -> str:
         return "raw_inbox"
     if lowered.startswith("raw/processed/"):
         return "raw_processed"
+    if lowered.startswith("methods/"):
+        return "method"
     if lowered.startswith("pages/"):
         return "page"
     return "wiki"
@@ -105,14 +121,15 @@ def _build_excerpt(content: str, query: str, limit: int = 420) -> str:
 def _score_page(page: Dict[str, Any], query: str) -> int:
     needle = str(query or "").strip().lower()
     if not needle:
-        kind = str(page.get("kind") or "")
         priority = {
             "schema": 100,
             "index": 90,
             "log": 80,
             "home": 70,
+            "readme": 60,
+            "method": 20,
         }
-        return priority.get(kind, 10)
+        return priority.get(str(page.get("kind") or ""), 10)
 
     title = str(page.get("title") or "").lower()
     path = str(page.get("path") or "").lower()
@@ -134,53 +151,164 @@ def _score_page(page: Dict[str, Any], query: str) -> int:
     return score
 
 
+def _page_payload(root: Path, file_path: Path) -> Dict[str, Any]:
+    raw_text = file_path.read_text(encoding="utf-8")
+    rel_path = file_path.relative_to(root).as_posix()
+    stat = file_path.stat()
+    return {
+        "wiki_id": root.name,
+        "path": rel_path,
+        "title": _extract_title(rel_path, raw_text),
+        "kind": _infer_kind(rel_path),
+        "content": raw_text,
+        "summary": _extract_summary(raw_text),
+        "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(stat.st_mtime)),
+        "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(stat.st_ctime)),
+        "version": 1,
+    }
+
+
 class WikiService:
-    def __init__(self, redis):
+    def __init__(self, redis=None):
         self.redis = redis
-        self._wiki_index_key = "wiki:index"
 
-    def _meta_key(self, wiki_id: str) -> str:
-        return f"wiki:{wiki_id}:meta"
+    def _root(self, wiki_id: str) -> Path:
+        return wiki_root(wiki_id)
 
-    def _page_index_key(self, wiki_id: str) -> str:
-        return f"wiki:{wiki_id}:page_index"
+    def _page_file(self, wiki_id: str, page_path: str) -> Path:
+        root = self._root(wiki_id)
+        normalized = _normalize_page_path(page_path)
+        target = (root / normalized).resolve()
+        if root.resolve() not in target.parents and target != root.resolve():
+            raise ValueError("page path must stay inside the wiki root")
+        return target
 
-    def _page_key(self, wiki_id: str, page_path: str) -> str:
-        return f"wiki:{wiki_id}:page:{quote(page_path, safe='')}"
-
-    async def _load_meta(self, wiki_id: str) -> Optional[Dict[str, Any]]:
-        raw = await self.redis.get(self._meta_key(wiki_id))
-        return json.loads(raw) if raw else None
-
-    async def _save_meta(self, wiki_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-        await self.redis.set(self._meta_key(wiki_id), json.dumps(payload))
-        await self.redis.sadd(self._wiki_index_key, wiki_id)
-        return payload
+    def _meta(self, wiki_id: str) -> Dict[str, Any]:
+        normalized_wiki_id = _slugify(wiki_id, "engine")
+        root = self._root(normalized_wiki_id)
+        pages = list(root.rglob("*.md")) if root.exists() else []
+        updated_at = None
+        if pages:
+            updated_at = time.strftime(
+                "%Y-%m-%dT%H:%M:%SZ",
+                time.gmtime(max(item.stat().st_mtime for item in pages)),
+            )
+        description = ""
+        readme = root / "README.md"
+        if readme.exists():
+            description = _extract_summary(readme.read_text(encoding="utf-8"))
+        return {
+            "id": normalized_wiki_id,
+            "name": normalized_wiki_id,
+            "description": description,
+            "root_path": root.relative_to(_BACKEND_ROOT).as_posix() if root.exists() else root.relative_to(_BACKEND_ROOT).as_posix(),
+            "page_count": len(pages),
+            "updated_at": updated_at or now_iso(),
+        }
 
     async def list_wikis(self) -> List[Dict[str, Any]]:
+        parent = wiki_parent_root()
+        if not parent.exists():
+            return []
         items = []
-        wiki_ids = sorted(list(await self.redis.smembers(self._wiki_index_key)))
-        for wiki_id in wiki_ids:
-            meta = await self._load_meta(wiki_id)
-            if meta:
-                items.append(meta)
+        for child in sorted(parent.iterdir()):
+            if not child.is_dir():
+                continue
+            if not list(child.rglob("*.md")):
+                continue
+            items.append(self._meta(child.name))
         return items
 
     async def list_pages(self, wiki_id: str) -> List[Dict[str, Any]]:
-        normalized_wiki_id = _slugify(wiki_id)
-        page_paths = sorted(list(await self.redis.smembers(self._page_index_key(normalized_wiki_id))))
-        pages: List[Dict[str, Any]] = []
-        for page_path in page_paths:
-            page = await self.get_page(normalized_wiki_id, page_path)
-            if page:
-                pages.append(page)
-        return pages
+        root = self._root(wiki_id)
+        if not root.exists():
+            return []
+        return [_page_payload(root, file_path) for file_path in sorted(root.rglob("*.md"))]
 
     async def get_page(self, wiki_id: str, page_path: str) -> Optional[Dict[str, Any]]:
-        normalized_wiki_id = _slugify(wiki_id)
-        normalized_path = _normalize_page_path(page_path)
-        raw = await self.redis.get(self._page_key(normalized_wiki_id, normalized_path))
-        return json.loads(raw) if raw else None
+        file_path = self._page_file(wiki_id, page_path)
+        root = self._root(wiki_id)
+        if not file_path.exists() or not file_path.is_file():
+            return None
+        return _page_payload(root, file_path)
+
+    def _bootstrap_templates(self, wiki_id: str) -> List[Dict[str, str]]:
+        today = now_iso()[:10]
+        return [
+            {
+                "path": "README.md",
+                "kind": "readme",
+                "content": "\n".join([
+                    "# Engine Shared Wiki",
+                    "",
+                    f"This shared wiki uses the existing engine reference wiki at `{wiki_id}` as its source of truth.",
+                    "",
+                    "- `SCHEMA.md` defines shared editing rules.",
+                    "- `index.md` is the human-oriented navigation page.",
+                    "- `01-method-wiki-index.md` is the generated method reference index.",
+                    "- `log.md` records ingest, query-derived synthesis, and lint passes.",
+                    "- `methods/` contains generated method reference pages.",
+                ]),
+            },
+            {
+                "path": "SCHEMA.md",
+                "kind": "schema",
+                "content": "\n".join([
+                    "# Engine Wiki Schema",
+                    "",
+                    "- This shared wiki is the same backend engine reference wiki used by `company_reference_search`.",
+                    "- Generated method reference pages live under `methods/`.",
+                    "- Human-curated overview, synthesis, and workflow pages may live at the wiki root or under `pages/`.",
+                    "",
+                    "## Editing Rules",
+                    "",
+                    "- Do not hand-edit generated `methods/*.md` pages unless you are intentionally overriding the generator.",
+                    "- Prefer adding curated context in `pages/` and linking to generated reference pages.",
+                    "- Update `index.md` and `log.md` after substantive shared wiki edits.",
+                    "- Keep relative markdown links stable.",
+                ]),
+            },
+            {
+                "path": "index.md",
+                "kind": "index",
+                "content": "\n".join([
+                    "# Engine Wiki Index",
+                    "",
+                    "- [SCHEMA.md](SCHEMA.md)",
+                    "- [log.md](log.md)",
+                    "- [01-method-wiki-index.md](01-method-wiki-index.md)",
+                    "",
+                    "## Curated Pages",
+                    "",
+                    "- Add human-oriented overview, topic, and workflow pages here.",
+                    "",
+                    "## Generated Reference",
+                    "",
+                    "- [01-method-wiki-index.md](01-method-wiki-index.md) - generated method reference catalog",
+                    "- [methods/](methods/) - generated method pages",
+                ]),
+            },
+            {
+                "path": "log.md",
+                "kind": "log",
+                "content": "\n".join([
+                    "# Engine Wiki Log",
+                    "",
+                    f"## [{today}] bootstrap | Enable shared editing on engine wiki",
+                    "",
+                    "- Added shared coordination files on top of the engine reference wiki.",
+                ]),
+            },
+            {
+                "path": "pages/home.md",
+                "kind": "home",
+                "content": "\n".join([
+                    "# Engine Wiki Home",
+                    "",
+                    "Use this page for curated overview, navigation, and shared context on top of the generated engine method reference.",
+                ]),
+            },
+        ]
 
     async def upsert_page(
         self,
@@ -192,163 +320,12 @@ class WikiService:
         kind: Optional[str] = None,
         user_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        normalized_wiki_id = _slugify(wiki_id)
-        normalized_path = _normalize_page_path(page_path)
-        now = now_iso()
-        previous = await self.get_page(normalized_wiki_id, normalized_path)
-        payload = {
-            "wiki_id": normalized_wiki_id,
-            "path": normalized_path,
-            "title": str(title or _extract_title(normalized_path, content)).strip() or PurePosixPath(normalized_path).stem,
-            "kind": str(kind or _infer_kind(normalized_path)).strip() or _infer_kind(normalized_path),
-            "content": str(content or ""),
-            "summary": _extract_summary(content),
-            "updated_at": now,
-            "updated_by": str(user_id or "").strip() or None,
-            "created_at": str(previous.get("created_at") or now) if previous else now,
-            "version": int(previous.get("version") or 0) + 1 if previous else 1,
-        }
-        await self.redis.set(self._page_key(normalized_wiki_id, normalized_path), json.dumps(payload))
-        await self.redis.sadd(self._page_index_key(normalized_wiki_id), normalized_path)
-
-        meta = await self._load_meta(normalized_wiki_id) or {
-            "id": normalized_wiki_id,
-            "name": normalized_wiki_id,
-            "description": "",
-            "created_at": now,
-            "updated_at": now,
-            "page_count": 0,
-        }
-        meta["updated_at"] = now
-        meta["page_count"] = len(await self.redis.smembers(self._page_index_key(normalized_wiki_id)))
-        await self._save_meta(normalized_wiki_id, meta)
-        return payload
-
-    def _bootstrap_templates(self, wiki_id: str, name: str = "", description: str = "") -> List[Dict[str, str]]:
-        title = name or wiki_id
-        overview = description or "Shared backend-managed workspace wiki."
-        today = now_iso()[:10]
-        return [
-            {
-                "path": "README.md",
-                "kind": "readme",
-                "content": "\n".join([
-                    "# Shared Workspace Wiki",
-                    "",
-                    f"This backend-managed wiki is shared by clients connected to `{wiki_id}`.",
-                    "",
-                    "- `SCHEMA.md` defines the operating contract.",
-                    "- `index.md` is the main navigation page.",
-                    "- `log.md` records ingest, query-derived synthesis, and lint passes.",
-                    "- `pages/` stores durable synthesized knowledge.",
-                    "- `raw/` stores normalized source notes.",
-                ]),
-            },
-            {
-                "path": "SCHEMA.md",
-                "kind": "schema",
-                "content": "\n".join([
-                    "# Shared Wiki Schema",
-                    "",
-                    f"- Wiki: `{title}`",
-                    f"- Description: {overview}",
-                    "",
-                    "## Core Files",
-                    "",
-                    "- `index.md`: top-level catalog of important pages",
-                    "- `log.md`: append-only operations log",
-                    "- `pages/home.md`: high-level overview",
-                    "",
-                    "## Directory Contract",
-                    "",
-                    "- `raw/inbox/`: new source notes",
-                    "- `raw/processed/`: already-ingested sources",
-                    "- `pages/topics/`: topic syntheses",
-                    "- `pages/entities/`: people, teams, systems, components",
-                    "- `pages/decisions/`: decisions and tradeoffs",
-                    "",
-                    "## Agent Rules",
-                    "",
-                    "- Prefer updating an existing page before creating a near-duplicate.",
-                    "- Keep markdown links relative.",
-                    "- After substantive page edits, update `index.md` and append a matching entry to `log.md`.",
-                    "- Use source notes as evidence and durable pages as synthesis.",
-                ]),
-            },
-            {
-                "path": "index.md",
-                "kind": "index",
-                "content": "\n".join([
-                    "# Shared Wiki Index",
-                    "",
-                    "- [SCHEMA.md](SCHEMA.md)",
-                    "- [log.md](log.md)",
-                    "- [pages/home.md](pages/home.md)",
-                    "- [raw/inbox/README.md](raw/inbox/README.md)",
-                    "- [raw/processed/README.md](raw/processed/README.md)",
-                    "",
-                    "## Pages",
-                    "",
-                    "- [pages/home.md](pages/home.md) - workspace wiki overview",
-                ]),
-            },
-            {
-                "path": "log.md",
-                "kind": "log",
-                "content": "\n".join([
-                    "# Shared Wiki Log",
-                    "",
-                    f"## [{today}] bootstrap | Initialize shared wiki",
-                    "",
-                    "- Created the backend-managed shared wiki scaffold.",
-                ]),
-            },
-            {
-                "path": "pages/home.md",
-                "kind": "home",
-                "content": "\n".join([
-                    "---",
-                    f"title: {title} Home",
-                    f"description: {overview}",
-                    "---",
-                    "",
-                    "# Home",
-                    "",
-                    "Use this page as the durable entry point for shared knowledge.",
-                    "",
-                    "Suggested contents:",
-                    "- current project scope",
-                    "- architecture map",
-                    "- important systems and teams",
-                    "- links to topic, entity, and decision pages",
-                ]),
-            },
-            {
-                "path": "pages/topics/README.md",
-                "kind": "topic",
-                "content": "# Topic Pages\n\nStore durable topic syntheses here.\n",
-            },
-            {
-                "path": "pages/entities/README.md",
-                "kind": "entity",
-                "content": "# Entity Pages\n\nStore people, teams, services, and subsystems here.\n",
-            },
-            {
-                "path": "pages/decisions/README.md",
-                "kind": "decision",
-                "content": "# Decision Pages\n\nCapture design and operational decisions here.\n",
-            },
-            {
-                "path": "raw/inbox/README.md",
-                "kind": "raw_inbox",
-                "content": "# Raw Source Inbox\n\nAdd normalized source notes here before ingestion.\n",
-            },
-            {
-                "path": "raw/processed/README.md",
-                "kind": "raw_processed",
-                "content": "# Processed Sources\n\nMove or copy ingested source notes here.\n",
-            },
-        ]
+        del title, kind, user_id
+        file_path = self._page_file(wiki_id, page_path)
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_text(str(content or ""), encoding="utf-8")
+        root = self._root(wiki_id)
+        return _page_payload(root, file_path)
 
     async def bootstrap_wiki(
         self,
@@ -359,50 +336,26 @@ class WikiService:
         overwrite: bool = False,
         user_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        normalized_wiki_id = _slugify(wiki_id)
-        now = now_iso()
-        meta = await self._load_meta(normalized_wiki_id)
-        if not meta:
-            meta = {
-                "id": normalized_wiki_id,
-                "name": str(name or normalized_wiki_id).strip() or normalized_wiki_id,
-                "description": str(description or "").strip(),
-                "created_at": now,
-                "updated_at": now,
-                "page_count": 0,
-            }
-        else:
-            if name:
-                meta["name"] = str(name).strip() or meta.get("name") or normalized_wiki_id
-            if description is not None:
-                meta["description"] = str(description).strip()
-            meta["updated_at"] = now
-
-        created_paths = []
-        updated_paths = []
-        skipped_paths = []
-        for template in self._bootstrap_templates(normalized_wiki_id, meta.get("name"), meta.get("description")):
-            existing = await self.get_page(normalized_wiki_id, template["path"])
-            if existing and not overwrite:
+        del name, description, user_id
+        root = self._root(wiki_id)
+        root.mkdir(parents=True, exist_ok=True)
+        created_paths: List[str] = []
+        updated_paths: List[str] = []
+        skipped_paths: List[str] = []
+        for template in self._bootstrap_templates(_slugify(wiki_id, "engine")):
+            file_path = self._page_file(wiki_id, template["path"])
+            if file_path.exists() and not overwrite:
                 skipped_paths.append(template["path"])
                 continue
-            await self.upsert_page(
-                normalized_wiki_id,
-                template["path"],
-                template["content"],
-                title=None,
-                kind=template["kind"],
-                user_id=user_id,
-            )
-            if existing:
+            existed = file_path.exists()
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+            file_path.write_text(template["content"], encoding="utf-8")
+            if existed:
                 updated_paths.append(template["path"])
             else:
                 created_paths.append(template["path"])
-
-        meta["page_count"] = len(await self.redis.smembers(self._page_index_key(normalized_wiki_id)))
-        await self._save_meta(normalized_wiki_id, meta)
         return {
-            "wiki": meta,
+            "wiki": self._meta(wiki_id),
             "created_paths": created_paths,
             "updated_paths": updated_paths,
             "skipped_paths": skipped_paths,
@@ -417,8 +370,9 @@ class WikiService:
         kind: str = "update",
         user_id: Optional[str] = None,
     ) -> Dict[str, Any]:
+        del user_id
         page = await self.get_page(wiki_id, "log.md")
-        content = str(page.get("content") or "# Shared Wiki Log\n") if page else "# Shared Wiki Log\n"
+        content = str(page.get("content") or "# Engine Wiki Log\n") if page else "# Engine Wiki Log\n"
         date = now_iso()[:10]
         lines = [f"## [{date}] {str(kind or 'update').strip()} | {str(title or 'Log entry').strip()}", ""]
         for body_line in body_lines:
@@ -429,22 +383,24 @@ class WikiService:
             lines.append("- Updated shared wiki content.")
         lines.append("")
         next_content = f"{content.rstrip()}\n\n" + "\n".join(lines)
-        return await self.upsert_page(wiki_id, "log.md", next_content, kind="log", user_id=user_id)
+        return await self.upsert_page(wiki_id, "log.md", next_content)
 
     async def get_context(self, wiki_id: str) -> Dict[str, Any]:
-        normalized_wiki_id = _slugify(wiki_id)
-        meta = await self._load_meta(normalized_wiki_id)
-        if not meta:
-            return {
-                "wiki": None,
-                "pages": [],
-                "coordination_pages": [],
-            }
-        pages = await self.list_pages(normalized_wiki_id)
-        coordination_paths = ["SCHEMA.md", "index.md", "log.md", "pages/home.md", "README.md"]
+        root = self._root(wiki_id)
+        if not root.exists():
+            return {"wiki": None, "pages": [], "coordination_pages": []}
+        pages = await self.list_pages(wiki_id)
+        coordination_paths = {
+            "README.md",
+            "SCHEMA.md",
+            "index.md",
+            "log.md",
+            "pages/home.md",
+            "01-method-wiki-index.md",
+        }
         coordination_pages = [page for page in pages if page.get("path") in coordination_paths]
         return {
-            "wiki": meta,
+            "wiki": self._meta(wiki_id),
             "pages": pages,
             "coordination_pages": coordination_pages,
         }
@@ -458,8 +414,7 @@ class WikiService:
         include_content: bool = False,
         kind: Optional[str] = None,
     ) -> Dict[str, Any]:
-        normalized_wiki_id = _slugify(wiki_id)
-        pages = await self.list_pages(normalized_wiki_id)
+        pages = await self.list_pages(wiki_id)
         filtered = [page for page in pages if not kind or str(page.get("kind") or "") == str(kind)]
         scored = []
         for page in filtered:
@@ -486,7 +441,7 @@ class WikiService:
             results.append(item)
 
         return {
-            "wiki_id": normalized_wiki_id,
+            "wiki_id": _slugify(wiki_id, "engine"),
             "query": str(query or "").strip(),
             "total": len(scored),
             "results": results,

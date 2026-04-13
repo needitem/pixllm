@@ -431,9 +431,9 @@ function summarizeRequestContext(context = {}) {
   }
 
   if (context.focus?.mentionsWiki) {
-    lines.push('Wiki requests should use the backend-managed shared wiki tools, not backend reference evidence.');
-    lines.push('If the shared wiki is missing, initialize it with `wiki_bootstrap` before creating or editing pages.');
-    lines.push('For wiki maintenance, keep `SCHEMA.md`, `index.md`, and `log.md` consistent with shared wiki page updates.');
+    lines.push('Wiki requests should use the backend engine wiki tools; this is the same wiki family used by company_reference_search.');
+    lines.push('If the engine wiki is missing shared coordination files, initialize them with `wiki_bootstrap` before creating or editing pages.');
+    lines.push('For engine wiki maintenance, keep `SCHEMA.md`, `index.md`, and `log.md` consistent with page updates.');
   }
 
   const initialToolNames = Array.isArray(context.initialToolNames) ? context.initialToolNames : [];

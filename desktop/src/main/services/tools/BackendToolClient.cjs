@@ -43,8 +43,8 @@ function deriveWikiId({ wikiId = '', workspacePath = '' } = {}) {
   const explicit = normalizeWikiId(wikiId);
   if (explicit) return explicit;
   const normalizedPath = toStringValue(workspacePath).replace(/\\/g, '/').replace(/\/+$/, '');
-  const tail = normalizedPath.split('/').filter(Boolean).pop() || 'shared';
-  return normalizeWikiId(tail) || 'shared';
+  const tail = normalizedPath.split('/').filter(Boolean).pop() || 'engine';
+  return normalizeWikiId(tail) || 'engine';
 }
 
 async function lookupBackendReferenceContext({

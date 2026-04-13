@@ -61,12 +61,12 @@ function WikiBootstrapTool() {
       description: stringSchema('Optional shared wiki description'),
       overwrite: booleanSchema('Overwrite existing coordination pages'),
     }),
-    searchHint: 'initialize a backend-managed shared wiki for multiple users',
+    searchHint: 'initialize shared coordination files on top of the backend engine wiki for multiple users',
     laneAffinity: ['change', 'review'],
     isReadOnly: () => false,
     isConcurrencySafe: () => false,
     async description() {
-      return 'Create the shared backend wiki scaffold with schema, index, log, pages, and raw source folders.';
+      return 'Create shared coordination files on top of the backend engine wiki used by company_reference_search.';
     },
     async call(input, context) {
       const backend = backendWikiContext(context);
@@ -91,7 +91,7 @@ function WikiBootstrapTool() {
         created_paths: Array.isArray(result?.created_paths) ? result.created_paths : [],
         updated_paths: Array.isArray(result?.updated_paths) ? result.updated_paths : [],
         skipped_paths: Array.isArray(result?.skipped_paths) ? result.skipped_paths : [],
-        message: `Shared wiki ${resolvedWikiId} is ready on the backend.`,
+        message: `Engine wiki ${resolvedWikiId} is ready for shared editing on the backend.`,
       };
     },
   });
@@ -109,13 +109,13 @@ function WikiSearchTool() {
       include_content: booleanSchema('Include full content in results'),
       kind: stringSchema('Optional page kind filter'),
     }),
-    searchHint: 'search the backend-managed shared wiki',
+    searchHint: 'search the backend-managed engine wiki shared across users',
     laneAffinity: ['read', 'review', 'flow'],
     isReadOnly: () => true,
     isConcurrencySafe: () => true,
     getObservationEvidenceKinds: () => ['discovery'],
     async description() {
-      return 'Search the shared backend wiki by title, path, summary, or content.';
+      return 'Search the shared backend engine wiki by title, path, summary, or content.';
     },
     async call(input, context) {
       const backend = backendWikiContext(context);
@@ -168,13 +168,13 @@ function WikiReadTool() {
       wiki_id: stringSchema('Optional shared wiki id override'),
       path: stringSchema('Wiki page path such as SCHEMA.md or pages/home.md'),
     }, ['path']),
-    searchHint: 'read one markdown page from the shared backend wiki',
+    searchHint: 'read one markdown page from the shared backend engine wiki',
     laneAffinity: ['read', 'review', 'flow'],
     isReadOnly: () => true,
     isConcurrencySafe: () => true,
     getObservationEvidenceKinds: () => ['inspection'],
     async description() {
-      return 'Read a single markdown page from the shared backend wiki.';
+      return 'Read a single markdown page from the shared backend engine wiki.';
     },
     async call(input, context) {
       const backend = backendWikiContext(context);
@@ -212,12 +212,12 @@ function WikiWriteTool() {
       title: stringSchema('Optional explicit title'),
       kind: stringSchema('Optional page kind'),
     }, ['path', 'content']),
-    searchHint: 'create or update a markdown page in the shared backend wiki',
+    searchHint: 'create or update a markdown page in the shared backend engine wiki',
     laneAffinity: ['change', 'review'],
     isReadOnly: () => false,
     isConcurrencySafe: () => false,
     async description() {
-      return 'Write or replace a markdown page in the shared backend wiki.';
+      return 'Write or replace a markdown page in the shared backend engine wiki.';
     },
     async call(input, context) {
       const backend = backendWikiContext(context);
@@ -257,12 +257,12 @@ function WikiAppendLogTool() {
       kind: stringSchema('Log entry kind such as ingest, query, lint, or update'),
       body_lines: arraySchema(stringSchema('Log bullet line'), 'Log bullet lines'),
     }, ['title']),
-    searchHint: 'append an operation entry to the shared backend wiki log',
+    searchHint: 'append an operation entry to the shared backend engine wiki log',
     laneAffinity: ['change', 'review'],
     isReadOnly: () => false,
     isConcurrencySafe: () => false,
     async description() {
-      return 'Append a structured entry to log.md in the shared backend wiki.';
+      return 'Append a structured entry to log.md in the shared backend engine wiki.';
     },
     async call(input, context) {
       const backend = backendWikiContext(context);

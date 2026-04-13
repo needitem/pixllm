@@ -18,7 +18,7 @@ function defaultSettings() {
     llmApiToken: process.env.PIXLLM_LLM_API_TOKEN || '',
     workspacePath: '',
     selectedModel: 'qwen3.5-27b',
-    sharedWikiId: '',
+    sharedWikiId: 'engine',
     recentWorkspaces: []
   };
 }
