@@ -1,4 +1,5 @@
 import time
+import re
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -9,6 +10,9 @@ from .query_terms import extract_query_compacts, extract_query_terms, extract_sy
 from .support import clamp_int
 
 _BACKEND_ROOT = Path(__file__).resolve().parents[3]
+_WORKFLOW_QUERY_RE = re.compile(r"(workflow|program|example|steps|guide|how to|load|display|show|render|host|만들|프로그램|예제|단계|도시|표시|로드)", re.IGNORECASE)
+_WORKFLOW_SECTION_RE = re.compile(r"(workflow|steps|program|example|guide|recipe|usage|flow|minimal)", re.IGNORECASE)
+_METHODS_TITLE_RE = re.compile(r"\bmethods?\b", re.IGNORECASE)
 
 def wiki_root() -> Path:
     return _BACKEND_ROOT / config.ORCHESTRATION_CONFIG_DIR / "wiki" / "engine"
@@ -83,6 +87,11 @@ def _score_page(
     title_text = title.lower()
     heading_text = heading.lower()
     body_text = text.lower()
+    task_query = bool(_WORKFLOW_QUERY_RE.search(query or ""))
+    workflowish_title = bool(_WORKFLOW_SECTION_RE.search(title))
+    workflowish_heading = bool(_WORKFLOW_SECTION_RE.search(heading))
+    workflowish_tags = any(bool(_WORKFLOW_SECTION_RE.search(str(tag or ""))) for tag in tags)
+    contains_source_anchor = "source/" in body_text
 
     for compact in query_compacts:
         if compact in title_compacts:
@@ -113,6 +122,18 @@ def _score_page(
             score += 6
         if term in body_text:
             score += 2
+
+    if task_query:
+        if workflowish_title:
+            score += 32
+        if workflowish_heading:
+            score += 24
+        if workflowish_tags:
+            score += 18
+        if contains_source_anchor:
+            score += 8
+        if _METHODS_TITLE_RE.search(title or "") and not workflowish_heading:
+            score -= 8
 
     if "verified api facts" in heading_text:
         score += 10

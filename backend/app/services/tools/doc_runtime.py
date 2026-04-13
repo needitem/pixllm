@@ -179,8 +179,6 @@ def extract_wiki_source_anchors(doc_chunks: Sequence[Dict[str, Any]]) -> List[Di
     anchors: List[Dict[str, Any]] = []
     seen = set()
     for chunk in doc_chunks or []:
-        if str(chunk.get("source_url") or "").strip() and not str(chunk.get("source_url") or "").strip().startswith("methods/"):
-            continue
         text = str(chunk.get("text") or "")
         if not text:
             continue
