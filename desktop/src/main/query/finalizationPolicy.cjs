@@ -1,3 +1,5 @@
+const { summarizeCompanyReferenceEvidence } = require('./referenceEvidence.cjs');
+
 function toStringValue(value) {
   return String(value || '').trim();
 }
@@ -133,18 +135,25 @@ function answerAcknowledgesMissingVerification(answer = '') {
   ].some((pattern) => pattern.test(source));
 }
 
-function requestNeedsReferenceEvidence(requestContext = {}) {
-  return Boolean(
-    requestContext?.prefersReferenceTools
-    || ['reference', 'hybrid'].includes(toStringValue(requestContext?.evidencePreference).toLowerCase()),
-  );
-}
-
 function requestNeedsGroundedChangeEvidence(requestContext = {}) {
   const intent = requestContext?.intent && typeof requestContext.intent === 'object'
     ? requestContext.intent
     : {};
-  return Boolean(intent.wantsChanges);
+  return Boolean(
+    intent.wantsChanges
+    || intent.createLikely
+    || requestContext?.artifactPlan?.requiresWorkspaceArtifact,
+  );
+}
+
+function requestRequiresWorkspaceMutation(requestContext = {}) {
+  const intent = requestContext?.intent && typeof requestContext.intent === 'object'
+    ? requestContext.intent
+    : {};
+  return Boolean(
+    intent.createLikely
+    || requestContext?.artifactPlan?.requiresWorkspaceArtifact,
+  );
 }
 
 function evaluateFinalAnswerPolicy({
@@ -155,23 +164,54 @@ function evaluateFinalAnswerPolicy({
   turn = 0,
 } = {}) {
   const summary = summarizeTraceEvidence({ trace, describeTool });
+  const referenceEvidence = summarizeCompanyReferenceEvidence(trace);
   const acknowledgesMissingVerification = answerAcknowledgesMissingVerification(finalAnswer);
-  const hasGroundedChangeEvidence =
+  const hasWorkspaceGrounding =
     summary.hasDiscoveryEvidence
     || summary.hasInspectionEvidence
-    || summary.hasReferenceEvidence
     || summary.hasMutationEvidence;
+  const hasGroundedChangeEvidence =
+    hasWorkspaceGrounding
+    || referenceEvidence.hasVerifiedCodeEvidence;
   const usedTools = Array.isArray(trace) && trace.length > 0;
 
-  if (requestNeedsReferenceEvidence(requestContext) && !summary.hasReferenceEvidence && !acknowledgesMissingVerification) {
+  if (
+    requestNeedsGroundedChangeEvidence(requestContext)
+    && usedTools
+    && referenceEvidence.hasDocsOnlyEvidence
+    && !hasWorkspaceGrounding
+    && !referenceEvidence.hasVerifiedCodeEvidence
+    && !acknowledgesMissingVerification
+  ) {
     return {
       ok: false,
-      reason: 'reference_evidence_required',
-      blockingMessage: 'Do not finalize reference-dependent claims without successful reference evidence. Re-run the reference lookup or state that the detail could not be verified.',
+      reason: 'reference_code_grounding_required',
+      blockingMessage: 'Do not finalize a technical implementation answer from docs/wiki-only reference evidence. Inspect workspace source or gather verified declaration/implementation evidence first.',
       details: {
         turn,
         finalAnswerPreview: toStringValue(finalAnswer).slice(0, 240),
         acknowledgesMissingVerification,
+        referenceEvidence,
+        ...summary,
+      },
+    };
+  }
+
+  if (
+    requestRequiresWorkspaceMutation(requestContext)
+    && usedTools
+    && !summary.hasMutationEvidence
+    && !acknowledgesMissingVerification
+  ) {
+    return {
+      ok: false,
+      reason: 'workspace_mutation_required',
+      blockingMessage: 'Do not finalize a create request without producing a grounded workspace file change in this run. Update an existing file, create the requested file, or state the concrete blocker.',
+      details: {
+        turn,
+        finalAnswerPreview: toStringValue(finalAnswer).slice(0, 240),
+        acknowledgesMissingVerification,
+        referenceEvidence,
         ...summary,
       },
     };
@@ -186,6 +226,7 @@ function evaluateFinalAnswerPolicy({
         turn,
         finalAnswerPreview: toStringValue(finalAnswer).slice(0, 240),
         acknowledgesMissingVerification,
+        referenceEvidence,
         ...summary,
       },
     };
@@ -198,6 +239,7 @@ function evaluateFinalAnswerPolicy({
       turn,
       finalAnswerPreview: toStringValue(finalAnswer).slice(0, 240),
       acknowledgesMissingVerification,
+      referenceEvidence,
       ...summary,
     },
   };

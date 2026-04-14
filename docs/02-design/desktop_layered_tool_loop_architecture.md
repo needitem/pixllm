@@ -10,7 +10,6 @@
 
 - `QueryEngine`이 모델 turn loop를 관리한다.
 - `processUserInput`이 pre-loop에서 request context를 만든다.
-- `QwenQueryRewrite`가 한국어 또는 mixed prompt를 검색 힌트로 재작성한다.
 - `QwenAdapter`가 Qwen textual tool-call 출력과 reasoning 출력을 block transcript로 변환한다.
 - `ToolRuntime`이 active tools, permission, grounding, tool batch execution을 관리한다.
 - `StreamingToolExecutor`가 스트리밍 중 parse 가능한 tool call의 선실행과 drain/recovery를 담당한다.
@@ -24,7 +23,7 @@
 |---|---|---|
 | L0 | Desktop Event Surface | renderer와 main 사이의 요청/이벤트 전달 |
 | L1 | Pre-loop Context | intent, directives, explicit path, evidence mode, language profile, initial tool scope 계산 |
-| L2 | Rewrite and Prompt Adaptation | Qwen search hint rewrite, system prompt/tool catalog 생성 |
+| L2 | Prompt Adaptation | language-aware request shaping, system prompt/tool catalog 생성 |
 | L3 | Query Loop | model call, parse, retry, compaction, continuation, grounding retry |
 | L4 | Streaming Tool Prefetch | tool delta sync, parseable tool call 선실행, claim/drain |
 | L5 | Permission and Grounding | deny-by-default gate, read-before-edit, backend-reference 분리 |
@@ -36,8 +35,7 @@
 ```mermaid
 flowchart TD
     A["User request"] --> B["processUserInput"]
-    B --> C["QwenQueryRewrite (optional)"]
-    C --> D["QueryEngine model call"]
+    B --> D["QueryEngine model call"]
     D --> E["QwenAdapter parse"]
     E -->|text only| F["nextSpeaker / grounding check"]
     E -->|tool calls| G["StreamingToolExecutor sync"]
@@ -57,15 +55,10 @@ flowchart TD
 - allowed direct paths
 - evidence preference: `workspace`, `reference`, `hybrid`
 - `languageProfile`
+- `symbolHints`
 - initial tool names
 
-추가로 한국어 또는 mixed prompt이며 tool-first 성격이면 `QwenQueryRewrite`가 아래 힌트를 만든다.
-
-- `searchHints`
-- `symbolHints`
-- `rewriteNotes`
-
-이 힌트는 request context에 편입되고 parser recovery와 search tool 유도에 같이 쓰인다.
+필요할 때 `processUserInput`가 `symbolHints`를 만들고, 이 정보는 parser recovery와 search tool 유도에 같이 쓰인다.
 
 ## 5. tool policy
 
@@ -103,10 +96,10 @@ flowchart TD
 주요 기능:
 
 - `<tool_call>...</tool_call>` 파싱
-- malformed JSON-like payload 복구
-- XML-style function payload 복구
 - `reasoning_content` / `reasoning` 안의 tool intent 회수
 - bash fence 기반 read/search intent 회수
+- native `tool_calls` fallback 수용
+- `user_prompt`, `active_tool_names`, `symbol_hints` 기반 제한적 recovery
 - transcript flattening
   - assistant -> textual `<tool_call>`
   - user/tool result -> textual `<tool_response>`

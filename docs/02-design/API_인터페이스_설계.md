@@ -97,9 +97,9 @@ desktop이 직접 호출하는 backend API:
 - `GET /api/v1/runs/{run_id}/approvals`
 - `POST /api/v1/runs/{run_id}/approvals/{approval_id}/approve`
 - `POST /api/v1/runs/{run_id}/approvals/{approval_id}/reject`
-- `POST /api/v1/tool-api/orchestrate/collect_evidence`
+- `POST /api/v1/tool-api/orchestrate/lookup_sources_and_code`
 
-현재 `/api/v1/tool-api/orchestrate/collect_evidence`는 `company_reference_search`가 사용한다. 이 호출은 회사 엔진 소스나 내부 문서를 read-only evidence로 수집하는 용도다.
+현재 `/api/v1/tool-api/orchestrate/lookup_sources_and_code`는 `company_reference_search`가 사용한다. 이 호출은 회사 엔진 소스나 내부 문서를 read-only evidence로 수집하는 용도다.
 
 ## 6. LLM 인터페이스
 

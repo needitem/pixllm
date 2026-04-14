@@ -6,7 +6,7 @@
 
 ## Summary
 
-현재 PIXLLM은 복잡한 multi-route planner가 없다. 대신 `processUserInput`, `QwenQueryRewrite`, `ToolRuntime`이 아래 세 가지를 결정한다.
+현재 PIXLLM은 복잡한 multi-route planner가 없다. 대신 `processUserInput`, `QueryEngine`, `ToolRuntime`이 아래 세 가지를 결정한다.
 
 - 어떤 evidence plane을 우선 쓸지
 - 어떤 tool을 이번 turn에 활성화할지
@@ -66,20 +66,16 @@
 흐름:
 
 1. `processUserInput`가 `languageProfile`을 만든다.
-2. Hangul 또는 mixed prompt이며 tool-first 성격이면 `QwenQueryRewrite`를 호출한다.
-3. rewrite 결과로 아래를 만든다.
-   - `searchHints`
-   - `symbolHints`
-   - `rewriteNotes`
-4. 이 힌트는 request context와 parser recovery에 함께 들어간다.
+2. 현재 request context는 `symbolHints` 중심의 최소 힌트만 유지한다.
+3. parser recovery용 search rewrite 필드는 제거됐다.
 
-즉 routing은 언어별 하드코딩이 아니라 `minimal intent routing + bilingual search hint rewrite` 구조다.
+즉 routing은 언어별 하드코딩이 아니라 `minimal intent routing + symbol hint extraction` 구조다.
 
 ## 5. tool scope 결정
 
 현재는 request context에서 초기 tool scope를 만든다.
 
-- ambiguous short prompt면 `ask_user_question`
+- ambiguous short prompt은 별도 질문 툴 없이 최소 scope로 시작
 - todo 성격이면 `todo_*`
 - runtime task 성격이면 `terminal_capture`, `task_*`
 - workspace 분석 성격이면 discovery/read 계열 활성화

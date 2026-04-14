@@ -107,6 +107,66 @@ async function lookupBackendReferenceContext({
   return payload.data && typeof payload.data === 'object' ? payload.data : {};
 }
 
+async function getBackendToolUserContext({
+  baseUrl = '',
+  apiToken = '',
+  sessionId = '',
+  userId = 'desktop-local',
+} = {}) {
+  return backendRequest({
+    baseUrl,
+    apiToken,
+    requestPath: '/v1/tool-api/user/acl/get_user_context',
+    method: 'POST',
+    body: {
+      session_id: toStringValue(sessionId) || 'desktop-local-session',
+      user_id: toStringValue(userId) || 'desktop-local',
+    },
+  });
+}
+
+async function listBackendRepoFiles({
+  baseUrl = '',
+  apiToken = '',
+  sessionId = '',
+  glob = '**/*',
+  limit = 20,
+} = {}) {
+  return backendRequest({
+    baseUrl,
+    apiToken,
+    requestPath: '/v1/tool-api/code/list_repo_files',
+    method: 'POST',
+    body: {
+      session_id: toStringValue(sessionId) || 'desktop-local-session',
+      glob: toStringValue(glob) || '**/*',
+      limit: clampInt(limit, 1, 500, 20),
+    },
+  });
+}
+
+async function readBackendCode({
+  baseUrl = '',
+  apiToken = '',
+  sessionId = '',
+  path = '',
+  startLine = 1,
+  endLine = 120,
+} = {}) {
+  return backendRequest({
+    baseUrl,
+    apiToken,
+    requestPath: '/v1/tool-api/code/read_code',
+    method: 'POST',
+    body: {
+      session_id: toStringValue(sessionId) || 'desktop-local-session',
+      path: toStringValue(path),
+      start_line: clampInt(startLine, 1, 200000, 1),
+      end_line: clampInt(endLine, 1, 200000, 120),
+    },
+  });
+}
+
 async function backendRequest({
   baseUrl = '',
   apiToken = '',
@@ -289,7 +349,10 @@ module.exports = {
   bootstrapBackendWiki,
   deriveWikiId,
   getBackendWikiContext,
+  getBackendToolUserContext,
+  listBackendRepoFiles,
   lookupBackendReferenceContext,
+  readBackendCode,
   readBackendWikiPage,
   searchBackendWiki,
   writeBackendWikiPage,

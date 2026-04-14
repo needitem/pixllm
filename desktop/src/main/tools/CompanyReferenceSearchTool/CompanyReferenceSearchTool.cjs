@@ -1,5 +1,11 @@
-const { lookupBackendReferenceContext } = require('../../services/tools/BackendToolClient.cjs');
+const {
+  getBackendToolUserContext,
+  listBackendRepoFiles,
+  lookupBackendReferenceContext,
+  readBackendCode,
+} = require('../../services/tools/BackendToolClient.cjs');
 const { defineLocalTool } = require('../../Tool.cjs');
+const { extractCodeExamples, extractReferenceAnchors } = require('../../query/referenceArtifacts.cjs');
 const {
   toStringValue,
   objectSchema,
@@ -52,6 +58,115 @@ function normalizeReferenceWindow(item) {
   };
 }
 
+function uniqueBy(items, keyFn) {
+  const seen = new Set();
+  const output = [];
+  for (const item of Array.isArray(items) ? items : []) {
+    const key = toStringValue(typeof keyFn === 'function' ? keyFn(item) : '');
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    output.push(item);
+  }
+  return output;
+}
+
+function anchorPriority(anchor) {
+  const evidenceType = toStringValue(anchor?.evidenceType || anchor?.evidence_type).toLowerCase();
+  if (evidenceType === 'implementation') return 0;
+  if (evidenceType === 'declaration') return 1;
+  return 2;
+}
+
+function normalizeSuffix(value) {
+  return normalizeReferencePath(value).toLowerCase();
+}
+
+function chooseSuffixCandidate(anchorPath, files = []) {
+  const suffix = normalizeSuffix(anchorPath);
+  if (!suffix) return '';
+  const candidates = (Array.isArray(files) ? files : [])
+    .map((item) => toStringValue(item?.path || item))
+    .filter(Boolean);
+  const ranked = candidates
+    .filter((item) => item.replace(/\\/g, '/').toLowerCase().endsWith(suffix))
+    .sort((left, right) => left.length - right.length);
+  return toStringValue(ranked[0]);
+}
+
+async function hydrateReferenceAnchors({
+  baseUrl = '',
+  apiToken = '',
+  sessionId = '',
+  anchors = [],
+  maxChars = 4000,
+  maxLineSpan = 120,
+} = {}) {
+  const uniqueAnchors = uniqueBy(
+    (Array.isArray(anchors) ? anchors : [])
+      .filter((item) => toStringValue(item?.path))
+      .sort((left, right) => anchorPriority(left) - anchorPriority(right)),
+    (item) => `${toStringValue(item?.path)}:${toStringValue(item?.lineRange)}`,
+  ).slice(0, 8);
+  if (uniqueAnchors.length === 0) return [];
+
+  await getBackendToolUserContext({
+    baseUrl,
+    apiToken,
+    sessionId,
+  });
+
+  const fileListsByLeaf = new Map();
+  const windows = [];
+
+  for (const anchor of uniqueAnchors) {
+    const anchorPath = toStringValue(anchor?.path);
+    const leafName = anchorPath.split('/').pop() || '';
+    if (!leafName) continue;
+
+    if (!fileListsByLeaf.has(leafName)) {
+      const listed = await listBackendRepoFiles({
+        baseUrl,
+        apiToken,
+        sessionId,
+        glob: `**/${leafName}`,
+        limit: 40,
+      }).catch(() => ({ files: [] }));
+      fileListsByLeaf.set(leafName, Array.isArray(listed?.files) ? listed.files : []);
+    }
+
+    const matchedPath = chooseSuffixCandidate(anchorPath, fileListsByLeaf.get(leafName));
+    if (!matchedPath) continue;
+
+    const startLine = Math.max(1, Number(anchor?.startLine || 1));
+    const endLine = Math.max(startLine, Number(anchor?.endLine || startLine));
+    const lineSpan = Math.max(1, Math.min(Number(maxLineSpan || 120), 240));
+    const readStart = Math.max(1, startLine - Math.floor(lineSpan / 2));
+    const readEnd = Math.max(readStart, Math.min(readStart + lineSpan - 1, endLine + Math.floor(lineSpan / 2)));
+    const readResult = await readBackendCode({
+      baseUrl,
+      apiToken,
+      sessionId,
+      path: matchedPath,
+      startLine: readStart,
+      endLine: readEnd,
+    }).catch(() => null);
+    if (!readResult?.found) continue;
+
+    windows.push({
+      path: toStringValue(readResult?.path || matchedPath),
+      lineRange: toStringValue(readResult?.line_range || `${readStart}-${readEnd}`),
+      startLine: readStart,
+      endLine: readEnd,
+      content: String(readResult?.content || '').slice(0, Math.max(800, Number(maxChars || 4000))),
+      truncated: Boolean(readResult?.truncated),
+      matchKind: 'reference_anchor',
+      evidenceType: toStringValue(anchor?.evidenceType || anchor?.evidence_type || 'reference'),
+    });
+  }
+
+  return uniqueBy(windows, (item) => `${toStringValue(item?.path)}:${toStringValue(item?.lineRange)}`);
+}
+
 function normalizeDocEvidenceItem(item) {
   const sourceUrl = toStringValue(item?.source_url || item?.sourceUrl);
   const filePath = normalizeReferencePath(item?.file_path || item?.filePath || sourceUrl);
@@ -62,7 +177,7 @@ function normalizeDocEvidenceItem(item) {
     file_path: filePath,
     heading_path: toStringValue(item?.heading_path || item?.headingPath),
     paragraph_range: toStringValue(item?.paragraph_range || item?.paragraphRange),
-    text: String(item?.text || '').slice(0, 1600),
+    text: String(item?.text || '').slice(0, 2400),
     truncated: Boolean(item?.truncated),
   };
 }
@@ -119,6 +234,25 @@ function CompanyReferenceSearchTool() {
           text: stringSchema('Chunk text'),
           truncated: booleanSchema('Whether the source text was truncated'),
         }), 'Source excerpts'),
+        reference_anchors: arraySchema(objectSchema({
+          path: stringSchema('Anchored source path'),
+          lineRange: stringSchema('Anchored line range'),
+          startLine: integerSchema('Anchored start line', { minimum: 1 }),
+          endLine: integerSchema('Anchored end line', { minimum: 1 }),
+          evidenceType: stringSchema('Anchor evidence type such as declaration or implementation'),
+          sourceUrl: stringSchema('Originating source URL'),
+          filePath: stringSchema('Originating doc path'),
+          headingPath: stringSchema('Originating heading path'),
+          snippet: stringSchema('Source line snippet'),
+        }), 'Extracted source anchors from reference docs'),
+        examples: arraySchema(objectSchema({
+          language: stringSchema('Code block language'),
+          code: stringSchema('Reference code block'),
+          truncated: booleanSchema('Whether the code block was truncated'),
+          sourceUrl: stringSchema('Originating source URL'),
+          filePath: stringSchema('Originating doc path'),
+          headingPath: stringSchema('Originating heading path'),
+        }), 'Extracted reference code blocks'),
         error: stringSchema('Error code'),
         message: stringSchema('Human-readable status'),
       },
@@ -130,14 +264,13 @@ function CompanyReferenceSearchTool() {
     getObservationEvidenceKinds: (observation) => {
       const windows = Array.isArray(observation?.windows) ? observation.windows : [];
       const sources = Array.isArray(observation?.sources) ? observation.sources : [];
-      const hasInspection = windows.some((item) => toStringValue(item?.content))
-        || sources.some((item) => toStringValue(item?.text));
-      if (hasInspection) {
+      const citations = Array.isArray(observation?.citations) ? observation.citations : [];
+      const hasCodeInspection = windows.some((item) => toStringValue(item?.content));
+      if (hasCodeInspection) {
         return ['inspection', 'reference'];
       }
-      const citations = Array.isArray(observation?.citations) ? observation.citations : [];
       if (sources.length > 0 || citations.length > 0) {
-        return ['discovery', 'reference'];
+        return ['reference'];
       }
       return ['reference'];
     },
@@ -185,16 +318,34 @@ function CompanyReferenceSearchTool() {
           .map((item) => normalizeDocEvidenceItem(item));
         const citations = (Array.isArray(result?.citations) ? result.citations : [])
           .map((item) => normalizeCitationItem(item));
+        const referenceAnchors = extractReferenceAnchors(sources);
+        const examples = extractCodeExamples(sources, clampInt(input.max_chars || input.maxChars, 400, 8000, 4000));
+        const hydratedWindows = await hydrateReferenceAnchors({
+          baseUrl,
+          apiToken,
+          sessionId: toStringValue(context.sessionId),
+          anchors: referenceAnchors,
+          maxChars: clampInt(input.max_chars || input.maxChars, 400, 8000, 4000),
+          maxLineSpan: clampInt(input.max_line_span || input.maxLineSpan, 20, 240, 120),
+        });
+        const mergedWindows = uniqueBy(
+          [...windows, ...hydratedWindows],
+          (item) => `${toStringValue(item?.path)}:${toStringValue(item?.lineRange)}`,
+        );
         const messageParts = [];
-        if (windows.length > 0) messageParts.push(`${windows.length} code windows`);
+        if (mergedWindows.length > 0) messageParts.push(`${mergedWindows.length} code windows`);
         if (sources.length > 0) messageParts.push(`${sources.length} sources`);
+        if (referenceAnchors.length > 0) messageParts.push(`${referenceAnchors.length} source anchors`);
+        if (examples.length > 0) messageParts.push(`${examples.length} code examples`);
 
         return {
           ok: true,
           query: toStringValue(result?.query || query),
-          windows,
+          windows: mergedWindows,
           sources,
           citations,
+          reference_anchors: referenceAnchors,
+          examples,
           message: messageParts.length > 0
             ? `Collected ${messageParts.join(', ')} from backend reference sources.`
             : 'No backend reference evidence matched the query.',

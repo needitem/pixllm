@@ -58,6 +58,15 @@ function isTraceCandidatePath(filePath) {
   return /\.(cs|xaml\.cs|cpp|c|cc|cxx|h|hh|hpp|hxx|py|ts|tsx|js|cjs|mjs|jsx|vb|json|xml|xaml|sql|bat|cmd|ps1|sh)$/i.test(normalized);
 }
 
+function isTraceReferencePath(filePath) {
+  const normalized = normalizePath(filePath);
+  if (!normalized) return false;
+  if (/^(?:https?|file):\/\//i.test(normalized)) return false;
+  if (/^[A-Za-z]:\//.test(normalized)) return false;
+  if (normalized === '..' || normalized.startsWith('../')) return false;
+  return /[A-Za-z0-9_.-]+\.[A-Za-z0-9]{1,12}$/i.test(normalized);
+}
+
 function grepQueriesFromTrace(trace) {
   return uniq(
     (Array.isArray(trace) ? trace : [])
@@ -205,9 +214,7 @@ function referencePathsFromTrace(trace) {
   return uniq(
     paths.filter((item) => {
       const normalized = normalizePath(item);
-      if (!normalized) return false;
-      if (/^(?:https?|file):\/\//i.test(normalized)) return false;
-      return isTraceCandidatePath(normalized);
+      return isTraceReferencePath(normalized);
     }),
   );
 }
@@ -365,7 +372,24 @@ function summarizeObservation(toolName, observation, maxChars = 16000) {
           source_url: item?.source_url || '',
           heading_path: item?.heading_path || '',
           paragraph_range: item?.paragraph_range || '',
-          text: String(item?.text || '').slice(0, 360),
+          text: String(item?.text || '').slice(0, 900),
+          truncated: Boolean(item?.truncated),
+        }))
+        : [],
+      reference_anchors: Array.isArray(payload.reference_anchors)
+        ? payload.reference_anchors.slice(0, 12).map((item) => ({
+          path: item?.path || '',
+          lineRange: item?.lineRange || item?.line_range || '',
+          evidenceType: item?.evidenceType || item?.evidence_type || '',
+          snippet: String(item?.snippet || '').slice(0, 240),
+        }))
+        : [],
+      examples: Array.isArray(payload.examples)
+        ? payload.examples.slice(0, 2).map((item) => ({
+          language: item?.language || '',
+          source_url: item?.sourceUrl || item?.source_url || '',
+          heading_path: item?.headingPath || item?.heading_path || '',
+          code: String(item?.code || '').slice(0, Math.min(2400, maxChars)),
           truncated: Boolean(item?.truncated),
         }))
         : [],

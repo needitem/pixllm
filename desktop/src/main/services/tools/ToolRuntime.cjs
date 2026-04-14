@@ -1,11 +1,8 @@
 const {
   processUserInput,
-  summarizeRequestContext,
-  applySemanticAnalysis,
 } = require('../../utils/processUserInput/processUserInput.cjs');
 const { canUseTool: authorizeLocalToolUse, collectGroundedPaths } = require('../../hooks/useCanUseTool.cjs');
 const { findUngroundedSourceMentions } = require('../../query/sourceGuard.cjs');
-const { summarizeCompanyReferenceEvidence } = require('../../query/referenceEvidence.cjs');
 const { evaluateFinalAnswerPolicy } = require('../../query/finalizationPolicy.cjs');
 const { createToolResultBlock, toStringValue } = require('../../query.cjs');
 const { summarizeObservation, failedSteps } = require('../../queryTrace.cjs');
@@ -13,9 +10,7 @@ const { summarizeObservation, failedSteps } = require('../../queryTrace.cjs');
 const MUTATION_TOOL_NAMES = new Set(['write', 'edit', 'notebook_edit']);
 const EXECUTION_TOOL_NAMES = new Set(['run_build', 'bash', 'powershell', 'task_create', 'task_update', 'task_stop']);
 const RUNTIME_TASK_READ_TOOL_NAMES = new Set(['terminal_capture', 'task_get', 'task_list', 'task_output']);
-const META_RECOVERY_TOOL_NAMES = new Set(['ask_user_question', 'tool_search']);
-const MAX_REFERENCE_SEARCH_PASSES_FOR_CHANGE_REQUEST = 3;
-const MAX_REFERENCE_SEARCH_PASSES_FOR_ANSWER_REQUEST = 4;
+const META_RECOVERY_TOOL_NAMES = new Set(['tool_search']);
 const ANSWER_SEARCH_LOOKBACK_TURNS = 3;
 const MIN_ANSWER_SEARCH_TURNS_BEFORE_SATURATION = 4;
 const MIN_ANSWER_SEARCH_STEPS_BEFORE_SATURATION = 6;
@@ -37,7 +32,7 @@ const READ_CONTEXT_TOOL_NAMES = new Set([
 const WORKSPACE_PROGRESS_TOOL_NAMES = new Set(
   Array.from(READ_CONTEXT_TOOL_NAMES).filter((name) => name !== 'company_reference_search'),
 );
-const WORKSPACE_ANSWER_SATURATION_TOOL_NAMES = new Set(Array.from(READ_CONTEXT_TOOL_NAMES));
+const WORKSPACE_ANSWER_SATURATION_TOOL_NAMES = new Set(Array.from(WORKSPACE_PROGRESS_TOOL_NAMES));
 const BROAD_WORKSPACE_DISCOVERY_TOOL_NAMES = new Set([
   'list_files',
   'glob',
@@ -105,21 +100,6 @@ function stableSerialize(value) {
   return JSON.stringify(value ?? null);
 }
 
-function uniqueHintStrings(items = [], limit = 8) {
-  const seen = new Set();
-  const output = [];
-  for (const item of Array.isArray(items) ? items : []) {
-    const normalized = toStringValue(item);
-    if (!normalized) continue;
-    const key = normalized.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    output.push(normalized);
-    if (output.length >= limit) break;
-  }
-  return output;
-}
-
 function toolUseKey(toolUse = {}) {
   const identifier = toStringValue(toolUse?.id);
   if (identifier) return identifier;
@@ -134,10 +114,175 @@ function buildToolExecutionResult(toolUse, observation) {
     resultBlock: createToolResultBlock({
       toolUseId: toolUse?.id,
       name: toolUse?.name,
-      content: JSON.stringify(summarized, null, 2),
+      content: summarizeObservationForModel(toolUse?.name, summarized),
       isError: observation?.ok === false,
     }),
   };
+}
+
+function isExecutionFailure(step = {}) {
+  const toolName = toStringValue(step?.tool);
+  if (EXECUTION_TOOL_NAMES.has(toolName)) {
+    return true;
+  }
+  const error = toStringValue(step?.observation?.error).toLowerCase();
+  return [
+    'build_failed',
+    'command_failed',
+    'process_error',
+    'task_failed',
+    'task_runtime_failed',
+    'timeout',
+  ].includes(error);
+}
+
+function clipModelText(value = '', maxChars = 800) {
+  const text = String(value || '').trim();
+  if (text.length <= maxChars) {
+    return text;
+  }
+  return `${text.slice(0, Math.max(0, maxChars - 15))}\n...[truncated]`;
+}
+
+function summarizePathItems(items = [], formatter, limit = 12) {
+  return (Array.isArray(items) ? items : [])
+    .slice(0, limit)
+    .map((item) => toStringValue(formatter(item)))
+    .filter(Boolean);
+}
+
+function summarizeObservationForModel(toolName, observation = {}) {
+  const name = toStringValue(toolName);
+  const payload = observation && typeof observation === 'object' ? observation : {};
+  const lines = [];
+
+  const pushIf = (label, value) => {
+    const text = toStringValue(value);
+    if (text) {
+      lines.push(`${label}: ${text}`);
+    }
+  };
+
+  pushIf('tool', name);
+  pushIf('path', payload.path);
+  pushIf('lineRange', payload.lineRange);
+  pushIf('symbol', payload.symbol);
+  pushIf('query', payload.query);
+  if (payload.total) {
+    lines.push(`total: ${Number(payload.total || 0)}`);
+  }
+  if (payload.error) {
+    pushIf('error', payload.error);
+  }
+  if (payload.message) {
+    pushIf('message', payload.message);
+  }
+
+  if (['list_files', 'glob', 'glob_files'].includes(name)) {
+    const items = summarizePathItems(payload.items, (item) => item?.path || item, 120);
+    if (items.length > 0) {
+      lines.push('items:');
+      lines.push(...items.map((item) => `- ${item}`));
+    }
+    return lines.join('\n').trim();
+  }
+
+  if (['grep', 'find_symbol', 'find_references', 'find_callers'].includes(name)) {
+    const items = summarizePathItems(payload.items, (item) => {
+      const pathValue = toStringValue(item?.path);
+      const line = Number(item?.line || 0);
+      const text = clipModelText(item?.text || item?.match || '', 220).replace(/\s+/g, ' ');
+      const head = [pathValue, line > 0 ? line : ''].filter(Boolean).join(':');
+      return [head, text].filter(Boolean).join(' ');
+    }, 12);
+    if (items.length > 0) {
+      lines.push('matches:');
+      lines.push(...items.map((item) => `- ${item}`));
+    }
+    return lines.join('\n').trim();
+  }
+
+  if (['read_file', 'read_symbol_span'].includes(name)) {
+    const content = clipModelText(payload.content || '', 3600);
+    if (content) {
+      lines.push('content:');
+      lines.push(content);
+    }
+    return lines.join('\n').trim();
+  }
+
+  if (name === 'company_reference_search') {
+    lines.push('reference_origin: backend_server');
+    const matches = summarizePathItems(payload.matches, (item) => {
+      const pathValue = toStringValue(item?.path);
+      const lineRange = toStringValue(item?.lineRange);
+      const evidenceType = toStringValue(item?.evidenceType);
+      const text = clipModelText(item?.text || '', 180).replace(/\s+/g, ' ');
+      return [['backend_code', [pathValue, lineRange].filter(Boolean).join(':')].filter(Boolean).join(' '), evidenceType ? `[${evidenceType}]` : '', text].filter(Boolean).join(' ');
+    }, 8);
+    if (matches.length > 0) {
+      lines.push('matches:');
+      lines.push(...matches.map((item) => `- ${item}`));
+    }
+    const windows = summarizePathItems(payload.windows, (item) => {
+      const pathValue = toStringValue(item?.path);
+      const lineRange = toStringValue(item?.lineRange);
+      const evidenceType = toStringValue(item?.evidenceType);
+      const content = clipModelText(item?.content || '', 700).replace(/\s+/g, ' ');
+      return [['backend_code', [pathValue, lineRange].filter(Boolean).join(':')].filter(Boolean).join(' '), evidenceType ? `[${evidenceType}]` : '', content].filter(Boolean).join(' ');
+    }, 3);
+    if (windows.length > 0) {
+      lines.push('windows:');
+      lines.push(...windows.map((item) => `- ${item}`));
+    }
+    const sources = summarizePathItems(payload.sources, (item) => {
+      const pathValue = toStringValue(item?.file_path || item?.source_url || item?.path);
+      const heading = toStringValue(item?.heading_path || item?.paragraph_range);
+      const text = clipModelText(item?.text || '', 240).replace(/\s+/g, ' ');
+      return [['backend_doc', [pathValue, heading].filter(Boolean).join(' @ ')].filter(Boolean).join(' '), text].filter(Boolean).join(' ');
+    }, 4);
+    if (sources.length > 0) {
+      lines.push('sources:');
+      lines.push(...sources.map((item) => `- ${item}`));
+    }
+    return lines.join('\n').trim();
+  }
+
+  if (['write', 'write_file', 'edit', 'replace_in_file'].includes(name)) {
+    if (Number.isFinite(Number(payload.added)) || Number.isFinite(Number(payload.removed))) {
+      lines.push(`diff: +${Number(payload.added || 0)} -${Number(payload.removed || 0)}`);
+    }
+    const diff = clipModelText(payload.diff || '', 2600);
+    if (diff) {
+      lines.push('patch:');
+      lines.push(diff);
+    }
+    return lines.join('\n').trim();
+  }
+
+  if (['run_build', 'bash', 'powershell'].includes(name)) {
+    if (Number.isFinite(Number(payload.code))) {
+      lines.push(`code: ${Number(payload.code || 0)}`);
+    }
+    const stdout = clipModelText(payload.stdout || '', 1600);
+    const stderr = clipModelText(payload.stderr || '', 1200);
+    if (stdout) {
+      lines.push('stdout:');
+      lines.push(stdout);
+    }
+    if (stderr) {
+      lines.push('stderr:');
+      lines.push(stderr);
+    }
+    return lines.join('\n').trim();
+  }
+
+  const fallback = clipModelText(JSON.stringify(payload, null, 2), 2400);
+  if (fallback) {
+    lines.push('result:');
+    lines.push(fallback);
+  }
+  return lines.join('\n').trim();
 }
 
 function isBackgroundTaskObservation(observation) {
@@ -161,15 +306,6 @@ function traceHasSuccessfulTool(trace = [], names = new Set()) {
     const toolName = toStringValue(step?.tool);
     return names.has(toolName) && step?.observation?.ok !== false;
   });
-}
-
-function successfulToolCount(trace = [], name = '') {
-  const normalized = toStringValue(name);
-  if (!normalized) return 0;
-  return (Array.isArray(trace) ? trace : []).filter((step) => (
-    toStringValue(step?.tool) === normalized
-      && step?.observation?.ok !== false
-  )).length;
 }
 
 function normalizeTracePath(value = '') {
@@ -219,42 +355,10 @@ function countOccurrences(items = []) {
   return counts;
 }
 
-function consecutiveSuccessfulToolCount(trace = [], name = '') {
-  const normalized = toStringValue(name);
-  if (!normalized) return 0;
-  let count = 0;
-  const items = Array.isArray(trace) ? trace : [];
-  for (let index = items.length - 1; index >= 0; index -= 1) {
-    const step = items[index];
-    if (toStringValue(step?.tool) !== normalized || step?.observation?.ok === false) {
-      break;
-    }
-    count += 1;
-  }
-  return count;
-}
-
-function hasReferenceSearchEvidence(trace = []) {
-  return (Array.isArray(trace) ? trace : []).some((step) => {
-    if (toStringValue(step?.tool) !== 'company_reference_search' || step?.observation?.ok === false) {
-      return false;
-    }
-    const observation = step?.observation && typeof step.observation === 'object' ? step.observation : {};
-    return (
-      (Array.isArray(observation?.matches) && observation.matches.length > 0)
-      || (Array.isArray(observation?.windows) && observation.windows.length > 0)
-      || (Array.isArray(observation?.sources) && observation.sources.length > 0)
-      || (Array.isArray(observation?.doc_results) && observation.doc_results.length > 0)
-      || (Array.isArray(observation?.doc_chunks) && observation.doc_chunks.length > 0)
-      || (Array.isArray(observation?.citations) && observation.citations.length > 0)
-    );
-  });
-}
-
 function getWorkspaceAnswerLoopState({ trace = [], intent = {} } = {}) {
   const answerOriented = !Boolean(intent?.wantsChanges || intent?.createLikely || intent?.wantsExecution);
   const successfulReadContextSteps = (Array.isArray(trace) ? trace : [])
-    .filter((step) => READ_CONTEXT_TOOL_NAMES.has(toStringValue(step?.tool)) && step?.observation?.ok !== false);
+    .filter((step) => WORKSPACE_ANSWER_SATURATION_TOOL_NAMES.has(toStringValue(step?.tool)) && step?.observation?.ok !== false);
   const turns = Array.from(new Set(successfulReadContextSteps.map((step) => stepTurn(step)).filter(Boolean))).sort((a, b) => a - b);
   const recentTurns = turns.slice(-ANSWER_SEARCH_LOOKBACK_TURNS);
   const recentTurnSet = new Set(recentTurns);
@@ -275,7 +379,7 @@ function getWorkspaceAnswerLoopState({ trace = [], intent = {} } = {}) {
     .map(([path]) => path);
   const hasGroundedReadEvidence = traceHasSuccessfulTool(
     trace,
-    new Set(['read_file', 'read_symbol_span', 'symbol_outline', 'symbol_neighborhood', 'company_reference_search']),
+    WORKSPACE_ANSWER_SATURATION_TOOL_NAMES,
   );
   const saturated = answerOriented
     && hasGroundedReadEvidence
@@ -294,89 +398,6 @@ function getWorkspaceAnswerLoopState({ trace = [], intent = {} } = {}) {
     newRecentPaths,
     repeatedReadTargets,
   };
-}
-
-function getReferenceSearchLoopState({ trace = [], intent = {} } = {}) {
-  const wantsCodeOutput = Boolean(intent?.wantsChanges || intent?.createLikely);
-  const successfulReferenceSearches = successfulToolCount(trace, 'company_reference_search');
-  const consecutiveReferenceSearches = consecutiveSuccessfulToolCount(trace, 'company_reference_search');
-  const hasMutation = traceHasSuccessfulTool(trace, MUTATION_TOOL_NAMES);
-  const hasExecution = traceHasSuccessfulTool(trace, EXECUTION_TOOL_NAMES);
-  const referenceEvidence = summarizeCompanyReferenceEvidence(trace);
-  const blockedOnReferenceLoop = hasReferenceSearchEvidence(trace)
-    && !hasMutation
-    && !hasExecution;
-  const needsCodeGrounding = wantsCodeOutput
-    && blockedOnReferenceLoop
-    && consecutiveReferenceSearches >= MAX_REFERENCE_SEARCH_PASSES_FOR_CHANGE_REQUEST
-    && referenceEvidence.hasDocsOnlyEvidence
-    && !referenceEvidence.hasVerifiedCodeEvidence;
-  const saturationMode = wantsCodeOutput
-    ? (
-      blockedOnReferenceLoop
-      && consecutiveReferenceSearches >= MAX_REFERENCE_SEARCH_PASSES_FOR_CHANGE_REQUEST
-      && !needsCodeGrounding
-        ? 'change'
-        : ''
-    )
-    : (
-      blockedOnReferenceLoop
-      && consecutiveReferenceSearches >= MAX_REFERENCE_SEARCH_PASSES_FOR_ANSWER_REQUEST
-        ? 'answer'
-        : ''
-    );
-  const saturated = !needsCodeGrounding
-    && Boolean(saturationMode)
-    && (
-      wantsCodeOutput
-        ? consecutiveReferenceSearches >= MAX_REFERENCE_SEARCH_PASSES_FOR_CHANGE_REQUEST
-        : consecutiveReferenceSearches >= MAX_REFERENCE_SEARCH_PASSES_FOR_ANSWER_REQUEST
-    );
-  return {
-    wantsCodeOutput,
-    successfulReferenceSearches,
-    consecutiveReferenceSearches,
-    hasMutation,
-    hasExecution,
-    blockedOnReferenceLoop,
-    needsCodeGrounding,
-    saturated,
-    saturationMode,
-    referenceEvidence,
-  };
-}
-
-function referenceCodeGroundingMessage(loopState = {}) {
-  const evidence = loopState?.referenceEvidence || {};
-  const docCount = Number(evidence.docResultCount || 0) + Number(evidence.docChunkCount || 0);
-  if (loopState?.allowSeededWorkspaceArtifact) {
-    return `Company reference search found doc/wiki guidance (${docCount} doc hits) but no verified code declaration or implementation. If this request creates a new workspace file, stop searching and write the new workspace-relative file now. Otherwise inspect existing workspace files before editing code.`;
-  }
-  return `Company reference search found doc/wiki guidance (${docCount} doc hits) but no verified code declaration or implementation. Use the wiki terms only as search hints. Next, narrow company_reference_search to real code evidence or inspect workspace files before writing code.`;
-}
-
-function referenceSearchSaturationMessage(loopState = {}) {
-  if (loopState?.saturationMode === 'change') {
-    return 'You already have enough company reference evidence for this code change. Stop calling company_reference_search. Use workspace tools next: inspect the target folder, then create or edit a workspace-relative file to implement the request.';
-  }
-  return 'You already have enough company reference evidence to answer the user. Stop calling company_reference_search. Answer now using the evidence already collected, and mark any still-missing detail as unverified instead of searching again.';
-}
-
-function referenceSearchSaturationTransition(loopState = {}) {
-  if (loopState?.needsCodeGrounding) {
-    return 'reference_search_needs_code_grounding';
-  }
-  return loopState?.saturationMode === 'change'
-    ? 'reference_search_saturated'
-    : 'reference_search_answer_saturated';
-}
-
-function workspaceAnswerSaturationMessage(loopState = {}) {
-  const repeatedTargets = Array.isArray(loopState?.repeatedReadTargets) ? loopState.repeatedReadTargets.slice(0, 3) : [];
-  const repeatedText = repeatedTargets.length > 0
-    ? ` Recent reads kept revisiting: ${repeatedTargets.join(', ')}.`
-    : '';
-  return `Recent workspace searches are revisiting the same files without discovering new paths. Stop searching and answer using the evidence already collected.${repeatedText} If a detail remains uncertain, say it is unverified.`;
 }
 
 function buildToolResultStreamPayload({
@@ -446,33 +467,6 @@ class ToolRuntime {
     return toStringValue(this.requestContext?.summary);
   }
 
-  updateRequestContextHints({
-    searchHints = [],
-    symbolHints = [],
-    rewriteNotes = '',
-  } = {}) {
-    return this.updateRequestContextSemantics({
-      searchTerms: searchHints,
-      symbolHints,
-      notes: rewriteNotes,
-    });
-  }
-
-  updateRequestContextSemantics(analysis = {}) {
-    if (!this.requestContext || typeof this.requestContext !== 'object') {
-      return null;
-    }
-    this.requestContext = applySemanticAnalysis(this.requestContext, {
-      ...analysis,
-      searchTerms: uniqueHintStrings(analysis?.searchTerms, 8),
-      symbolHints: uniqueHintStrings(analysis?.symbolHints, 6),
-      notes: toStringValue(analysis?.notes).slice(0, 240),
-      confidence: toStringValue(analysis?.confidence),
-    });
-    this.requestContext.summary = summarizeRequestContext(this.requestContext);
-    return this.requestContext;
-  }
-
   groundedSourcePaths(trace = []) {
     return collectGroundedPaths({
       trace,
@@ -494,47 +488,24 @@ class ToolRuntime {
     const intent = this.requestContext?.intent && typeof this.requestContext.intent === 'object'
       ? this.requestContext.intent
       : {};
+    const requiresWorkspaceArtifact = Boolean(
+      this.requestContext?.artifactPlan?.requiresWorkspaceArtifact || intent.createLikely,
+    );
     const trace = Array.isArray(this.state?.trace) ? this.state.trace : [];
     const hasFailures = failedSteps(trace).length > 0;
+    const hasExecutionFailures = failedSteps(trace).some((step) => isExecutionFailure(step));
     const hasReadContext = traceHasSuccessfulTool(trace, READ_CONTEXT_TOOL_NAMES);
     const hasMutation = traceHasSuccessfulTool(trace, MUTATION_TOOL_NAMES);
-    const hasWorkspaceInspectionEvidence = traceHasSuccessfulTool(
-      trace,
-      new Set(['read_file', 'read_symbol_span', 'symbol_outline', 'symbol_neighborhood', 'lsp']),
-    );
-    const referenceLoop = getReferenceSearchLoopState({ trace, intent });
     const workspaceAnswerLoop = getWorkspaceAnswerLoopState({ trace, intent });
     const narrowingPreferred = Boolean(this.requestContext?.narrowingPreferred);
-    const allowSeededWorkspaceArtifact = Boolean(this.workspacePath && intent.createLikely);
 
-    if (referenceLoop.saturated) {
-      active.delete('company_reference_search');
-    } else if (available.has('company_reference_search')) {
-      active.add('company_reference_search');
-    }
-
-    if ((intent.wantsChanges || intent.createLikely) && (turn > 1 || hasReadContext || hasFailures || hasMutation)) {
+    if ((intent.wantsChanges || requiresWorkspaceArtifact) && (turn > 1 || hasReadContext || hasFailures || hasMutation)) {
       for (const name of MUTATION_TOOL_NAMES) {
         if (available.has(name)) active.add(name);
       }
     }
 
-    if (referenceLoop.needsCodeGrounding && !hasWorkspaceInspectionEvidence) {
-      if (!allowSeededWorkspaceArtifact) {
-        for (const name of MUTATION_TOOL_NAMES) {
-          active.delete(name);
-        }
-      }
-      for (const name of EXECUTION_TOOL_NAMES) {
-        active.delete(name);
-      }
-      if (available.has('company_reference_search')) active.add('company_reference_search');
-      for (const name of WORKSPACE_PROGRESS_TOOL_NAMES) {
-        if (available.has(name)) active.add(name);
-      }
-    }
-
-    if ((intent.wantsExecution || hasFailures || hasMutation) && (turn > 1 || hasReadContext || hasMutation || hasFailures)) {
+    if ((intent.wantsExecution || hasExecutionFailures || hasMutation) && (turn > 1 || hasReadContext || hasMutation || hasExecutionFailures)) {
       for (const name of EXECUTION_TOOL_NAMES) {
         if (available.has(name)) active.add(name);
       }
@@ -885,51 +856,6 @@ class ToolRuntime {
 
     const allFailed = toolExecutions.length > 0 && toolExecutions.every((item) => item?.observation?.ok === false);
     const interrupted = toolExecutions.some((item) => item?.observation?.interrupted === true);
-    const intent = this.requestContext?.intent && typeof this.requestContext.intent === 'object'
-      ? this.requestContext.intent
-      : {};
-    const allowSeededWorkspaceArtifact = Boolean(this.workspacePath && intent.createLikely);
-    const referenceLoop = getReferenceSearchLoopState({
-      trace: this.state.trace,
-      intent,
-    });
-    const onlyReferenceSearch = toolUses.length > 0
-      && toolUses.every((toolUse) => toStringValue(toolUse?.name) === 'company_reference_search');
-
-    if (
-      onlyReferenceSearch
-      && (referenceLoop.saturated || referenceLoop.needsCodeGrounding)
-      && (
-        (referenceLoop.needsCodeGrounding
-          && referenceLoop.consecutiveReferenceSearches === MAX_REFERENCE_SEARCH_PASSES_FOR_CHANGE_REQUEST)
-        || (referenceLoop.saturationMode === 'change'
-          && referenceLoop.consecutiveReferenceSearches === MAX_REFERENCE_SEARCH_PASSES_FOR_CHANGE_REQUEST)
-        || (referenceLoop.saturationMode === 'answer'
-          && referenceLoop.consecutiveReferenceSearches >= MAX_REFERENCE_SEARCH_PASSES_FOR_ANSWER_REQUEST)
-      )
-    ) {
-      this.pushMetaUserMessage(
-        referenceLoop.needsCodeGrounding
-          ? referenceCodeGroundingMessage({
-            ...referenceLoop,
-            allowSeededWorkspaceArtifact,
-          })
-          : referenceSearchSaturationMessage(referenceLoop),
-        {
-          turn,
-          hook: referenceSearchSaturationTransition(referenceLoop),
-          saturationMode: referenceLoop.saturationMode,
-          successfulReferenceSearches: referenceLoop.successfulReferenceSearches,
-          consecutiveReferenceSearches: referenceLoop.consecutiveReferenceSearches,
-        },
-      );
-      this.recordTransition(referenceSearchSaturationTransition(referenceLoop), {
-        turn,
-        saturationMode: referenceLoop.saturationMode,
-        successfulReferenceSearches: referenceLoop.successfulReferenceSearches,
-        consecutiveReferenceSearches: referenceLoop.consecutiveReferenceSearches,
-      });
-    }
 
     await onToolBatchEnd({
       turn,

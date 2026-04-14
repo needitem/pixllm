@@ -321,17 +321,34 @@ function normalizeOpenAiToolCalls(toolCalls) {
   return (Array.isArray(toolCalls) ? toolCalls : [])
     .map((item) => {
       const fn = item?.function && typeof item.function === 'object' ? item.function : {};
-      return {
-        id: toStringValue(item?.id),
-        name: toStringValue(fn?.name || item?.name),
-        arguments: typeof fn?.arguments === 'string'
+      const rawInput = item?.input && typeof item.input === 'object' && !Array.isArray(item.input)
+        ? item.input
+        : null;
+      const argumentsText = rawInput
+        ? JSON.stringify(rawInput)
+        : typeof fn?.arguments === 'string'
           ? fn.arguments
           : typeof item?.arguments === 'string'
             ? item.arguments
-            : '',
+            : '';
+      if (!toStringValue(fn?.name || item?.name) || !/[}\]]\s*$/.test(toStringValue(argumentsText))) {
+        return null;
+      }
+      try {
+        const parsed = rawInput || JSON.parse(argumentsText);
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          return null;
+        }
+      } catch {
+        return null;
+      }
+      return {
+        id: toStringValue(item?.id),
+        name: toStringValue(fn?.name || item?.name),
+        arguments: argumentsText,
       };
     })
-    .filter((item) => item.id || item.name || item.arguments);
+    .filter(Boolean);
 }
 
 function coerceOpenAiText(value) {
@@ -606,9 +623,6 @@ async function streamModelCompletion({
                 if (typeof fn?.arguments === 'string' && fn.arguments) {
                   openAiToolCalls[slot].arguments += fn.arguments;
                 }
-              }
-              if (deltaToolCalls.length > 0) {
-                void onToolCalls(normalizeOpenAiToolCalls(openAiToolCalls));
               }
               if (choice?.finish_reason) {
                 donePayload = {

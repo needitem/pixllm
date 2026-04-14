@@ -6,7 +6,7 @@
 
 ## 1. 현재 구조
 
-현재 모델 호출의 진입점은 `QueryEngine.cjs`, `QwenAdapter.cjs`, `QwenQueryRewrite.cjs`, `services/model/streamModelCompletion.cjs`다.
+현재 모델 호출의 진입점은 `QueryEngine.cjs`, `QwenAdapter.cjs`, `services/model/streamModelCompletion.cjs`다.
 
 호출 모드는 두 가지다.
 
@@ -17,7 +17,6 @@
 flowchart LR
     UI["Desktop Renderer"] --> MAIN["Electron Main"]
     MAIN --> QE["QueryEngine"]
-    QE --> RW["QwenQueryRewrite"]
     QE --> QA["QwenAdapter"]
     QE --> CLIENT["streamModelCompletion.cjs"]
     CLIENT -->|openai mode| OA["/v1/chat/completions"]
@@ -59,7 +58,7 @@ Qwen일 때는 추가 body가 붙는다.
 - `chat_template_kwargs.enable_thinking`
 - `top_k`
 
-rewrite helper와 next-speaker checker는 별도의 짧은 JSON-only completion을 사용한다.
+next-speaker checker와 create-request verifier는 별도의 짧은 JSON-only completion을 사용한다.
 
 response format 차이:
 
@@ -83,8 +82,6 @@ tool catalog는 system prompt 안에 function schema JSON 문자열로 노출한
 
 - assistant plain text
 - `<tool_call>` block
-- malformed JSON-like tool call
-- XML-style function/tool block
 - `reasoning_content` / `reasoning`
 - shell-like search/read plan
 - native `tool_calls` fallback
@@ -120,10 +117,10 @@ streaming일 때도 최종적으로는 이 구조로 수렴한다. 다만 tool i
 현재 한국어 지원은 하드코딩된 용어 사전이 아니다.
 
 - `processUserInput`가 language profile을 계산한다.
-- 필요할 때 `QwenQueryRewrite`가 prompt를 English code-search 힌트로 재작성한다.
-- `searchHints`, `symbolHints`, `rewriteNotes`가 request context와 parser recovery에 함께 쓰인다.
+- `processUserInput`가 필요한 `symbolHints`와 tool scope를 직접 만든다.
+- `QueryEngine`은 `user_prompt`, `active_tool_names`, `symbol_hints`를 recovery context로 전달한다.
 
-따라서 현재 한국어 서빙 설계는 `bilingual query rewrite + tolerant parser`로 설명해야 맞다.
+따라서 현재 한국어 서빙 설계는 `language-aware request shaping + tolerant parser`로 설명해야 맞다.
 
 ## 9. compaction-safe user query 보존
 

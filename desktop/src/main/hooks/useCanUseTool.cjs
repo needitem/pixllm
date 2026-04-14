@@ -144,26 +144,6 @@ function toolPathCandidates(toolName, input = {}) {
   return [];
 }
 
-function canSeedNewWorkspaceArtifactFromReference({
-  intent = {},
-  pathCandidates = [],
-  unknownPaths = [],
-  codeArtifactTargets = [],
-  referenceEvidence = {},
-  hasVerifiedReferenceCodeEvidence = false,
-  hasWorkspaceInspectionEvidence = false,
-} = {}) {
-  if (!Boolean(intent?.createLikely)) return false;
-  if (pathCandidates.length === 0 || unknownPaths.length === 0) return false;
-  if (unknownPaths.length !== pathCandidates.length) return false;
-  if (codeArtifactTargets.length === 0) return false;
-  if (hasWorkspaceInspectionEvidence) return false;
-  if (!pathCandidates.every((value) => isWorkspaceRelativePath(value))) return false;
-  if (!Boolean(referenceEvidence?.hasDocsOnlyEvidence)) return false;
-  if (hasVerifiedReferenceCodeEvidence) return false;
-  return true;
-}
-
 function permissionDenied({ toolName, reason, message, suggestedTools = [] }) {
   return {
     allow: false,
@@ -201,6 +181,9 @@ function authorizeToolUse({
   const readPaths = collectReadPaths({ trace, fileCache });
   const referencePaths = normalizedSet(referencePathsFromTrace(trace));
   const directPaths = normalizedSet(requestContext?.allowedDirectPaths);
+  const requiresWorkspaceArtifact = Boolean(
+    requestContext?.artifactPlan?.requiresWorkspaceArtifact || intent.createLikely,
+  );
   const pathCandidates = toolPathCandidates(normalizedTool, input).map((value) => normalizePath(value)).filter(Boolean);
   const unknownPaths = pathCandidates.filter((value) => !workspaceGroundedPaths.has(value.toLowerCase()));
   const unreadPaths = pathCandidates.filter((value) => !readPaths.has(value.toLowerCase()));
@@ -253,7 +236,6 @@ function authorizeToolUse({
   if ([
     'todo_read',
     'todo_write',
-    'ask_user_question',
     'brief',
     'sleep',
     'tool_search',
@@ -296,8 +278,8 @@ function authorizeToolUse({
     return permissionDenied({
       toolName,
       reason: 'backend_reference_requires_reference_tool',
-      message: `${backendOnlyPaths[0]} came from backend reference evidence. Use company_reference_search instead of local file tools for company reference sources.`,
-      suggestedTools: ['company_reference_search', 'grep', 'find_symbol'],
+      message: `${backendOnlyPaths[0]} is a backend reference path from the server-side reference corpus, not a local workspace path. Do not use local file tools on it. Reuse company_reference_search or inspect current workspace files instead.`,
+      suggestedTools: ['company_reference_search', 'list_files', 'grep', 'find_symbol'],
     });
   }
 
@@ -312,26 +294,17 @@ function authorizeToolUse({
   }
 
   if (['write', 'write_file', 'notebook_edit'].includes(normalizedTool)) {
-    if (!intent.wantsChanges) {
+    if (!intent.wantsChanges && !requiresWorkspaceArtifact) {
       return permissionDenied({
         toolName,
         reason: 'change_intent_required',
         message: 'This request looks read-only. Do not write files unless the user asked for a change.',
       });
     }
-    const creatingNewWorkspacePath = Boolean(intent.createLikely)
+    const creatingNewWorkspacePath = requiresWorkspaceArtifact
       && unknownPaths.length > 0
       && unknownPaths.every((value) => isWorkspaceRelativePath(value));
     const codeArtifactTargets = pathCandidates.filter((value) => isLikelyCodeArtifactPath(value));
-    const canSeedWorkspaceArtifact = canSeedNewWorkspaceArtifactFromReference({
-      intent,
-      pathCandidates,
-      unknownPaths,
-      codeArtifactTargets,
-      referenceEvidence,
-      hasVerifiedReferenceCodeEvidence,
-      hasWorkspaceInspectionEvidence,
-    });
     if (unknownPaths.length > 0 && !creatingNewWorkspacePath) {
       return permissionDenied({
         toolName,
@@ -340,7 +313,7 @@ function authorizeToolUse({
         suggestedTools: ['list_files', 'glob', 'grep', 'read_file'],
       });
     }
-    if (normalizedTool === 'write' && unreadPaths.length > 0 && !intent.createLikely) {
+    if (normalizedTool === 'write' && unreadPaths.length > 0 && !requiresWorkspaceArtifact) {
       return permissionDenied({
         toolName,
         reason: 'read_required_before_write',
@@ -350,11 +323,10 @@ function authorizeToolUse({
     }
     if (
       codeArtifactTargets.length > 0
-      && Boolean(intent.createLikely || intent.wantsChanges)
+      && Boolean(requiresWorkspaceArtifact || intent.wantsChanges)
       && !hasWorkspaceInspectionEvidence
       && referenceEvidence.hasDocsOnlyEvidence
       && !hasVerifiedReferenceCodeEvidence
-      && !canSeedWorkspaceArtifact
     ) {
       return permissionDenied({
         toolName,
@@ -364,11 +336,10 @@ function authorizeToolUse({
       });
     }
     if (
-      Boolean(intent.createLikely)
+      requiresWorkspaceArtifact
       && !hasContext
       && referenceEvidence.hasDocEvidence
       && !hasVerifiedReferenceCodeEvidence
-      && !canSeedWorkspaceArtifact
     ) {
       return permissionDenied({
         toolName,
@@ -381,7 +352,7 @@ function authorizeToolUse({
   }
 
   if (['edit', 'replace_in_file'].includes(normalizedTool)) {
-    if (!intent.wantsChanges) {
+    if (!intent.wantsChanges && !requiresWorkspaceArtifact) {
       return permissionDenied({
         toolName,
         reason: 'change_intent_required',

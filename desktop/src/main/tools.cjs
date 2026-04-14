@@ -153,24 +153,6 @@ async function configCall(input) {
   return { ok: false, error: 'unsupported_config_action', action };
 }
 
-async function askUserQuestionCall(input, context) {
-  const bridge = context.runtimeBridge && typeof context.runtimeBridge === 'object' ? context.runtimeBridge : {};
-  if (typeof bridge.askUserQuestion !== 'function') {
-    return { ok: false, error: 'ask_user_question_unavailable' };
-  }
-  const answer = await bridge.askUserQuestion({
-    title: toStringValue(input.title || 'Question'),
-    prompt: toStringValue(input.prompt || input.question),
-    placeholder: toStringValue(input.placeholder),
-    defaultValue: toStringValue(input.defaultValue || input.default_value),
-    allowEmpty: Boolean(input.allowEmpty || input.allow_empty),
-  });
-  return {
-    ok: true,
-    answer: toStringValue(answer),
-  };
-}
-
 async function briefCall(input, context) {
   const bridge = context.runtimeBridge && typeof context.runtimeBridge === 'object' ? context.runtimeBridge : {};
   if (typeof bridge.sendBrief === 'function') {
@@ -255,27 +237,6 @@ function getAllLocalBaseTools(limits = {}) {
           items: normalized,
           total: normalized.length,
         };
-      },
-    }),
-    defineLocalTool({
-      name: 'ask_user_question',
-      aliases: ['AskUserQuestion'],
-      kind: 'runtime',
-      inputSchema: objectSchema({
-        title: stringSchema('Short question title'),
-        prompt: stringSchema('Question shown to the user'),
-        placeholder: stringSchema('Optional placeholder text'),
-        defaultValue: stringSchema('Optional default answer'),
-        allowEmpty: booleanSchema('Whether an empty answer is allowed'),
-      }, ['prompt']),
-      searchHint: 'ask the user a direct question and wait for the answer',
-      laneAffinity: ['read', 'review', 'change', 'failure'],
-      isConcurrencySafe: () => false,
-      async description() {
-        return 'Ask the user a short question and wait for a response';
-      },
-      async call(input, context) {
-        return askUserQuestionCall(input, context);
       },
     }),
     defineLocalTool({

@@ -113,7 +113,55 @@ def resolve_path_root(code_tools, path_value: str) -> Optional[tuple[Path, Path,
             except Exception:
                 rel = normalized_rel
             return root, resolved, rel
+
+    suffix_match = resolve_path_root_by_suffix(roots, normalized_rel)
+    if suffix_match is not None:
+        return suffix_match
     return None
+
+
+def resolve_path_root_by_suffix(
+    roots: Sequence[Path],
+    normalized_rel: str,
+) -> Optional[tuple[Path, Path, str]]:
+    suffix = str(normalized_rel or "").strip().replace("\\", "/").strip("/")
+    if not suffix:
+        return None
+
+    suffix_lower = suffix.lower()
+    leaf_name = PurePosixPath(suffix).name
+    if not leaf_name:
+        return None
+
+    ranked: list[tuple[int, int, Path, Path, str]] = []
+    for root in roots:
+        try:
+            candidates = root.rglob(leaf_name)
+        except Exception:
+            continue
+        for candidate in candidates:
+            try:
+                resolved = candidate.resolve()
+            except Exception:
+                continue
+            if not resolved.exists() or not resolved.is_file() or not is_subpath(resolved, root):
+                continue
+            try:
+                rel = resolved.relative_to(root).as_posix()
+            except Exception:
+                continue
+            rel_lower = rel.lower()
+            if not rel_lower.endswith(suffix_lower):
+                continue
+            part_delta = abs(len(PurePosixPath(rel).parts) - len(PurePosixPath(suffix).parts))
+            ranked.append((part_delta, len(rel), root, resolved, rel))
+
+    if not ranked:
+        return None
+
+    ranked.sort(key=lambda item: (item[0], item[1]))
+    _, _, root, resolved, rel = ranked[0]
+    return root, resolved, rel
 
 
 def relativize_code_path(code_tools, path_value: str) -> str:

@@ -92,435 +92,14 @@ function normalizeRuntimeToolCall(rawToolCall = {}) {
   };
 }
 
-function parseXmlFunctionToolCallPayload(rawPayload, fallbackId = '') {
-  const source = toStringValue(rawPayload);
-  if (!source) return null;
-  const functionMatch = source.match(/<function(?:\s*=\s*|\s+)?["']?([^>"'\s]+)["']?\s*>\s*([\s\S]*?)\s*<\/function>/i);
-  if (!functionMatch) return null;
-  const name = toStringValue(functionMatch[1]);
-  if (!name) return null;
-  const input = {};
-  const body = functionMatch[2] || '';
-  const parameterPattern = /<parameter(?:\s*=\s*|\s+)?["']?([^>"'\s]+)["']?\s*>\s*([\s\S]*?)\s*<\/parameter>/gi;
-  let match = null;
-  while ((match = parameterPattern.exec(body)) !== null) {
-    const key = toStringValue(match[1]);
-    const rawValue = toStringValue(match[2]);
-    if (!key) continue;
-    const parsedValue = safeJsonParse(rawValue);
-    input[key] = parsedValue === null ? rawValue : parsedValue;
-  }
-  return {
-    id: fallbackId,
-    name,
-    input,
-  };
-}
-
-function parseSimpleXmlValue(rawValue) {
-  const value = toStringValue(rawValue);
-  if (!value) return '';
-  const parsedJson = safeJsonParse(value);
-  if (parsedJson !== null) {
-    return parsedJson;
-  }
-  const lenientParsed = parseLenientJsonLikePayload(value);
-  if (lenientParsed && typeof lenientParsed === 'object') {
-    return lenientParsed;
-  }
-  if (/<[A-Za-z_][A-Za-z0-9_.-]*>/.test(value)) {
-    const nested = parseSimpleXmlMap(value);
-    if (nested && Object.keys(nested).length > 0) {
-      return nested;
-    }
-  }
-  return coerceLenientScalar(value);
-}
-
-function parseSimpleXmlMap(source) {
-  const raw = toStringValue(source);
-  if (!raw) return null;
-  const output = {};
-  const tagPattern = /<([A-Za-z_][A-Za-z0-9_.-]*)>\s*([\s\S]*?)\s*<\/\1>/gi;
-  let match = null;
-  while ((match = tagPattern.exec(raw)) !== null) {
-    const key = toStringValue(match[1]);
-    if (!key) continue;
-    output[key] = parseSimpleXmlValue(match[2]);
-  }
-  return Object.keys(output).length > 0 ? output : null;
-}
-
-function parseToolUseXmlPayload(rawPayload, fallbackId = '') {
-  const source = toStringValue(rawPayload);
-  if (!source) return null;
-  const nameMatch = source.match(/<tool_name>\s*([\s\S]*?)\s*<\/tool_name>/i)
-    || source.match(/<name>\s*([\s\S]*?)\s*<\/name>/i);
-  const name = toStringValue(nameMatch?.[1]);
-  if (!name) return null;
-
-  const parametersMatch = source.match(/<parameters>\s*([\s\S]*?)\s*<\/parameters>/i)
-    || source.match(/<arguments>\s*([\s\S]*?)\s*<\/arguments>/i)
-    || source.match(/<input>\s*([\s\S]*?)\s*<\/input>/i);
-  const rawParameters = toStringValue(parametersMatch?.[1]);
-
-  let input = {};
-  if (rawParameters) {
-    const parsedJson = safeJsonParse(rawParameters);
-    if (parsedJson && typeof parsedJson === 'object' && !Array.isArray(parsedJson)) {
-      input = parsedJson;
-    } else {
-      const lenientParsed = parseLenientJsonLikePayload(rawParameters);
-      if (lenientParsed && typeof lenientParsed === 'object' && !Array.isArray(lenientParsed)) {
-        input = lenientParsed;
-      } else {
-        input = parseSimpleXmlMap(rawParameters) || {};
-      }
-    }
-  }
-
-  return {
-    id: fallbackId,
-    name,
-    input,
-  };
-}
-
-function skipWhitespace(source, state) {
-  while (state.index < source.length && /\s/.test(source[state.index])) {
-    state.index += 1;
-  }
-}
-
-function parseQuotedStringValue(source, state) {
-  const quote = source[state.index];
-  if (quote !== '"' && quote !== '\'') {
-    throw new Error('expected_quote');
-  }
-  state.index += 1;
-  let output = '';
-  let escaped = false;
-  while (state.index < source.length) {
-    const char = source[state.index];
-    state.index += 1;
-    if (escaped) {
-      output += char;
-      escaped = false;
-      continue;
-    }
-    if (char === '\\') {
-      escaped = true;
-      continue;
-    }
-    if (char === quote) {
-      return output;
-    }
-    output += char;
-  }
-  throw new Error('unterminated_string');
-}
-
-function coerceLenientScalar(token) {
-  const value = toStringValue(token);
-  if (!value) return '';
-  if (/^(true|false)$/i.test(value)) {
-    return /^true$/i.test(value);
-  }
-  if (/^null$/i.test(value)) {
-    return null;
-  }
-  if (/^-?(?:\d+|\d*\.\d+)(?:[eE][+-]?\d+)?$/.test(value)) {
-    return Number(value);
-  }
-  return value;
-}
-
-function parseLenientKey(source, state) {
-  skipWhitespace(source, state);
-  if (state.index >= source.length) {
-    throw new Error('missing_key');
-  }
-  const current = source[state.index];
-  if (current === '"' || current === '\'') {
-    return toStringValue(parseQuotedStringValue(source, state));
-  }
-  const start = state.index;
-  while (state.index < source.length) {
-    const char = source[state.index];
-    if (char === ':' || char === '=' || /\s/.test(char) || char === ',' || char === '}' || char === ']') {
-      break;
-    }
-    state.index += 1;
-  }
-  const key = toStringValue(source.slice(start, state.index));
-  skipWhitespace(source, state);
-  return key;
-}
-
-function parseLenientValue(source, state) {
-  skipWhitespace(source, state);
-  if (state.index >= source.length) {
-    return '';
-  }
-  const current = source[state.index];
-  if (current === '{') {
-    return parseLenientObject(source, state);
-  }
-  if (current === '[') {
-    return parseLenientArray(source, state);
-  }
-  if (current === '"' || current === '\'') {
-    return parseQuotedStringValue(source, state);
-  }
-  const start = state.index;
-  while (state.index < source.length) {
-    const char = source[state.index];
-    if (char === ',' || char === '}' || char === ']') {
-      break;
-    }
-    state.index += 1;
-  }
-  return coerceLenientScalar(source.slice(start, state.index));
-}
-
-function parseLenientArray(source, state) {
-  if (source[state.index] !== '[') {
-    throw new Error('expected_array');
-  }
-  state.index += 1;
-  const items = [];
-  while (state.index < source.length) {
-    skipWhitespace(source, state);
-    if (source[state.index] === ']') {
-      state.index += 1;
-      return items;
-    }
-    items.push(parseLenientValue(source, state));
-    skipWhitespace(source, state);
-    if (source[state.index] === ',') {
-      state.index += 1;
-      continue;
-    }
-    if (source[state.index] === ']') {
-      state.index += 1;
-      return items;
-    }
-  }
-  throw new Error('unterminated_array');
-}
-
-function parseLenientObject(source, state) {
-  if (source[state.index] !== '{') {
-    throw new Error('expected_object');
-  }
-  state.index += 1;
-  const output = {};
-  while (state.index < source.length) {
-    skipWhitespace(source, state);
-    if (source[state.index] === '}') {
-      state.index += 1;
-      return output;
-    }
-    const key = parseLenientKey(source, state);
-    skipWhitespace(source, state);
-    if (source[state.index] !== ':' && source[state.index] !== '=') {
-      throw new Error('missing_separator');
-    }
-    state.index += 1;
-    const value = parseLenientValue(source, state);
-    if (key) {
-      output[key] = value;
-    }
-    skipWhitespace(source, state);
-    if (source[state.index] === ',') {
-      state.index += 1;
-      continue;
-    }
-    if (source[state.index] === '}') {
-      state.index += 1;
-      return output;
-    }
-  }
-  throw new Error('unterminated_object');
-}
-
-function parseLenientJsonLikePayload(rawPayload) {
-  const source = toStringValue(rawPayload);
-  if (!source) return null;
-  const candidate = extractLeadingBalancedJson(source) || source;
-  if (!candidate.startsWith('{')) return null;
-  try {
-    const state = { index: 0 };
-    const parsed = parseLenientObject(candidate, state);
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
-function parseFunctionStyleToolCallPayload(rawPayload, fallbackId = '') {
-  const source = toStringValue(rawPayload);
-  if (!source) return null;
-  const match = source.match(/^([A-Za-z0-9_.-]+)\s*\(([\s\S]*)\)$/);
-  if (!match) return null;
-  const name = toStringValue(match[1]);
-  if (!name) return null;
-  const body = `{${match[2] || ''}}`;
-  const parsed = parseLenientJsonLikePayload(body);
-  return {
-    id: fallbackId,
-    name,
-    input: parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {},
-  };
-}
-
-function extractLeadingBalancedJson(text) {
-  const source = String(text || '');
-  const start = source.indexOf('{');
-  if (start < 0) return '';
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  for (let index = start; index < source.length; index += 1) {
-    const char = source[index];
-    if (inString) {
-      if (escaped) {
-        escaped = false;
-        continue;
-      }
-      if (char === '\\') {
-        escaped = true;
-        continue;
-      }
-      if (char === '"') {
-        inString = false;
-      }
-      continue;
-    }
-    if (char === '"') {
-      inString = true;
-      continue;
-    }
-    if (char === '{') {
-      depth += 1;
-      continue;
-    }
-    if (char === '}') {
-      depth -= 1;
-      if (depth === 0) {
-        return source.slice(start, index + 1);
-      }
-    }
-  }
-  return '';
-}
-
-function repairUnbalancedJsonCandidate(rawPayload) {
-  const source = String(rawPayload || '');
-  if (!source) return '';
-  let output = source;
-  let inString = false;
-  let escaped = false;
-  const closers = [];
-  for (let index = 0; index < source.length; index += 1) {
-    const char = source[index];
-    if (inString) {
-      if (escaped) {
-        escaped = false;
-        continue;
-      }
-      if (char === '\\') {
-        escaped = true;
-        continue;
-      }
-      if (char === '"') {
-        inString = false;
-      }
-      continue;
-    }
-    if (char === '"') {
-      inString = true;
-      continue;
-    }
-    if (char === '{') {
-      closers.push('}');
-      continue;
-    }
-    if (char === '[') {
-      closers.push(']');
-      continue;
-    }
-    if ((char === '}' || char === ']') && closers.length > 0) {
-      const expected = closers[closers.length - 1];
-      if (char === expected) {
-        closers.pop();
-      }
-    }
-  }
-  if (inString) {
-    output += '"';
-  }
-  if (closers.length === 0 && output === source) {
-    return '';
-  }
-  return `${output}${closers.reverse().join('')}`;
-}
-
 function parseToolCallPayload(rawPayload, fallbackId = '') {
   const normalized = toStringValue(rawPayload);
   if (!normalized) return null;
   const parsedJson = safeJsonParse(normalized);
-  const fromJson = normalizePseudoToolCallPayload(parsedJson, fallbackId);
-  if (fromJson) {
-    return fromJson;
-  }
-  const leadingJson = extractLeadingBalancedJson(normalized);
-  if (leadingJson) {
-    const recovered = normalizePseudoToolCallPayload(safeJsonParse(leadingJson), fallbackId);
-    if (recovered) {
-      return recovered;
-    }
-  }
-  const lenientRecovered = normalizePseudoToolCallPayload(
-    parseLenientJsonLikePayload(normalized),
-    fallbackId,
-  );
-  if (lenientRecovered) {
-    return lenientRecovered;
-  }
-  const lenientLeadingRecovered = normalizePseudoToolCallPayload(
-    parseLenientJsonLikePayload(leadingJson),
-    fallbackId,
-  );
-  if (lenientLeadingRecovered) {
-    return lenientLeadingRecovered;
-  }
-  const repairedJson = repairUnbalancedJsonCandidate(normalized);
-  if (repairedJson) {
-    const repairedStrict = normalizePseudoToolCallPayload(safeJsonParse(repairedJson), fallbackId);
-    if (repairedStrict) {
-      return repairedStrict;
-    }
-    const repairedLenient = normalizePseudoToolCallPayload(
-      parseLenientJsonLikePayload(repairedJson),
-      fallbackId,
-    );
-    if (repairedLenient) {
-      return repairedLenient;
-    }
-  }
-  const functionStyle = parseFunctionStyleToolCallPayload(normalized, fallbackId);
-  if (functionStyle) {
-    return functionStyle;
-  }
-  const xmlFunction = parseXmlFunctionToolCallPayload(normalized, fallbackId);
-  if (xmlFunction) {
-    return xmlFunction;
-  }
-  return parseToolUseXmlPayload(normalized, fallbackId);
+  return normalizePseudoToolCallPayload(parsedJson, fallbackId);
 }
 
-function parsePseudoToolCallBlocks(text, { allowIncompleteLastBlock = false } = {}) {
+function parsePseudoToolCallBlocks(text) {
   const source = String(text || '');
   if (!source) return null;
 
@@ -803,10 +382,6 @@ function buildSearchQueryFromPrompt(prompt, recoveryContext = {}) {
   if (quoted) return quoted;
   const explicitPath = extractExplicitFilePath(source);
   if (explicitPath && !/readme\.md/i.test(explicitPath)) return explicitPath;
-  const hintedSearchTerms = normalizeHintStrings(recoveryContext?.search_hints, 6);
-  if (hintedSearchTerms.length > 0) {
-    return hintedSearchTerms.join(' ').slice(0, 120);
-  }
   const symbol = extractSymbolCandidate(source);
   if (symbol) return symbol;
   const hintedSymbol = normalizeHintStrings(recoveryContext?.symbol_hints, 4)[0];
@@ -1010,7 +585,7 @@ function parseAssistantResponse(rawValue) {
       : {};
     const blocks = [];
     const textSource = stripThinkingBlocks(stripAssistantWrappers(toStringValue(rawValue.text || rawValue.content || '')));
-    const pseudoToolBlocks = parsePseudoToolCallBlocks(textSource, { allowIncompleteLastBlock: true });
+    const pseudoToolBlocks = parsePseudoToolCallBlocks(textSource);
     if (Array.isArray(pseudoToolBlocks) && pseudoToolBlocks.length > 0) {
       blocks.push(...pseudoToolBlocks);
     } else if (textSource) {
@@ -1031,7 +606,7 @@ function parseAssistantResponse(rawValue) {
       const reasoningSource = stripThinkingBlocks(stripAssistantWrappers(toStringValue(
         rawValue.reasoning_content || rawValue.reasoning || '',
       )));
-      const reasoningBlocks = parsePseudoToolCallBlocks(reasoningSource, { allowIncompleteLastBlock: true });
+      const reasoningBlocks = parsePseudoToolCallBlocks(reasoningSource);
       if (Array.isArray(reasoningBlocks) && reasoningBlocks.length > 0) {
         blocks.push(...reasoningBlocks.filter((block) => block?.type === 'tool_use'));
       }
@@ -1063,7 +638,7 @@ function parseAssistantResponse(rawValue) {
   }
 
   const normalizedText = stripThinkingBlocks(stripAssistantWrappers(rawValue));
-  const pseudoToolBlocks = parsePseudoToolCallBlocks(normalizedText, { allowIncompleteLastBlock: true });
+  const pseudoToolBlocks = parsePseudoToolCallBlocks(normalizedText);
   if (Array.isArray(pseudoToolBlocks) && pseudoToolBlocks.length > 0) {
     return { ok: true, blocks: pseudoToolBlocks };
   }
@@ -1104,7 +679,7 @@ function extractTextFromToolBlocks(blocks = []) {
 
 function extractStreamingToolCalls(text) {
   const normalized = stripThinkingBlocks(stripAssistantWrappers(text), { dropOpenTail: true });
-  const blocks = parsePseudoToolCallBlocks(normalized, { allowIncompleteLastBlock: true });
+  const blocks = parsePseudoToolCallBlocks(normalized);
   if (!Array.isArray(blocks) || blocks.length === 0) {
     return [];
   }
@@ -1199,29 +774,71 @@ function flattenMessagesForModel(messages = []) {
 function normalizePromptToolDefinition(definition = {}) {
   const name = toStringValue(definition?.name);
   if (!name) return null;
-  const description = toStringValue(definition?.description);
-  const parameters = definition?.parameters && typeof definition.parameters === 'object' && !Array.isArray(definition.parameters)
-    ? definition.parameters
-    : {
-        type: 'object',
-        properties: {},
-        additionalProperties: false,
-      };
   return {
-    type: 'function',
-    function: {
-      name,
-      description,
-      parameters,
-    },
+    name,
+    description: toStringValue(definition?.description),
+    parameters: definition?.parameters && typeof definition.parameters === 'object' && !Array.isArray(definition.parameters)
+      ? definition.parameters
+      : {
+          type: 'object',
+          properties: {},
+          additionalProperties: false,
+        },
   };
+}
+
+function clipPromptText(text = '', maxChars = 96) {
+  const normalized = toStringValue(text).replace(/\s+/g, ' ');
+  if (normalized.length <= maxChars) {
+    return normalized;
+  }
+  return `${normalized.slice(0, Math.max(0, maxChars - 3))}...`;
+}
+
+function summarizeSchemaType(schema = {}) {
+  const payload = schema && typeof schema === 'object' && !Array.isArray(schema) ? schema : {};
+  const enumValues = Array.isArray(payload.enum)
+    ? payload.enum.map((item) => toStringValue(item)).filter(Boolean)
+    : [];
+  if (enumValues.length > 0) {
+    const preview = enumValues.slice(0, 4).join('|');
+    return `enum(${preview}${enumValues.length > 4 ? '|...' : ''})`;
+  }
+  const type = toStringValue(payload.type).toLowerCase();
+  if (type === 'array') {
+    return `${summarizeSchemaType(payload.items || {})}[]`;
+  }
+  if (['string', 'integer', 'number', 'boolean', 'object'].includes(type)) {
+    return type;
+  }
+  return 'value';
+}
+
+function summarizeToolParameters(parameters = {}) {
+  const payload = parameters && typeof parameters === 'object' && !Array.isArray(parameters) ? parameters : {};
+  const properties = payload.properties && typeof payload.properties === 'object' && !Array.isArray(payload.properties)
+    ? Object.entries(payload.properties)
+    : [];
+  const required = new Set(Array.isArray(payload.required) ? payload.required.map((item) => toStringValue(item)) : []);
+  if (properties.length === 0) {
+    return '';
+  }
+  const rendered = properties.slice(0, 6).map(([key, value]) => `${key}${required.has(key) ? '' : '?'}:${summarizeSchemaType(value)}`);
+  if (properties.length > 6) {
+    rendered.push('...');
+  }
+  return rendered.join(', ');
 }
 
 function renderToolCatalog(toolDefinitions = []) {
   return (Array.isArray(toolDefinitions) ? toolDefinitions : [])
     .map((definition) => normalizePromptToolDefinition(definition))
     .filter(Boolean)
-    .map((definition) => JSON.stringify(definition))
+    .map((definition) => {
+      const signature = summarizeToolParameters(definition.parameters);
+      const description = clipPromptText(definition.description, 104);
+      return `- ${definition.name}(${signature})${description ? ` :: ${description}` : ''}`;
+    })
     .join('\n');
 }
 
@@ -1233,44 +850,26 @@ function buildSystemPrompt({
   const toolCatalog = renderToolCatalog(toolDefinitions);
   return [
     'You are the desktop coding engine for a Qwen-based local coding agent.',
-    'You own the tool loop. Decide whether to answer directly or call tools.',
-    'The user may write in Korean. Never ask the user to switch to English.',
-    'Answer in the user language when possible. When searching code, translate Korean technical phrases into likely English code terms or identifiers yourself.',
-    '# Tools',
-    'You have access to the following tools in OpenAI-compatible function schema form:',
-    toolCatalog || '{"type":"function","function":{"name":"no_tools","description":"No tools are enabled for this turn.","parameters":{"type":"object","properties":{},"additionalProperties":false}}}',
+    'Decide whether to answer directly or call tools.',
+    'The user may write in Korean. Answer in the user language when possible and translate Korean technical phrases into likely English code terms yourself when searching.',
+    '# Enabled tools',
+    toolCatalog || '- no_tools() :: No tools are enabled for this turn.',
     '',
-    '## Tool calling format',
-    'When you need a tool, emit one or more tool calls in plain text using exactly this structure:',
+    'Tool call format:',
     '<tool_call>',
     '{"name":"grep","arguments":{"query":"image registration","limit":10}}',
     '</tool_call>',
     '',
-    'Tool-calling rules:',
-    '- Use only enabled tool names from the catalog above.',
-    '- Put arguments inside the JSON object under "arguments".',
-    '- Do not wrap tool calls in markdown fences.',
-    '- You may emit multiple <tool_call> blocks in a single response when calls are independent.',
-    '- You may write a short sentence before the first <tool_call>, but write nothing after the last </tool_call>.',
-    '- Tool results will be returned inside <tool_response> ... </tool_response> blocks.',
-    '- After reading tool responses, either call another tool or answer plainly.',
-    '- Never fabricate tool results or pretend a tool ran if it did not.',
-    '- Prefer dedicated tools over shell commands whenever a relevant tool exists.',
-    '- Use glob or list_files for file discovery, grep/find_symbol/find_references/find_callers for content search, and read_file/read_symbol_span/symbol_neighborhood/symbol_outline/lsp for direct inspection.',
-    '- Use write/write_file to create new workspace files or replace whole-file content, and use edit/replace_in_file for grounded in-place edits.',
+    'Rules:',
+    '- Use only enabled tool names and put JSON arguments under "arguments".',
+    '- Do not wrap tool calls in markdown fences. You may emit multiple independent <tool_call> blocks.',
+    '- After the last </tool_call>, write nothing else. Tool results will arrive inside <tool_response> blocks.',
+    '- Prefer dedicated tools over shell commands. Use discovery tools for search, read tools for inspection, and write/edit tools for file changes.',
     '- Do not use bash or powershell to create or edit files when write/edit tools are enabled.',
-    '- If the user asks to set up the engine wiki for shared editing and wiki_bootstrap is available, use it first.',
-    '- Treat the backend engine wiki as the source of truth for multi-user wiki work.',
-    '- The shared wiki tools operate on the same engine wiki family that company_reference_search reads.',
-    '- For engine wiki work, prefer `SCHEMA.md`, `index.md`, `log.md`, `pages/home.md`, and `01-method-wiki-index.md` as coordination pages.',
-    '- Use wiki_search and wiki_read before changing the engine wiki so edits stay grounded in current page state.',
-    '- Use wiki_write for page creation or replacement and wiki_append_log for durable wiki operation log entries.',
-    '- Use company_reference_search for company engine source or internal reference material outside the workspace.',
-    '- Treat company_reference_search doc/wiki results as search guidance, not as API authority. Before writing code from reference material, gather declaration or implementation evidence or inspect real workspace code.',
-    '- Treat backend reference evidence as read-only.',
-    '- Only the tools enabled for this turn are available.',
-    '- Ground code claims in tool responses already shown in the transcript.',
-    '- If a tool fails, report the exact blocker from the tool response. Do not infer broader environment restrictions unless a tool explicitly says so.',
+    '- Use company_reference_search only for company/internal material outside the workspace and treat it as read-only guidance until verified by code evidence or workspace inspection.',
+    '- Paths returned from company_reference_search belong to backend reference sources, not the local workspace. Do not pass those paths to local file tools or shell commands.',
+    '- For shared wiki work, use wiki_bootstrap first when setup is requested and use wiki_search/wiki_read before wiki_write/wiki_append_log.',
+    '- Ground claims in tool responses already shown in the transcript. If a tool fails, report the exact blocker from that response.',
     workspacePath ? `Workspace: ${workspacePath}` : '',
     selectedFilePath ? `Selected file: ${selectedFilePath}` : '',
   ].filter(Boolean).join('\n');

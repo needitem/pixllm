@@ -1,27 +1,23 @@
 const { callModelCompletion } = require('./streamModelCompletion.cjs');
 const { safeJsonParse, toStringValue } = require('../../query/blocks.cjs');
 
-const PROMPT_SEMANTICS_SYSTEM_PROMPT = [
-  'You classify coding-agent user requests into structured intent and compact code-search hints.',
-  'The user may write Korean or mixed Korean/English.',
-  'Infer the user goal semantically, not by literal keyword spotting alone.',
-  'Do not answer the user request or ask follow-up questions.',
-  'Do not ask the user to switch languages.',
+const REQUEST_CONTRACT_PROMPT = [
+  'You are a strict preflight classifier for a desktop coding agent.',
+  'Classify the user request into execution intent and delivery expectations.',
+  'The user may write in Korean or mixed Korean/English.',
+  'Do not answer the request.',
+  'Do not ask follow-up questions.',
   'Return JSON only with these fields:',
-  '{"intent":{"wants_changes":false,"wants_execution":false,"wants_analysis":false,"create_likely":false,"compare_likely":false},"focus":{"mentions_company_reference":false,"mentions_config":false,"mentions_todo":false,"mentions_runtime_task":false},"search_terms":["short English code-search phrases"],"symbol_hints":["ExactIdentifier"],"notes":"brief optional note","confidence":"low|medium|high"}',
+  '{"intent":{"wants_changes":false,"wants_execution":false,"wants_analysis":false,"create_likely":false,"compare_likely":false},"artifact":{"requires_workspace_artifact":false,"likely_paths":["short/path.cs"]},"focus":{"mentions_config":false,"mentions_todo":false,"mentions_runtime_task":false,"mentions_wiki":false},"search_terms":["short english code-search phrase"],"symbol_hints":["ExactIdentifier"],"notes":"brief optional note","confidence":"low|medium|high"}',
   'Rules:',
-  '- Asking how to use an API, how to load/display a file, usage steps, or "방법/어떻게/알려줘" style guidance counts as wants_analysis=true unless the user explicitly asks you to create or edit code.',
-  '- Creating or writing a sample, demo, viewer, program, prototype, or example counts as wants_changes=true and usually create_likely=true.',
-  '- Asking to explain, inspect, review, trace, compare, or locate existing code counts as wants_analysis=true.',
-  '- Asking to build, run, test, benchmark, execute commands, or debug runtime failures counts as wants_execution=true.',
-  '- Asking about internal engine/reference/backend knowledge or company source outside the local workspace counts as mentions_company_reference=true.',
-  '- search_terms should contain 1 to 6 short English phrases suitable for grep/find_symbol.',
-  '- symbol_hints should contain likely exact identifiers only when plausible.',
-  '- Keep phrases short and technical.',
-  '- Stay literal to the user request. Do not invent narrower domains or modalities that the user did not state.',
-  '- If a Korean technical phrase is ambiguous, prefer neutral code-search wording over speculation.',
-  '- Prefer search_terms over speculative symbol_hints when the request is broad or flow-oriented.',
-  '- If the request is already in English, keep the same meaning and still return compact search terms.',
+  '- If the user asks you to make, create, write, generate, or implement a program/app/viewer/sample/example, set wants_changes=true.',
+  '- If the request should be fulfilled by creating or editing files in the current workspace, set artifact.requires_workspace_artifact=true and usually create_likely=true.',
+  '- If the user only wants explanation, guidance, review, analysis, or comparison, set wants_analysis=true.',
+  '- If the user wants commands executed, builds run, tests run, or runtime failures debugged, set wants_execution=true.',
+  '- Use likely_paths only when a target filename or file type is genuinely implied.',
+  '- search_terms should contain 0 to 6 short English technical phrases suitable for grep/search.',
+  '- symbol_hints should contain only plausible exact identifiers.',
+  '- Do not invent backend/reference routing modes.',
 ].join('\n');
 
 function uniqStrings(items, limit = 8) {
@@ -47,74 +43,88 @@ function normalizeConfidence(value = '') {
   return '';
 }
 
-function sanitizeSemanticPayload(payload = {}) {
-  const parsed = payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : {};
-  const intent = parsed.intent && typeof parsed.intent === 'object' ? parsed.intent : {};
-  const focus = parsed.focus && typeof parsed.focus === 'object' ? parsed.focus : {};
-  const createLikely = Boolean(intent.create_likely ?? intent.createLikely);
-  const compareLikely = Boolean(intent.compare_likely ?? intent.compareLikely);
+function defaultContract() {
   return {
     intent: {
-      wantsChanges: Boolean(intent.wants_changes ?? intent.wantsChanges) || createLikely,
-      wantsExecution: Boolean(intent.wants_execution ?? intent.wantsExecution),
-      wantsAnalysis: Boolean(intent.wants_analysis ?? intent.wantsAnalysis) || compareLikely,
-      createLikely,
-      compareLikely,
+      wantsChanges: false,
+      wantsExecution: false,
+      wantsAnalysis: false,
+      createLikely: false,
+      compareLikely: false,
+    },
+    artifact: {
+      requiresWorkspaceArtifact: false,
+      likelyPaths: [],
     },
     focus: {
-      mentionsCompanyReference: Boolean(focus.mentions_company_reference ?? focus.mentionsCompanyReference),
-      mentionsConfig: Boolean(focus.mentions_config ?? focus.mentionsConfig),
-      mentionsTodo: Boolean(focus.mentions_todo ?? focus.mentionsTodo),
-      mentionsRuntimeTask: Boolean(focus.mentions_runtime_task ?? focus.mentionsRuntimeTask),
+      mentionsConfig: false,
+      mentionsTodo: false,
+      mentionsRuntimeTask: false,
+      mentionsWiki: false,
     },
-    searchTerms: uniqStrings(parsed.search_terms, 6),
-    symbolHints: uniqStrings(parsed.symbol_hints, 4),
-    notes: toStringValue(parsed.notes).slice(0, 240),
-    confidence: normalizeConfidence(parsed.confidence),
+    searchTerms: [],
+    symbolHints: [],
+    notes: '',
+    confidence: '',
   };
 }
 
-function extractIdentifierHints(prompt = '') {
-  const source = toStringValue(prompt);
-  return uniqStrings(
-    source.match(/\b(?:[A-Z][A-Za-z0-9_]*[A-Z][A-Za-z0-9_]*|[a-z]+[A-Z][A-Za-z0-9_]*|[A-Za-z_][A-Za-z0-9_]*::[A-Za-z_][A-Za-z0-9_]*)\b/g) || [],
-    4,
-  );
+function sanitizeRequestContract(payload = {}) {
+  const parsed = payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : {};
+  const intent = parsed.intent && typeof parsed.intent === 'object' ? parsed.intent : {};
+  const artifact = parsed.artifact && typeof parsed.artifact === 'object' ? parsed.artifact : {};
+  const focus = parsed.focus && typeof parsed.focus === 'object' ? parsed.focus : {};
+  const contract = defaultContract();
+
+  contract.intent = {
+    wantsChanges: Boolean(intent.wants_changes ?? intent.wantsChanges),
+    wantsExecution: Boolean(intent.wants_execution ?? intent.wantsExecution),
+    wantsAnalysis: Boolean(intent.wants_analysis ?? intent.wantsAnalysis),
+    createLikely: Boolean(intent.create_likely ?? intent.createLikely),
+    compareLikely: Boolean(intent.compare_likely ?? intent.compareLikely),
+  };
+  if (contract.intent.createLikely) {
+    contract.intent.wantsChanges = true;
+  }
+
+  contract.artifact = {
+    requiresWorkspaceArtifact: Boolean(
+      artifact.requires_workspace_artifact ?? artifact.requiresWorkspaceArtifact,
+    ),
+    likelyPaths: uniqStrings(
+      artifact.likely_paths ?? artifact.likelyPaths,
+      4,
+    ),
+  };
+
+  contract.focus = {
+    mentionsConfig: Boolean(focus.mentions_config ?? focus.mentionsConfig),
+    mentionsTodo: Boolean(focus.mentions_todo ?? focus.mentionsTodo),
+    mentionsRuntimeTask: Boolean(focus.mentions_runtime_task ?? focus.mentionsRuntimeTask),
+    mentionsWiki: Boolean(focus.mentions_wiki ?? focus.mentionsWiki),
+  };
+
+  contract.searchTerms = uniqStrings(parsed.search_terms ?? parsed.searchTerms, 6);
+  contract.symbolHints = uniqStrings(parsed.symbol_hints ?? parsed.symbolHints, 6);
+  contract.notes = toStringValue(parsed.notes).slice(0, 240);
+  contract.confidence = normalizeConfidence(parsed.confidence);
+  return contract;
 }
 
-function fallbackPromptSemantics(prompt = '') {
-  const source = toStringValue(prompt);
-  const lowered = source.toLowerCase();
-  const asksHowTo = /\b(how|how to|usage|use|guide|steps|show me how|load|display|render|open)\b/i.test(lowered)
-    || /방법|어떻게|알려줘|사용법|로드|불러|열|도시|표시|띄우/i.test(source);
-  return sanitizeSemanticPayload({
-    intent: {
-      wants_changes: /\b(fix|change|edit|modify|refactor|implement|add|improve|update|rewrite|create|write|patch|make|build)\b/i.test(lowered)
-        || /고쳐|개선|수정|구현|추가|만들|작성|개발/i.test(source),
-      wants_execution: /\b(build|test|run|execute|compile|diagnos|lint|verify|benchmark|profile|powershell|shell|command|git|diff)\b/i.test(lowered)
-        || /빌드|테스트|실행|검증/i.test(source),
-      wants_analysis: /\b(analy(?:s|z)|compare|review|inspect|investigate|trace|understand|audit|explain|summari(?:s|z)e|search|find|locat(?:e|ion)|look up|open|read)\b/i.test(lowered)
-        || /\b(flow|implementation|codebase|workspace|symbol|reference)\b/i.test(lowered)
-        || /어디서|어디에|위치|흐름|분석|비교|리뷰|파악|설명|요약|찾|검색|열어|읽/i.test(source)
-        || asksHowTo,
-      create_likely: /\b(create|add|new file|new test|scaffold|generate|sample|demo|prototype|viewer|program|app)\b/i.test(lowered)
-        || /생성|추가|만들|작성|개발|예제|샘플|프로그램|뷰어/i.test(source),
-      compare_likely: /\b(compare|diff|versus|vs)\b/i.test(lowered)
-        || /비교|차이/i.test(source),
-    },
-    focus: {
-      mentions_company_reference: /(company|internal|reference|knowledge|engine source|reference source|backend knowledge)/i.test(lowered)
-        || /사내|내부|참고|지식|엔진|백엔드/i.test(source),
-      mentions_config: /\b(config|setting|option|base url|api token|endpoint)\b/i.test(lowered),
-      mentions_todo: /\b(todo|checklist|task list)\b/i.test(lowered) || /할 일|체크리스트/i.test(source),
-      mentions_runtime_task: /\b(task|terminal output|background job|job output|capture)\b/i.test(lowered)
-        || /태스크|터미널|출력|백그라운드/i.test(source),
-    },
-    search_terms: [],
-    symbol_hints: extractIdentifierHints(source),
-    notes: 'heuristic fallback',
-    confidence: 'low',
-  });
+function hasUsefulContract(contract = null) {
+  return Boolean(
+    contract
+    && (
+      Object.values(contract.intent || {}).some(Boolean)
+      || Object.values(contract.focus || {}).some(Boolean)
+      || Boolean(contract.artifact?.requiresWorkspaceArtifact)
+      || (Array.isArray(contract.artifact?.likelyPaths) && contract.artifact.likelyPaths.length > 0)
+      || (Array.isArray(contract.searchTerms) && contract.searchTerms.length > 0)
+      || (Array.isArray(contract.symbolHints) && contract.symbolHints.length > 0)
+      || toStringValue(contract.notes)
+      || toStringValue(contract.confidence)
+    )
+  );
 }
 
 async function analyzePromptSemantics({
@@ -128,25 +138,7 @@ async function analyzePromptSemantics({
 } = {}) {
   const source = toStringValue(prompt);
   if (!source) {
-    return {
-      intent: {
-        wantsChanges: false,
-        wantsExecution: false,
-        wantsAnalysis: false,
-        createLikely: false,
-        compareLikely: false,
-      },
-      focus: {
-        mentionsCompanyReference: false,
-        mentionsConfig: false,
-        mentionsTodo: false,
-        mentionsRuntimeTask: false,
-      },
-      searchTerms: [],
-      symbolHints: [],
-      notes: '',
-      confidence: '',
-    };
+    return defaultContract();
   }
 
   try {
@@ -169,7 +161,7 @@ async function analyzePromptSemantics({
       messages: [
         {
           role: 'system',
-          content: PROMPT_SEMANTICS_SYSTEM_PROMPT,
+          content: REQUEST_CONTRACT_PROMPT,
         },
         {
           role: 'user',
@@ -179,23 +171,14 @@ async function analyzePromptSemantics({
     });
 
     const parsed = safeJsonParse(completion?.text || completion?.reasoning_content || '');
-    const sanitized = sanitizeSemanticPayload(parsed);
-    if (
-      sanitized.searchTerms.length > 0
-      || sanitized.symbolHints.length > 0
-      || sanitized.notes
-      || sanitized.confidence
-      || Object.values(sanitized.intent).some(Boolean)
-      || Object.values(sanitized.focus).some(Boolean)
-    ) {
-      return sanitized;
-    }
-    return fallbackPromptSemantics(source);
+    const contract = sanitizeRequestContract(parsed);
+    return hasUsefulContract(contract) ? contract : defaultContract();
   } catch {
-    return fallbackPromptSemantics(source);
+    return defaultContract();
   }
 }
 
 module.exports = {
   analyzePromptSemantics,
+  sanitizeRequestContract,
 };

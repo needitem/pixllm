@@ -11,9 +11,8 @@
 이유:
 
 - Qwen은 `<tool_call>...</tool_call>` 같은 textual tool protocol을 자주 사용한다.
-- malformed JSON-like payload를 낼 수 있다.
 - `reasoning_content` 또는 `reasoning` 안에 tool intent가 들어갈 수 있다.
-- tool을 쓰려던 의도는 있지만 닫히지 않은 마지막 block이나 XML-style 변형이 나올 수 있다.
+- tool을 쓰려던 의도는 있지만 block이 prose 안에 섞여 나오거나 reasoning 안으로 밀릴 수 있다.
 
 따라서 현재 구조는 `Claude transport를 유지한 채 parser만 조금 보강`하는 방식이 아니라, `Qwen 전용 적응층을 둔 local tool loop`에 가깝다.
 
@@ -21,10 +20,9 @@
 
 | 구성 요소 | 역할 |
 |---|---|
-| `QwenAdapter.cjs` | textual tool-call parsing, malformed payload 복구, transcript flattening, system prompt/tool catalog 생성 |
-| `QwenQueryRewrite.cjs` | 한국어 또는 mixed prompt를 code-search 힌트와 symbol 힌트로 재작성 |
+| `QwenAdapter.cjs` | textual tool-call parsing, limited recovery, transcript flattening, system prompt/tool catalog 생성 |
 | `streamModelCompletion.cjs` | direct/proxy transport, `reasoning_content` 수집, Qwen extra body 적용 |
-| `QueryEngine.cjs` | rewrite 호출, streaming recovery, next speaker continuation, compaction-safe user query 보존 |
+| `QueryEngine.cjs` | streaming recovery, next speaker continuation, create-request verification, compaction-safe user query 보존 |
 | `nextSpeakerCheck.cjs` | prose-only 응답 뒤에 model이 계속 말해야 하는지 판정 |
 
 ## 3. 현재 모델 프로토콜
@@ -57,21 +55,13 @@ Result:
 
 `QwenAdapter.cjs`는 아래를 현재 복구한다.
 
-- 닫히지 않은 마지막 `<tool_call>`
-- bare key / bare string 형태의 malformed JSON-like payload
-- `<tool_code><function="..."><parameter="...">...`
-- `<tool_use><tool_name>...</tool_name><parameters>...`
-- `reasoning_content` 또는 `reasoning` 안에만 들어간 tool call
+- 완전히 닫힌 `<tool_call>...</tool_call>`, `<tool_code>...</tool_code>`, `<tool_use>...</tool_use>` block
+- `reasoning_content` 또는 `reasoning` 안에 들어간 동일 형식의 tool block
 - bash fence 안의 명확한 read/search intent
-- generic tool aliases
-  - `search`
-  - `search_files`
-  - `list_directory`
-  - `rgrep`
-  - `open_file`
-  - `cat`
+- complete JSON 인자를 가진 native `tool_calls` fallback
+- `user_prompt`, `active_tool_names`, `symbol_hints`를 활용한 제한적 prompt recovery
 
-복구 대상은 `tool을 쓰려던 의도는 있었는데 형식이 흔들린 출력`이다. tool intent 자체가 전혀 없는 일반 prose는 parser만으로 해결하지 않는다.
+반대로 닫히지 않은 마지막 block이나 불완전한 JSON 인자는 더 이상 실제 tool call로 승격하지 않는다.
 
 ## 5. 한국어 입력 처리
 
@@ -80,18 +70,14 @@ Result:
 흐름:
 
 1. `processUserInput`가 `languageProfile`을 계산한다.
-2. Hangul 또는 mixed prompt이며 tool-first 성격이면 `QueryEngine`이 `QwenQueryRewrite`를 호출한다.
-3. rewrite 결과는 아래 형태다.
-   - `searchTerms`
-   - `symbolHints`
-   - `notes`
-4. `ToolRuntime.updateRequestContextHints(...)`가 이 힌트를 request context에 넣는다.
-5. `QwenAdapter` recovery는 `recovery_context.search_hints`, `symbol_hints`를 사용해 빈약한 tool call을 복구한다.
+2. `processUserInput`가 필요한 `symbolHints`와 initial tool scope를 request context에 넣는다.
+3. `QueryEngine`이 `user_prompt`, `active_tool_names`, `symbol_hints`를 recovery context로 전달한다.
+4. `QwenAdapter` recovery는 이 정보를 사용해 제한적으로 tool call을 보정한다.
 
 중요:
 
 - `영상 정합 -> image registration` 같은 repo/domain 하드코딩은 현재 기본 설계가 아니다.
-- 검색어 보정은 모델 기반 rewrite 계층에서 처리한다.
+- 별도 bilingual rewrite helper는 현재 기본 경로가 아니다.
 
 ## 6. prose-only 응답 대응
 

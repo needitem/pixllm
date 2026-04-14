@@ -2,7 +2,6 @@ import json
 import logging
 import re
 from datetime import datetime, timezone
-from types import SimpleNamespace
 from uuid import uuid4
 
 
@@ -140,21 +139,3 @@ def log_exception(logger: logging.Logger, request, exc: Exception) -> None:
         "error_message": str(exc),
     }
     logger.exception(json.dumps(payload, ensure_ascii=False, sort_keys=True))
-
-
-def make_test_request(
-    *,
-    method: str = "GET",
-    path: str = "/api/v1/health",
-    query: str = "",
-    request_id: str = "",
-    user_agent: str = "unit-test",
-    client_ip: str = "127.0.0.1",
-):
-    return SimpleNamespace(
-        method=method,
-        url=SimpleNamespace(path=path, query=query),
-        headers={"x-request-id": request_id, "user-agent": user_agent},
-        client=SimpleNamespace(host=client_ip),
-        state=SimpleNamespace(request_id=normalize_request_id(request_id)),
-    )

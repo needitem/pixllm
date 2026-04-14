@@ -3,9 +3,6 @@ const path = require('node:path');
 const TOOL_GROUPS = {
   always: [],
   runtime_read: [],
-  runtime_meta: [
-    'tool_search',
-  ],
   todo: [
     'todo_read',
     'todo_write',
@@ -151,16 +148,10 @@ function extractPathCandidates(prompt) {
   return uniq(tokens);
 }
 
-function matchesAny(source, patterns) {
-  return (Array.isArray(patterns) ? patterns : []).some((pattern) => pattern.test(source));
-}
-
 function parsePromptDirectives(prompt) {
   const source = toStringValue(prompt).toLowerCase();
   return {
-    reference: /(?:^|\s)\/reference\b/.test(source),
     workspace: /(?:^|\s)\/workspace\b/.test(source),
-    hybrid: /(?:^|\s)\/hybrid\b/.test(source),
     analysis: /(?:^|\s)\/analysis\b/.test(source),
     change: /(?:^|\s)\/change\b/.test(source),
     exec: /(?:^|\s)\/exec\b/.test(source),
@@ -190,7 +181,6 @@ function analyzeIntent(prompt, directives = {}) {
 
 function normalizeFocus(focus = {}) {
   return {
-    mentionsCompanyReference: Boolean(focus?.mentionsCompanyReference),
     mentionsConfig: Boolean(focus?.mentionsConfig),
     mentionsTodo: Boolean(focus?.mentionsTodo),
     mentionsRuntimeTask: Boolean(focus?.mentionsRuntimeTask),
@@ -202,7 +192,6 @@ function analyzeFocus(prompt, directives = {}) {
   const source = toStringValue(prompt);
   const lowered = source.toLowerCase();
   return normalizeFocus({
-    mentionsCompanyReference: Boolean(directives.reference || directives.hybrid),
     mentionsConfig: Boolean(directives.config),
     mentionsTodo: false,
     mentionsRuntimeTask: false,
@@ -225,34 +214,6 @@ function addTools(target, items) {
   }
 }
 
-function mergeBooleanFlags(base = {}, patch = {}, keys = []) {
-  const merged = {};
-  for (const key of Array.isArray(keys) ? keys : []) {
-    merged[key] = Boolean(base?.[key] || patch?.[key]);
-  }
-  return merged;
-}
-
-function deriveEvidencePreference({
-  intent = {},
-  focus = {},
-  directives = {},
-  hasWorkspacePath = false,
-  hasDirectWorkspaceTargets = false,
-} = {}) {
-  if (!hasWorkspacePath) return 'reference';
-  if (focus.mentionsWiki) return 'workspace';
-  if (directives.workspace) return 'workspace';
-  if (directives.reference) return 'reference';
-  if (directives.hybrid) return 'hybrid';
-  if (hasDirectWorkspaceTargets) return 'workspace';
-  if (focus.mentionsCompanyReference) return 'reference';
-  if (intent.wantsExecution && !intent.wantsAnalysis && !intent.wantsChanges && !intent.compareLikely) {
-    return 'workspace';
-  }
-  return 'hybrid';
-}
-
 function deriveInitialToolNames({
   prompt = '',
   intent = {},
@@ -260,30 +221,11 @@ function deriveInitialToolNames({
   directives = {},
   explicitPaths = [],
   hasWorkspacePath = false,
-  evidencePreference = 'workspace',
   hasFocusedSymbols = false,
+  requiresWorkspaceArtifact = false,
 } = {}) {
   const names = new Set();
   addTools(names, TOOL_GROUPS.always);
-  const source = toStringValue(prompt);
-  const directiveCount = Object.values(directives || {}).filter(Boolean).length;
-  const shouldAskUser =
-    !source
-    || (
-      source.length < 10
-      && !intent.wantsAnalysis
-      && !intent.wantsChanges
-      && !intent.wantsExecution
-      && !focus.mentionsTodo
-      && !focus.mentionsRuntimeTask
-      && !focus.mentionsConfig
-      && !focus.mentionsCompanyReference
-      && (!Array.isArray(explicitPaths) || explicitPaths.length === 0)
-      && directiveCount === 0
-    );
-  if (shouldAskUser) {
-    names.add('ask_user_question');
-  }
   if (focus.mentionsConfig) {
     addTools(names, TOOL_GROUPS.config);
   }
@@ -303,40 +245,19 @@ function deriveInitialToolNames({
     && !intent.wantsExecution
     && (!Array.isArray(explicitPaths) || explicitPaths.length === 0);
 
-  if (evidencePreference === 'reference') {
-    addTools(names, TOOL_GROUPS.reference);
-    if (hasWorkspacePath) {
-      addTools(names, TOOL_GROUPS.path_read);
-    }
-    if (intent.compareLikely || intent.wantsChanges) {
-      addTools(names, TOOL_GROUPS.workspace_discovery);
-    } else if (prefersFocusedWorkspaceDiscovery) {
-      addTools(names, TOOL_GROUPS.focused_workspace_discovery);
-    }
-  } else if (evidencePreference === 'hybrid') {
-    addTools(names, TOOL_GROUPS.reference);
-    if (hasWorkspacePath) {
-      addTools(names, TOOL_GROUPS.path_read);
-    }
+  if (hasWorkspacePath) {
+    addTools(names, TOOL_GROUPS.path_read);
     addTools(
       names,
       prefersFocusedWorkspaceDiscovery
         ? TOOL_GROUPS.focused_workspace_discovery
         : TOOL_GROUPS.workspace_discovery,
     );
-  } else {
-    if (hasWorkspacePath) {
-      addTools(names, TOOL_GROUPS.path_read);
-    }
-    if (intent.wantsAnalysis || intent.compareLikely || intent.wantsChanges || intent.wantsExecution) {
-      addTools(
-        names,
-        prefersFocusedWorkspaceDiscovery
-          ? TOOL_GROUPS.focused_workspace_discovery
-          : TOOL_GROUPS.workspace_discovery,
-      );
+    if (intent.wantsChanges || requiresWorkspaceArtifact) {
+      addTools(names, TOOL_GROUPS.mutation);
     }
   }
+  addTools(names, TOOL_GROUPS.reference);
 
   if (focus.mentionsWiki && hasWorkspacePath) {
     addTools(names, TOOL_GROUPS.workspace_discovery);
@@ -366,11 +287,6 @@ function summarizeRequestContext(context = {}) {
     lines.push(`Request intent: ${labels.join(', ')}`);
   }
 
-  const evidencePreference = toStringValue(context.evidencePreference || 'workspace');
-  if (evidencePreference) {
-    lines.push(`Evidence mode: ${evidencePreference}`);
-  }
-
   const languageProfile = context.languageProfile && typeof context.languageProfile === 'object'
     ? context.languageProfile
     : {};
@@ -382,24 +298,14 @@ function summarizeRequestContext(context = {}) {
     lines.push('Do not ask the user to switch to English. Continue in the user language and translate Korean technical phrases into likely English code-search terms when needed.');
   }
 
-  const searchHints = Array.isArray(context.searchHints) ? context.searchHints.filter(Boolean) : [];
-  if (searchHints.length > 0) {
-    lines.push(`Search hint terms: ${searchHints.slice(0, 8).join(', ')}`);
-  }
-
   const symbolHints = Array.isArray(context.symbolHints) ? context.symbolHints.filter(Boolean) : [];
   if (symbolHints.length > 0) {
     lines.push(`Symbol hint terms: ${symbolHints.slice(0, 6).join(', ')}`);
   }
 
-  const rewriteNotes = toStringValue(context.rewriteNotes);
-  if (rewriteNotes) {
-    lines.push(`Rewrite notes: ${rewriteNotes}`);
-  }
-
-  const semanticConfidence = toStringValue(context.semanticConfidence);
-  if (semanticConfidence) {
-    lines.push(`Semantic confidence: ${semanticConfidence}`);
+  const searchTerms = Array.isArray(context.searchTerms) ? context.searchTerms.filter(Boolean) : [];
+  if (searchTerms.length > 0) {
+    lines.push(`Search hint terms: ${searchTerms.slice(0, 6).join(', ')}`);
   }
 
   const directiveLabels = Object.entries(directives)
@@ -423,15 +329,8 @@ function summarizeRequestContext(context = {}) {
     lines.push('User-referenced paths and the selected file may be used directly. Discover any other workspace path before reading or editing it.');
   }
 
-  if (context.prefersReferenceTools) {
-    lines.push('Prefer company_reference_search for company engine or internal reference material before using local file tools.');
-    if (intent.wantsChanges || intent.createLikely) {
-      lines.push('Reference wiki/docs can orient the search, but code generation still requires declaration or implementation evidence, or grounded workspace inspection.');
-    }
-  }
-
   if (context.focus?.mentionsWiki) {
-    lines.push('Wiki requests should use the backend engine wiki tools; this is the same wiki family used by company_reference_search.');
+    lines.push('Wiki requests should use the backend engine wiki tools.');
     lines.push('If the engine wiki is missing shared coordination files, initialize them with `wiki_bootstrap` before creating or editing pages.');
     lines.push('For engine wiki maintenance, keep `SCHEMA.md`, `index.md`, and `log.md` consistent with page updates.');
   }
@@ -439,6 +338,14 @@ function summarizeRequestContext(context = {}) {
   const initialToolNames = Array.isArray(context.initialToolNames) ? context.initialToolNames : [];
   if (initialToolNames.length > 0) {
     lines.push(`Initial tool scope: ${initialToolNames.slice(0, 14).join(', ')}`);
+  }
+
+  if (context.artifactPlan?.requiresWorkspaceArtifact) {
+    lines.push('The request is expected to produce a workspace artifact, not just an in-chat explanation.');
+  }
+  const likelyPaths = Array.isArray(context.artifactPlan?.likelyPaths) ? context.artifactPlan.likelyPaths : [];
+  if (likelyPaths.length > 0) {
+    lines.push(`Likely artifact paths: ${likelyPaths.slice(0, 4).join(', ')}`);
   }
 
   return lines.join('\n').trim();
@@ -468,14 +375,14 @@ function buildRequestContext(context = {}) {
     normalizedSelectedFilePath,
   ]);
   const hasWorkspacePath = Boolean(toStringValue(workspacePath));
-  const hasDirectWorkspaceTargets = allowedDirectPaths.length > 0;
-  const evidencePreference = deriveEvidencePreference({
-    intent,
-    focus,
-    directives,
-    hasWorkspacePath,
-    hasDirectWorkspaceTargets,
-  });
+  const artifactPlan = {
+    requiresWorkspaceArtifact: Boolean(context?.artifactPlan?.requiresWorkspaceArtifact),
+    likelyPaths: uniq(
+      Array.isArray(context?.artifactPlan?.likelyPaths)
+        ? context.artifactPlan.likelyPaths
+        : [],
+    ),
+  };
   const initialToolNames = uniqStrings(deriveInitialToolNames({
     prompt,
     intent,
@@ -483,24 +390,22 @@ function buildRequestContext(context = {}) {
     directives,
     explicitPaths,
     hasWorkspacePath,
-    evidencePreference,
     hasFocusedSymbols: promptIdentifierHints.length > 0,
+    requiresWorkspaceArtifact: artifactPlan.requiresWorkspaceArtifact,
   }));
-  const prefersReferenceTools = focus.mentionsCompanyReference || evidencePreference !== 'workspace';
   const narrowingPreferred = Boolean(
     hasWorkspacePath
       && promptIdentifierHints.length > 0
       && !intent.wantsChanges
       && !intent.wantsExecution
+      && !artifactPlan.requiresWorkspaceArtifact
       && allowedDirectPaths.length === 0,
   );
-  const searchHints = uniqStrings(context.searchHints, 8);
   const symbolHints = uniqStrings([
     ...promptIdentifierHints,
     ...(Array.isArray(context.symbolHints) ? context.symbolHints : []),
   ], 6);
-  const rewriteNotes = toStringValue(context.rewriteNotes).slice(0, 240);
-  const semanticConfidence = toStringValue(context.semanticConfidence);
+  const searchTerms = uniqStrings(Array.isArray(context.searchTerms) ? context.searchTerms : [], 6);
 
   return {
     prompt: toStringValue(prompt),
@@ -512,13 +417,10 @@ function buildRequestContext(context = {}) {
     focus,
     directives,
     languageProfile,
-    evidencePreference,
-    prefersReferenceTools,
     narrowingPreferred,
-    searchHints,
     symbolHints,
-    rewriteNotes,
-    semanticConfidence,
+    searchTerms,
+    artifactPlan,
     initialToolNames,
     summary: summarizeRequestContext({
       explicitPaths,
@@ -527,13 +429,10 @@ function buildRequestContext(context = {}) {
       focus,
       directives,
       languageProfile,
-      evidencePreference,
-      prefersReferenceTools,
       narrowingPreferred,
-      searchHints,
       symbolHints,
-      rewriteNotes,
-      semanticConfidence,
+      searchTerms,
+      artifactPlan,
       initialToolNames,
     }),
   };
@@ -552,34 +451,6 @@ function createRunRequestContext({ prompt = '', workspacePath = '', selectedFile
   });
 }
 
-function applySemanticAnalysis(context = {}, analysis = {}) {
-  const nextIntent = mergeBooleanFlags(
-    normalizeIntent(context.intent),
-    normalizeIntent(analysis.intent),
-    ['wantsChanges', 'wantsExecution', 'wantsAnalysis', 'createLikely', 'compareLikely'],
-  );
-  const nextFocus = mergeBooleanFlags(
-    normalizeFocus(context.focus),
-    normalizeFocus(analysis.focus),
-    ['mentionsCompanyReference', 'mentionsConfig', 'mentionsTodo', 'mentionsRuntimeTask', 'mentionsWiki'],
-  );
-  return buildRequestContext({
-    ...context,
-    intent: nextIntent,
-    focus: nextFocus,
-    searchHints: uniqStrings([
-      ...(Array.isArray(context.searchHints) ? context.searchHints : []),
-      ...(Array.isArray(analysis.searchTerms) ? analysis.searchTerms : []),
-    ], 8),
-    symbolHints: uniqStrings([
-      ...(Array.isArray(context.symbolHints) ? context.symbolHints : []),
-      ...(Array.isArray(analysis.symbolHints) ? analysis.symbolHints : []),
-    ], 6),
-    rewriteNotes: toStringValue(analysis.notes || context.rewriteNotes).slice(0, 240),
-    semanticConfidence: toStringValue(analysis.confidence || context.semanticConfidence),
-  });
-}
-
 function processUserInput({ prompt = '', workspacePath = '', selectedFilePath = '' } = {}) {
   return createRunRequestContext({
     prompt,
@@ -589,7 +460,8 @@ function processUserInput({ prompt = '', workspacePath = '', selectedFilePath = 
 }
 
 module.exports = {
+  buildRequestContext,
+  createRunRequestContext,
   processUserInput,
-  applySemanticAnalysis,
   summarizeRequestContext,
 };
