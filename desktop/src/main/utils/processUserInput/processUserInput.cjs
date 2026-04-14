@@ -1,8 +1,6 @@
 const path = require('node:path');
 
 const TOOL_GROUPS = {
-  always: [],
-  runtime_read: [],
   todo: [
     'todo_read',
     'todo_write',
@@ -243,7 +241,6 @@ function deriveInitialToolNames({
   hasFocusedSymbols = false,
 } = {}) {
   const names = new Set();
-  addTools(names, TOOL_GROUPS.always);
   if (focus.mentionsConfig) {
     addTools(names, TOOL_GROUPS.config);
   }
