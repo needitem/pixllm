@@ -6,8 +6,11 @@
     fetchHealth,
     fetchRun,
     fetchRuns,
+    fetchWikiContext,
+    readWikiPage,
     rejectRun,
     resumeRun,
+    searchWiki,
     type StreamAssistantMessagePayload,
     streamLocalAgentChat,
     type StreamCancelledPayload,
@@ -27,7 +30,10 @@
     type RunStep,
     type RunTask,
     type StreamDonePayload,
-    type StreamStatusPayload
+    type StreamStatusPayload,
+    type WikiPage,
+    type WikiSearchResult,
+    writeWikiPage
   } from './lib/api';
   import { desktop } from './lib/bridge';
   import { desktopSettings } from './lib/store';
@@ -191,6 +197,23 @@
   let localToolError = '';
   let localPrimaryFilePath = '';
   let localPrimaryFileContent = '';
+  let wikiQuery = '';
+  let wikiResults: WikiSearchResult[] = [];
+  let wikiSelectedPath = '';
+  let wikiPageTitle = '';
+  let wikiPageKind = '';
+  let wikiPageContent = '';
+  let wikiPageSummary = '';
+  let wikiPageUpdatedAt = '';
+  let wikiBusy = false;
+  let wikiSaving = false;
+  let wikiStatusMessage = '';
+  let wikiErrorMessage = '';
+  let wikiOriginalSignature = '';
+  let wikiDirty = false;
+  let resolvedSharedWikiId = 'engine';
+  let wikiLoadKey = '';
+  let lastWikiLoadKey = '';
 
   let chatInput = '';
   const includeWorkspaceContext = true;
@@ -247,6 +270,8 @@
     workspaceDirtyCount,
     workspaceDiffCount
   );
+  $: resolvedSharedWikiId = resolveSharedWikiId(settings.sharedWikiId);
+  $: wikiDirty = wikiEditorSignature() !== wikiOriginalSignature;
   $: connectionHostLabel = compactEndpoint(settings.serverBaseUrl);
   $: appBuildLabel = appInfo
     ? `v${appInfo.version}${appInfo.isPackaged ? '' : ' · dev'}`
@@ -296,6 +321,13 @@
       conversationScroller?.scrollTo({ top: conversationScroller.scrollHeight, behavior: 'auto' });
     });
   }
+  $: wikiLoadKey = viewMode === 'main'
+    ? `${String(settings.serverBaseUrl || '').trim()}|${resolvedSharedWikiId}`
+    : '';
+  $: if (wikiLoadKey && wikiLoadKey !== lastWikiLoadKey) {
+    lastWikiLoadKey = wikiLoadKey;
+    void refreshWikiContext();
+  }
 
   function getWorkspaceName(workspacePath: string): string {
     if (!workspacePath) return 'Reference mode';
@@ -317,6 +349,15 @@
       .replace(/^https?:\/\//i, '')
       .replace(/\/api\/?$/i, '')
       .trim();
+  }
+
+  function resolveSharedWikiId(value: string): string {
+    const normalized = String(value || '').trim().toLowerCase();
+    if (!normalized) return 'engine';
+    if (['company_reference', 'company-reference', 'reference', 'shared_reference'].includes(normalized)) {
+      return 'engine';
+    }
+    return normalized;
   }
 
   function formatDateTime(value: string | Date | null | undefined): string {
@@ -373,6 +414,159 @@
     const text = String(value || '').trim();
     if (!text) return 'No prompt recorded.';
     return text.length > limit ? `${text.slice(0, limit - 3)}...` : text;
+  }
+
+  function wikiEditorSignature() {
+    return JSON.stringify([
+      wikiSelectedPath,
+      wikiPageTitle,
+      wikiPageKind,
+      wikiPageContent
+    ]);
+  }
+
+  function applyWikiPage(page: WikiPage | null | undefined) {
+    wikiSelectedPath = String(page?.path || '').trim();
+    wikiPageTitle = String(page?.title || '').trim();
+    wikiPageKind = String(page?.kind || '').trim();
+    wikiPageContent = String(page?.content || '');
+    wikiPageSummary = String(page?.summary || '').trim();
+    wikiPageUpdatedAt = String(page?.updated_at || '').trim();
+    wikiOriginalSignature = wikiEditorSignature();
+  }
+
+  function clearWikiEditor(defaultPath = 'pages/topics/new-note.md') {
+    wikiSelectedPath = defaultPath;
+    wikiPageTitle = '';
+    wikiPageKind = 'topic';
+    wikiPageContent = '# New Page\n';
+    wikiPageSummary = '';
+    wikiPageUpdatedAt = '';
+    wikiOriginalSignature = wikiEditorSignature();
+  }
+
+  function mergeWikiResults(primary: WikiSearchResult[] = [], secondary: WikiSearchResult[] = []) {
+    const seen = new Set<string>();
+    const output: WikiSearchResult[] = [];
+    for (const item of [...primary, ...secondary]) {
+      const pathValue = String(item?.path || '').trim();
+      if (!pathValue || seen.has(pathValue)) continue;
+      seen.add(pathValue);
+      output.push(item);
+    }
+    return output;
+  }
+
+  async function openWikiPage(pathValue: string, options?: { preserveStatus?: boolean }) {
+    const targetPath = String(pathValue || '').trim();
+    if (!targetPath || !settings.serverBaseUrl.trim()) return;
+    wikiBusy = true;
+    wikiErrorMessage = '';
+    if (!options?.preserveStatus) {
+      wikiStatusMessage = '';
+    }
+    try {
+      const page = await readWikiPage(settings.serverBaseUrl, settings.apiToken, resolvedSharedWikiId, targetPath);
+      applyWikiPage(page);
+    } catch (error) {
+      wikiErrorMessage = error instanceof Error ? error.message : String(error);
+    } finally {
+      wikiBusy = false;
+    }
+  }
+
+  async function refreshWikiContext(selectPath = wikiSelectedPath) {
+    if (!settings.serverBaseUrl.trim()) return;
+    wikiBusy = true;
+    wikiErrorMessage = '';
+    wikiStatusMessage = '';
+    try {
+      const result = await fetchWikiContext(settings.serverBaseUrl, settings.apiToken, resolvedSharedWikiId);
+      wikiResults = mergeWikiResults(result.coordination_pages || [], result.pages || []).slice(0, 48);
+      const nextPath = selectPath || wikiResults[0]?.path || '';
+      if (nextPath) {
+        await openWikiPage(nextPath, { preserveStatus: true });
+      } else {
+        clearWikiEditor();
+      }
+    } catch (error) {
+      wikiErrorMessage = error instanceof Error ? error.message : String(error);
+    } finally {
+      wikiBusy = false;
+    }
+  }
+
+  async function runWikiSearch() {
+    if (!settings.serverBaseUrl.trim()) return;
+    const query = wikiQuery.trim();
+    if (!query) {
+      await refreshWikiContext(wikiSelectedPath);
+      return;
+    }
+    wikiBusy = true;
+    wikiErrorMessage = '';
+    wikiStatusMessage = '';
+    try {
+      const result = await searchWiki(
+        settings.serverBaseUrl,
+        settings.apiToken,
+        resolvedSharedWikiId,
+        query,
+        24,
+        false
+      );
+      wikiResults = Array.isArray(result.results) ? result.results : [];
+      if (wikiResults[0]?.path) {
+        await openWikiPage(wikiResults[0].path, { preserveStatus: true });
+      }
+    } catch (error) {
+      wikiErrorMessage = error instanceof Error ? error.message : String(error);
+    } finally {
+      wikiBusy = false;
+    }
+  }
+
+  function createWikiPage() {
+    wikiErrorMessage = '';
+    wikiStatusMessage = '';
+    clearWikiEditor();
+  }
+
+  async function saveWikiEditor() {
+    if (!settings.serverBaseUrl.trim()) return;
+    const targetPath = wikiSelectedPath.trim();
+    if (!targetPath) {
+      wikiErrorMessage = 'Page path is required.';
+      return;
+    }
+    wikiSaving = true;
+    wikiErrorMessage = '';
+    wikiStatusMessage = '';
+    try {
+      const page = await writeWikiPage(
+        settings.serverBaseUrl,
+        settings.apiToken,
+        resolvedSharedWikiId,
+        targetPath,
+        wikiPageContent,
+        wikiPageTitle,
+        wikiPageKind
+      );
+      applyWikiPage(page);
+      wikiStatusMessage = `Saved ${page.path || targetPath}`;
+      await refreshWikiContext(page.path || targetPath);
+    } catch (error) {
+      wikiErrorMessage = error instanceof Error ? error.message : String(error);
+    } finally {
+      wikiSaving = false;
+    }
+  }
+
+  function handleWikiSearchKeydown(event: KeyboardEvent) {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      void runWikiSearch();
+    }
   }
 
   function summarizeTransition(payload?: StreamTransitionPayload): string {
@@ -3125,6 +3319,113 @@
             </aside>
           </div>
 
+          <section class="panel wiki-workspace-panel">
+            <div class="panel-head">
+              <div>
+                <div class="section-title">Shared Wiki</div>
+                <div class="muted small">Browse, edit, and save shared markdown pages from the desktop app.</div>
+              </div>
+              <div class="panel-head-meta">
+                <span class="pill neutral">{resolvedSharedWikiId}</span>
+                <button class="secondary" on:click={() => refreshWikiContext()} disabled={wikiBusy || wikiSaving}>
+                  Refresh
+                </button>
+                <button class="secondary" on:click={createWikiPage} disabled={wikiBusy || wikiSaving}>
+                  New
+                </button>
+                <button class="primary" on:click={saveWikiEditor} disabled={wikiBusy || wikiSaving || !wikiDirty}>
+                  {wikiSaving ? 'Saving…' : 'Save'}
+                </button>
+              </div>
+            </div>
+
+            <div class="wiki-toolbar">
+              <label class="field wiki-search-field">
+                <span>Search</span>
+                <input
+                  bind:value={wikiQuery}
+                  placeholder="Search page title, path, or content"
+                  on:keydown={handleWikiSearchKeydown}
+                />
+              </label>
+              <button class="secondary" on:click={runWikiSearch} disabled={wikiBusy || wikiSaving}>
+                {wikiBusy ? 'Loading…' : 'Search'}
+              </button>
+              <button class="secondary" on:click={() => { wikiQuery = ''; void refreshWikiContext(wikiSelectedPath); }} disabled={wikiBusy || wikiSaving}>
+                Browse
+              </button>
+            </div>
+
+            {#if wikiErrorMessage}
+              <div class="error-box">{wikiErrorMessage}</div>
+            {/if}
+            {#if wikiStatusMessage}
+              <div class="status-copy">{wikiStatusMessage}</div>
+            {/if}
+
+            <div class="wiki-workspace-grid">
+              <div class="wiki-results-pane">
+                <div class="section-title">Pages</div>
+                {#if wikiResults.length > 0}
+                  <div class="wiki-result-list">
+                    {#each wikiResults as page}
+                      <button
+                        class={`wiki-result-item ${wikiSelectedPath === page.path ? 'selected' : ''}`}
+                        on:click={() => openWikiPage(page.path)}
+                        title={page.path}
+                      >
+                        <div class="wiki-result-title">{page.title || getPathTail(page.path, 2)}</div>
+                        <div class="wiki-result-path">{page.path}</div>
+                        <div class="wiki-result-meta">
+                          <span class="pill neutral">{page.kind || 'page'}</span>
+                          {#if page.updated_at}
+                            <span class="muted small">{formatDateTime(page.updated_at)}</span>
+                          {/if}
+                        </div>
+                      </button>
+                    {/each}
+                  </div>
+                {:else}
+                  <div class="empty-state compact-empty">No wiki pages available.</div>
+                {/if}
+              </div>
+
+              <div class="wiki-editor-pane">
+                <div class="wiki-meta-grid">
+                  <label class="field">
+                    <span>Path</span>
+                    <input bind:value={wikiSelectedPath} placeholder="pages/topics/new-note.md" />
+                  </label>
+                  <label class="field">
+                    <span>Title</span>
+                    <input bind:value={wikiPageTitle} placeholder="Page title" />
+                  </label>
+                  <label class="field">
+                    <span>Kind</span>
+                    <input bind:value={wikiPageKind} placeholder="topic" />
+                  </label>
+                  <div class="wiki-meta-readout">
+                    <span>Updated</span>
+                    <strong>{wikiPageUpdatedAt ? formatDateTime(wikiPageUpdatedAt) : 'Unsaved page'}</strong>
+                  </div>
+                </div>
+
+                {#if wikiPageSummary}
+                  <div class="wiki-summary">{wikiPageSummary}</div>
+                {/if}
+
+                <label class="field wiki-editor-field">
+                  <span>Content</span>
+                  <textarea
+                    bind:value={wikiPageContent}
+                    rows="18"
+                    placeholder="Write markdown here"
+                  ></textarea>
+                </label>
+              </div>
+            </div>
+          </section>
+
           <section class="composer-dock panel composer-panel">
             <div class="panel-head composer-head">
               <div>
@@ -4863,6 +5164,146 @@
     align-content: start;
   }
 
+  .wiki-workspace-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    min-height: 0;
+  }
+
+  .wiki-toolbar {
+    display: flex;
+    gap: 10px;
+    align-items: end;
+  }
+
+  .wiki-search-field {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .wiki-workspace-grid {
+    display: grid;
+    grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
+    gap: 14px;
+    min-height: 0;
+  }
+
+  .wiki-results-pane,
+  .wiki-editor-pane {
+    min-width: 0;
+    min-height: 0;
+    border: 1px solid rgba(148, 163, 184, 0.14);
+    border-radius: 18px;
+    background: rgba(8, 14, 24, 0.68);
+    padding: 14px;
+  }
+
+  .wiki-results-pane {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .wiki-result-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-height: 520px;
+    overflow: auto;
+  }
+
+  .wiki-result-item {
+    width: 100%;
+    text-align: left;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    border-radius: 14px;
+    border: 1px solid rgba(148, 163, 184, 0.14);
+    background: rgba(10, 18, 30, 0.88);
+    padding: 12px;
+  }
+
+  .wiki-result-item.selected {
+    border-color: rgba(35, 199, 161, 0.55);
+    box-shadow: 0 0 0 1px rgba(35, 199, 161, 0.24);
+  }
+
+  .wiki-result-title {
+    font-size: 0.97rem;
+    font-weight: 600;
+    color: #f8fafc;
+  }
+
+  .wiki-result-path {
+    font-size: 0.79rem;
+    color: rgba(148, 163, 184, 0.92);
+    word-break: break-all;
+  }
+
+  .wiki-result-meta {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    align-items: center;
+  }
+
+  .wiki-editor-pane {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .wiki-meta-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.8fr) minmax(0, 1.2fr) minmax(140px, 0.8fr) minmax(150px, 0.9fr);
+    gap: 10px;
+    align-items: end;
+  }
+
+  .wiki-meta-readout {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 10px 12px;
+    border-radius: 14px;
+    border: 1px solid rgba(148, 163, 184, 0.14);
+    background: rgba(10, 18, 30, 0.72);
+    min-height: 44px;
+  }
+
+  .wiki-meta-readout span {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: rgba(148, 163, 184, 0.85);
+  }
+
+  .wiki-meta-readout strong {
+    font-size: 0.88rem;
+    color: #f8fafc;
+  }
+
+  .wiki-summary {
+    padding: 10px 12px;
+    border-radius: 14px;
+    background: rgba(17, 119, 199, 0.12);
+    color: rgba(226, 232, 240, 0.94);
+    font-size: 0.88rem;
+  }
+
+  .wiki-editor-field {
+    min-height: 0;
+  }
+
+  .wiki-editor-field textarea {
+    min-height: 420px;
+    resize: vertical;
+    font-family: "Cascadia Code", "JetBrains Mono", monospace;
+    line-height: 1.45;
+  }
+
   .insight-subsection {
     display: grid;
     gap: 10px;
@@ -5067,6 +5508,14 @@
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
+    .wiki-workspace-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .wiki-meta-grid {
+      grid-template-columns: 1fr 1fr;
+    }
+
     .hero-actions,
     .panel-head-meta {
       justify-content: flex-start;
@@ -5082,6 +5531,11 @@
     .hero-metrics,
     .insight-rail {
       grid-template-columns: 1fr;
+    }
+
+    .wiki-toolbar {
+      flex-direction: column;
+      align-items: stretch;
     }
   }
 
@@ -5122,6 +5576,10 @@
     .composer-actions {
       flex-direction: column;
       align-items: stretch;
+    }
+
+    .wiki-meta-grid {
+      grid-template-columns: 1fr;
     }
   }
 </style>

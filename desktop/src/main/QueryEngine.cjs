@@ -2308,24 +2308,52 @@ class QueryEngine {
         const assistantBlocks = parsed.blocks;
         const assistantText = extractTextFromBlocks(assistantBlocks);
         const toolUses = toolUseBlocks(assistantBlocks);
+        const draftVerificationAllowedTools = new Set(['read_file', 'write', 'edit', 'notebook_edit']);
+        const disallowedDraftVerificationTools = (
+          this.state.phaseLock?.kind === 'draft_verification'
+            ? toolUses.filter((item) => !draftVerificationAllowedTools.has(toStringValue(item?.name)))
+            : []
+        );
         if (
           this.state.phaseLock?.kind === 'draft_verification'
-          && toolUses.length === 0
+          && (toolUses.length === 0 || disallowedDraftVerificationTools.length > 0)
         ) {
           const targetPaths = Array.isArray(this.state.phaseLock.targetPaths) ? this.state.phaseLock.targetPaths : [];
           this._pushMetaUserMessage(
-            targetPaths.length > 0
-              ? `Do not summarize yet. Read and patch ${targetPaths[0]} directly. Reply only with read_file, edit, or write tool calls until verification passes.`
-              : 'Do not summarize yet. Reply only with read_file, edit, or write tool calls until verification passes.',
+            disallowedDraftVerificationTools.length > 0
+              ? (
+                targetPaths.length > 0
+                  ? `Do not use ${disallowedDraftVerificationTools.map((item) => toStringValue(item?.name)).filter(Boolean).join(', ')} during verification repair. Read and patch ${targetPaths[0]} directly. Reply only with read_file, edit, or write tool calls until verification passes.`
+                  : `Do not use ${disallowedDraftVerificationTools.map((item) => toStringValue(item?.name)).filter(Boolean).join(', ')} during verification repair. Reply only with read_file, edit, or write tool calls until verification passes.`
+              )
+              : (
+                targetPaths.length > 0
+                  ? `Do not summarize yet. Read and patch ${targetPaths[0]} directly. Reply only with read_file, edit, or write tool calls until verification passes.`
+                  : 'Do not summarize yet. Reply only with read_file, edit, or write tool calls until verification passes.'
+              ),
             {
               turn,
-              hook: 'draft_verification_tool_only',
+              hook: disallowedDraftVerificationTools.length > 0
+                ? 'draft_verification_restricted_tool'
+                : 'draft_verification_tool_only',
               targetPaths: targetPaths.slice(0, 4),
+              disallowedTools: disallowedDraftVerificationTools
+                .map((item) => toStringValue(item?.name))
+                .filter(Boolean)
+                .slice(0, 4),
             },
           );
-          this._recordTransition('draft_verification_tool_only', {
+          this._recordTransition(
+            disallowedDraftVerificationTools.length > 0
+              ? 'draft_verification_restricted_tool'
+              : 'draft_verification_tool_only',
+            {
             turn,
             targetPaths: targetPaths.slice(0, 4),
+            disallowedTools: disallowedDraftVerificationTools
+              .map((item) => toStringValue(item?.name))
+              .filter(Boolean)
+              .slice(0, 4),
           });
           this._persistState();
           continue;

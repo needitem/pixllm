@@ -1,4 +1,6 @@
 import re
+from functools import lru_cache
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -7,6 +9,7 @@ from ..retrieval.service import run_retrieval
 from ...core.policy import SecurityPolicy
 from .access import register_code_search, register_doc_search, resolve_tool_user_context
 from .code_runtime import read_code_lines
+from .query_terms import extract_symbol_query_candidates
 from .query_strategy import expand_line_window, parse_line_range
 from .support import build_citations, clamp_int, dedupe_doc_items, normalize_doc_item, qdrant_point_id
 from .wiki_runtime import search_wiki
@@ -14,6 +17,465 @@ from .wiki_runtime import search_wiki
 _WIKI_SOURCE_REF_RE = re.compile(r"\b(Source/[^`:\s]+):(\d+)(?:-(\d+))?\b")
 _BACKTICK_TOKEN_RE = re.compile(r"`([^`]+)`")
 _TYPE_LIKE_RE = re.compile(r"^(?:[A-Z][A-Za-z0-9_]*|e[A-Z][A-Za-z0-9_]*)$")
+_LOOKUP_TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_.]*")
+_LOOKUP_QUALIFIED_RE = re.compile(r"\b([A-Z][A-Za-z0-9_]*)[.:]([A-Za-z_][A-Za-z0-9_]*)\b")
+_SECTION_HEADING_RE = re.compile(r"^##\s+(.+?)\s*$")
+_WORKFLOW_STEP_RE = re.compile(r"^\s*(\d+)\.\s+(.*)$")
+_STEP_OUTPUT_TYPE_RE = re.compile(r"\bto get\s+([A-Z][A-Za-z0-9_]*)\b", re.IGNORECASE)
+_METHODS_DOC_STEM_PREFIX = "Methods_T_"
+_QUERY_FILLER_TOKENS = {
+    "api",
+    "bool",
+    "code",
+    "declaration",
+    "example",
+    "examples",
+    "method",
+    "methods",
+    "path",
+    "property",
+    "ref",
+    "signature",
+    "string",
+    "top",
+}
+_LOOKUP_HINT_TOKENS = {
+    "api",
+    "constructor",
+    "declaration",
+    "enum",
+    "member",
+    "method",
+    "overload",
+    "property",
+    "ref",
+    "signature",
+}
+
+
+def _methods_wiki_root() -> Path:
+    return Path(__file__).resolve().parents[3] / ".profiles" / "wiki" / "engine" / "methods"
+
+
+def _workflow_wiki_root() -> Path:
+    return _methods_wiki_root().parent / "workflows"
+
+
+def _normalize_lookup_token(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").strip().lower())
+
+
+@lru_cache(maxsize=1)
+def _load_methods_api_index() -> List[Dict[str, Any]]:
+    root = _methods_wiki_root()
+    if not root.exists():
+        return []
+
+    records: List[Dict[str, Any]] = []
+    engine_wiki_root = root.parent
+    for path in sorted(root.glob(f"{_METHODS_DOC_STEM_PREFIX}*.md")):
+        try:
+            text = path.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        lines = text.splitlines()
+        section_starts = [
+            index
+            for index, raw_line in enumerate(lines)
+            if _SECTION_HEADING_RE.match(str(raw_line or ""))
+        ]
+        stem = path.stem
+        if not stem.startswith(_METHODS_DOC_STEM_PREFIX):
+            continue
+        qualified_type = stem[len(_METHODS_DOC_STEM_PREFIX) :].replace("_", ".")
+        type_name = qualified_type.split(".")[-1]
+        relative_doc_path = path.relative_to(engine_wiki_root).as_posix()
+
+        for section_index, start in enumerate(section_starts):
+            match = _SECTION_HEADING_RE.match(lines[start])
+            member_name = str(match.group(1) if match else "").strip()
+            if not member_name or member_name.lower() == "overview":
+                continue
+            end = section_starts[section_index + 1] if section_index + 1 < len(section_starts) else len(lines)
+            section_lines = lines[start:end]
+            section_text = "\n".join(section_lines).strip()
+            if not section_text:
+                continue
+            source_refs = [
+                {
+                    "path": str(ref_match.group(1) or "").strip().replace("\\", "/"),
+                    "line_range": (
+                        f"{max(1, int(ref_match.group(2) or 1))}-{max(max(1, int(ref_match.group(2) or 1)), int(ref_match.group(3) or ref_match.group(2) or 1))}"
+                    ),
+                }
+                for ref_match in _WIKI_SOURCE_REF_RE.finditer(section_text)
+            ]
+            records.append(
+                {
+                    "qualified_type": qualified_type,
+                    "type_name": type_name,
+                    "member_name": member_name,
+                    "qualified_symbol": f"{qualified_type}.{member_name}",
+                    "doc_path": relative_doc_path,
+                    "heading_path": f"{qualified_type} Methods > {member_name}",
+                    "text": section_text,
+                    "source_refs": source_refs,
+                }
+            )
+    return records
+
+
+def _extract_lookup_targets(
+    query: str,
+    records: Sequence[Dict[str, Any]],
+) -> Dict[str, Any]:
+    source = str(query or "").strip()
+    lowered = source.lower()
+    type_lookup = {}
+    for record in records or []:
+        type_lookup[_normalize_lookup_token(record.get("type_name"))] = str(record.get("type_name") or "")
+        type_lookup[_normalize_lookup_token(record.get("qualified_type"))] = str(record.get("qualified_type") or "")
+
+    type_candidates: List[str] = []
+    member_candidates: List[str] = []
+    seen_types = set()
+    seen_members = set()
+    explicit_pairs = []
+
+    for match in _LOOKUP_QUALIFIED_RE.finditer(source):
+        explicit_pairs.append((str(match.group(1) or "").strip(), str(match.group(2) or "").strip()))
+
+    raw_tokens = [str(token or "").strip() for token in _LOOKUP_TOKEN_RE.findall(source)]
+    symbol_tokens = extract_symbol_query_candidates(source, max_candidates=8)
+    for type_name, member_name in explicit_pairs:
+        normalized_type = _normalize_lookup_token(type_name)
+        normalized_member = _normalize_lookup_token(member_name)
+        resolved_type = type_lookup.get(normalized_type, type_name)
+        if resolved_type and normalized_type not in seen_types:
+            type_candidates.append(resolved_type.split(".")[-1])
+            seen_types.add(normalized_type)
+        if member_name and normalized_member not in seen_members:
+            member_candidates.append(member_name)
+            seen_members.add(normalized_member)
+
+    lookup_hints = any(token in lowered for token in _LOOKUP_HINT_TOKENS)
+    for token in [*symbol_tokens, *raw_tokens]:
+        normalized = _normalize_lookup_token(token)
+        if not normalized or normalized in _QUERY_FILLER_TOKENS:
+            continue
+        resolved_type = type_lookup.get(normalized, "")
+        if resolved_type:
+            if normalized not in seen_types:
+                type_candidates.append(resolved_type.split(".")[-1])
+                seen_types.add(normalized)
+            continue
+        if normalized not in seen_members and (
+            lookup_hints
+            or explicit_pairs
+            or _TYPE_LIKE_RE.match(token)
+        ):
+            member_candidates.append(token)
+            seen_members.add(normalized)
+
+    is_specific_lookup = bool(
+        explicit_pairs
+        or (lookup_hints and type_candidates and member_candidates)
+        or (type_candidates and member_candidates and len(type_candidates) + len(member_candidates) <= 4)
+    )
+    return {
+        "type_candidates": type_candidates[:4],
+        "member_candidates": member_candidates[:6],
+        "is_specific_lookup": is_specific_lookup,
+    }
+
+
+def _build_lookup_source_excerpt(record: Dict[str, Any], *, section_index: int) -> Dict[str, Any]:
+    symbols = [
+        str(record.get("type_name") or ""),
+        str(record.get("member_name") or ""),
+        str(record.get("qualified_symbol") or ""),
+    ]
+    return {
+        "chunk_id": f"wiki:{record.get('doc_path')}#section-{section_index}",
+        "doc_id": f"wiki:{record.get('doc_path')}",
+        "source_url": str(record.get("doc_path") or ""),
+        "file_path": str(record.get("doc_path") or ""),
+        "heading_path": str(record.get("heading_path") or ""),
+        "paragraph_range": f"section:{section_index}",
+        "text": str(record.get("text") or ""),
+        "truncated": False,
+        "title": f"{record.get('qualified_type')} Methods",
+        "symbols": [item for item in symbols if item],
+        "tags": ["engine", "methods", "api"],
+    }
+
+
+def _unique_preserve_order(values: Sequence[str]) -> List[str]:
+    output: List[str] = []
+    seen = set()
+    for item in values or []:
+        normalized = str(item or "").strip()
+        if not normalized:
+            continue
+        key = normalized.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        output.append(normalized)
+    return output
+
+
+def _extract_workflow_member_candidates(step_text: str, known_types: Dict[str, str]) -> List[Dict[str, str]]:
+    candidates: List[Dict[str, str]] = []
+    seen = set()
+
+    def _append(member_name: str, type_name: str = "") -> None:
+        normalized_member = _normalize_lookup_token(member_name)
+        normalized_type = _normalize_lookup_token(type_name)
+        key = (normalized_type, normalized_member)
+        if not normalized_member or key in seen:
+            return
+        seen.add(key)
+        candidates.append({
+            "type_name": str(type_name or "").strip(),
+            "member_name": str(member_name or "").strip(),
+        })
+
+    for raw_token in _BACKTICK_TOKEN_RE.findall(str(step_text or "")):
+        token = str(raw_token or "").strip()
+        if not token:
+            continue
+        qualified_match = _LOOKUP_QUALIFIED_RE.search(token)
+        if qualified_match:
+            _append(qualified_match.group(2), qualified_match.group(1))
+            continue
+        call_match = re.match(r"([A-Za-z_][A-Za-z0-9_]*)\s*\(", token)
+        if call_match:
+            member_name = str(call_match.group(1) or "").strip()
+            if _normalize_lookup_token(member_name) not in known_types:
+                _append(member_name)
+            continue
+        if _TYPE_LIKE_RE.match(token) and _normalize_lookup_token(token) not in known_types:
+            _append(token)
+
+    for call_match in re.finditer(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(", str(step_text or "")):
+        member_name = str(call_match.group(1) or "").strip()
+        if _normalize_lookup_token(member_name) not in known_types:
+            _append(member_name)
+
+    return candidates
+
+
+@lru_cache(maxsize=1)
+def _load_workflow_api_steps() -> List[Dict[str, Any]]:
+    methods_index = _load_methods_api_index()
+    workflow_root = _workflow_wiki_root()
+    if not workflow_root.exists() or not methods_index:
+        return []
+
+    known_types = {}
+    member_to_records: Dict[str, List[Dict[str, Any]]] = {}
+    qualified_to_record: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    for record in methods_index:
+        known_types[_normalize_lookup_token(record.get("type_name"))] = str(record.get("type_name") or "")
+        known_types[_normalize_lookup_token(record.get("qualified_type"))] = str(record.get("type_name") or "")
+        member_to_records.setdefault(_normalize_lookup_token(record.get("member_name")), []).append(record)
+        qualified_to_record[(
+            _normalize_lookup_token(record.get("type_name")),
+            _normalize_lookup_token(record.get("member_name")),
+        )] = record
+
+    steps: List[Dict[str, Any]] = []
+    for path in sorted(workflow_root.glob("*.md")):
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except Exception:
+            continue
+        active_types: List[str] = []
+        relative_doc_path = path.relative_to(workflow_root.parent).as_posix()
+
+        for index, raw_line in enumerate(lines):
+            match = _WORKFLOW_STEP_RE.match(str(raw_line or ""))
+            if not match:
+                continue
+            step_text = str(match.group(2) or "").strip()
+            explicit_types = _unique_preserve_order([
+                known_types.get(_normalize_lookup_token(token), "")
+                for token in extract_symbol_query_candidates(step_text, max_candidates=12)
+            ])
+            produced_types = _unique_preserve_order([
+                known_types.get(_normalize_lookup_token(group_match.group(1)), str(group_match.group(1) or "").strip())
+                for group_match in _STEP_OUTPUT_TYPE_RE.finditer(step_text)
+            ])
+            member_candidates = _extract_workflow_member_candidates(step_text, known_types)
+            resolved_records: List[Dict[str, Any]] = []
+
+            preferred_types = _unique_preserve_order([*explicit_types, *active_types])
+            for candidate in member_candidates:
+                explicit_type = known_types.get(_normalize_lookup_token(candidate.get("type_name")), str(candidate.get("type_name") or "").strip())
+                member_name = str(candidate.get("member_name") or "").strip()
+                normalized_member = _normalize_lookup_token(member_name)
+                if not normalized_member:
+                    continue
+                if explicit_type:
+                    record = qualified_to_record.get((
+                        _normalize_lookup_token(explicit_type),
+                        normalized_member,
+                    ))
+                    if record:
+                        resolved_records.append(record)
+                        continue
+                method_records = member_to_records.get(normalized_member, [])
+                selected = next(
+                    (
+                        record
+                        for preferred_type in preferred_types
+                        for record in method_records
+                        if _normalize_lookup_token(record.get("type_name")) == _normalize_lookup_token(preferred_type)
+                    ),
+                    None,
+                )
+                if selected is None and len(method_records) == 1:
+                    selected = method_records[0]
+                if selected is not None:
+                    resolved_records.append(selected)
+
+            steps.append({
+                "doc_path": relative_doc_path,
+                "line_index": index,
+                "text": step_text,
+                "explicit_types": explicit_types,
+                "produced_types": produced_types,
+                "resolved_records": _unique_preserve_order([
+                    str(record.get("qualified_symbol") or "")
+                    for record in resolved_records
+                ]),
+                "record_lookup": {
+                    str(record.get("qualified_symbol") or ""): record
+                    for record in resolved_records
+                },
+            })
+            active_types = _unique_preserve_order([*produced_types, *explicit_types, *active_types])[:8]
+    return steps
+
+
+def _derive_workflow_related_records(
+    *,
+    type_candidates: Sequence[str],
+    member_candidates: Sequence[str],
+) -> List[Dict[str, Any]]:
+    type_keys = {_normalize_lookup_token(item) for item in type_candidates or [] if _normalize_lookup_token(item)}
+    member_keys = {_normalize_lookup_token(item) for item in member_candidates or [] if _normalize_lookup_token(item)}
+    if not type_keys and not member_keys:
+        return []
+
+    related_records: List[Dict[str, Any]] = []
+    seen = set()
+    for step in _load_workflow_api_steps():
+        explicit_keys = {_normalize_lookup_token(item) for item in step.get("explicit_types") or []}
+        produced_keys = {_normalize_lookup_token(item) for item in step.get("produced_types") or []}
+        text_key = _normalize_lookup_token(step.get("text") or "")
+        if not (
+            type_keys.intersection(explicit_keys)
+            or type_keys.intersection(produced_keys)
+            or any(member_key and member_key in text_key for member_key in member_keys)
+        ):
+            continue
+        for qualified_symbol in step.get("resolved_records") or []:
+            record = (step.get("record_lookup") or {}).get(qualified_symbol)
+            if not record:
+                continue
+            key = str(record.get("qualified_symbol") or "").strip().lower()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            related_records.append(record)
+    return related_records
+
+
+def build_exact_api_lookup_summary(query: str) -> Optional[Dict[str, Any]]:
+    records = _load_methods_api_index()
+    if not records:
+        return None
+
+    targets = _extract_lookup_targets(query, records)
+    type_candidates = targets["type_candidates"]
+    member_candidates = targets["member_candidates"]
+    if not targets["is_specific_lookup"]:
+        return None
+
+    normalized_types = {_normalize_lookup_token(item) for item in type_candidates}
+    normalized_members = {_normalize_lookup_token(item) for item in member_candidates}
+    exact_records = [
+        record
+        for record in records
+        if (
+            not normalized_types
+            or _normalize_lookup_token(record.get("type_name")) in normalized_types
+            or _normalize_lookup_token(record.get("qualified_type")) in normalized_types
+        )
+        and (
+            normalized_members
+            and _normalize_lookup_token(record.get("member_name")) in normalized_members
+        )
+    ]
+
+    if exact_records:
+        selected_records = exact_records[:4]
+        return {
+            "mode": "exact_api_lookup",
+            "status": "exact_match",
+            "type_candidates": type_candidates,
+            "member_candidates": member_candidates,
+            "matched_api": {
+                "qualified_symbol": str(selected_records[0].get("qualified_symbol") or ""),
+                "type_name": str(selected_records[0].get("type_name") or ""),
+                "member_name": str(selected_records[0].get("member_name") or ""),
+                "source_url": str(selected_records[0].get("doc_path") or ""),
+                "heading_path": str(selected_records[0].get("heading_path") or ""),
+            },
+            "related_apis": [],
+            "negative_evidence": "",
+            "source_records": selected_records,
+        }
+
+    related_records = _derive_workflow_related_records(
+        type_candidates=type_candidates,
+        member_candidates=member_candidates,
+    )
+
+    missing_type = type_candidates[0] if type_candidates else ""
+    missing_member = member_candidates[0] if member_candidates else ""
+    if missing_type and missing_member:
+        negative_evidence = (
+            f"No exact verified API match found for {missing_type}.{missing_member} in the indexed engine methods."
+        )
+    elif missing_member:
+        negative_evidence = (
+            f"No exact verified API match found for member {missing_member} in the indexed engine methods."
+        )
+    else:
+        negative_evidence = "No exact verified API match found in the indexed engine methods."
+
+    return {
+        "mode": "exact_api_lookup",
+        "status": "no_exact_match",
+        "type_candidates": type_candidates,
+        "member_candidates": member_candidates,
+        "matched_api": {},
+        "related_apis": [
+            {
+                "qualified_symbol": str(record.get("qualified_symbol") or ""),
+                "type_name": str(record.get("type_name") or ""),
+                "member_name": str(record.get("member_name") or ""),
+                "source_url": str(record.get("doc_path") or ""),
+                "heading_path": str(record.get("heading_path") or ""),
+            }
+            for record in related_records[:5]
+        ],
+        "negative_evidence": negative_evidence,
+        "source_records": related_records[:5],
+    }
 
 
 async def search_docs(
@@ -475,6 +937,37 @@ async def lookup_sources_and_code(
     doc_open_limit = min(capped_limit, clamp_int(config.CHAT_TOOL_DOC_OPEN_LIMIT, 1, 50))
     code_window_cap = clamp_int(config.CHAT_TOOL_CODE_MAX_WINDOWS, 4, 24)
     active_collection = collection or config.RAG_DEFAULT_COLLECTION
+
+    if str(response_type or "").strip().lower() in {"api_lookup", "exact_api_lookup"}:
+        lookup_summary = build_exact_api_lookup_summary(query)
+        if lookup_summary is not None:
+            source_records = list(lookup_summary.get("source_records") or [])[:doc_open_limit]
+            exact_sources = [
+                _build_lookup_source_excerpt(record, section_index=index + 1)
+                for index, record in enumerate(source_records)
+            ]
+            exact_code_windows = await collect_wiki_anchor_code_windows(
+                redis=redis,
+                session_id=session_id,
+                code_tools=code_tools,
+                doc_chunks=exact_sources,
+                max_chars=max_chars,
+                max_line_span=max_line_span,
+                response_type=response_type,
+                code_window_cap=code_window_cap,
+                search_only=search_only,
+            )
+            return {
+                "query": query,
+                "sources": exact_sources,
+                "code_windows": exact_code_windows,
+                "citations": build_citations(exact_sources, exact_code_windows),
+                "lookup_summary": {
+                    key: value
+                    for key, value in lookup_summary.items()
+                    if key != "source_records"
+                },
+            }
 
     sources = await collect_sources(
         redis=redis,

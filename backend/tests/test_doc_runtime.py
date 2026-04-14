@@ -1,6 +1,7 @@
 import unittest
 
 from backend.app.services.tools.doc_runtime import (
+    build_exact_api_lookup_summary,
     extract_doc_symbol_candidates,
     prioritize_wiki_source_anchors,
     windows_overlap_strongly,
@@ -83,6 +84,20 @@ class DocRuntimeSelectionTests(unittest.TestCase):
         existing = [{"path": "nxdl/source/NXDLio/NXDLio.h", "line_range": "163-233"}]
         candidate = {"path": "nxdl/source/NXDLio/NXDLio.h", "line_range": "187-257"}
         self.assertTrue(windows_overlap_strongly(existing, candidate))
+
+    def test_exact_api_lookup_summary_reports_exact_match(self):
+        summary = build_exact_api_lookup_summary("NXImageView AddImageLayer method signature")
+        self.assertIsNotNone(summary)
+        self.assertEqual(summary["status"], "exact_match")
+        self.assertEqual(summary["matched_api"]["qualified_symbol"], "Pixoneer.NXDL.NXImage.NXImageView.AddImageLayer")
+
+    def test_exact_api_lookup_summary_reports_no_exact_match_with_related_api(self):
+        summary = build_exact_api_lookup_summary("XRSLoadFile Load method signature bool string")
+        self.assertIsNotNone(summary)
+        self.assertEqual(summary["status"], "no_exact_match")
+        related_symbols = [item["qualified_symbol"] for item in summary["related_apis"]]
+        self.assertIn("Pixoneer.NXDL.NIO.XRasterIO.LoadFile", related_symbols)
+        self.assertIn("No exact verified API match found", summary["negative_evidence"])
 
 
 if __name__ == "__main__":

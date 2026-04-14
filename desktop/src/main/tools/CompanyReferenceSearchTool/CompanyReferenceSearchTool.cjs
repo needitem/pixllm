@@ -213,6 +213,16 @@ function normalizeApiFactItem(item) {
   };
 }
 
+function normalizeLookupSummaryItem(item) {
+  return {
+    qualifiedSymbol: toStringValue(item?.qualified_symbol || item?.qualifiedSymbol),
+    typeName: toStringValue(item?.type_name || item?.typeName),
+    memberName: toStringValue(item?.member_name || item?.memberName),
+    sourceUrl: toStringValue(item?.source_url || item?.sourceUrl),
+    headingPath: toStringValue(item?.heading_path || item?.headingPath),
+  };
+}
+
 function CompanyReferenceSearchTool() {
   return defineLocalTool({
     name: 'company_reference_search',
@@ -297,6 +307,22 @@ function CompanyReferenceSearchTool() {
           typeName: stringSchema('Type name'),
           kind: stringSchema('Associated kind hint'),
         }), 'Known engine types observed in the reference results'),
+        search_status: stringSchema('Search outcome such as exact_match, no_exact_match, or broad_match'),
+        matched_api: objectSchema({
+          qualifiedSymbol: stringSchema('Matched qualified API symbol'),
+          typeName: stringSchema('Matched type name'),
+          memberName: stringSchema('Matched member name'),
+          sourceUrl: stringSchema('Matched source URL'),
+          headingPath: stringSchema('Matched source heading path'),
+        }),
+        related_apis: arraySchema(objectSchema({
+          qualifiedSymbol: stringSchema('Suggested related qualified API symbol'),
+          typeName: stringSchema('Suggested related type name'),
+          memberName: stringSchema('Suggested related member name'),
+          sourceUrl: stringSchema('Suggested related source URL'),
+          headingPath: stringSchema('Suggested related source heading path'),
+        }), 'Related verified APIs'),
+        negative_evidence: stringSchema('Explicit negative result when no exact API was found'),
         error: stringSchema('Error code'),
         message: stringSchema('Human-readable status'),
       },
@@ -361,16 +387,30 @@ function CompanyReferenceSearchTool() {
           .map((item) => normalizeDocEvidenceItem(item));
         const citations = (Array.isArray(result?.citations) ? result.citations : [])
           .map((item) => normalizeCitationItem(item));
+        const lookupSummary = result?.lookup_summary && typeof result.lookup_summary === 'object'
+          ? result.lookup_summary
+          : {};
+        const searchStatus = toStringValue(lookupSummary?.status || '');
+        const matchedApi = normalizeLookupSummaryItem(lookupSummary?.matched_api || lookupSummary?.matchedApi);
+        const relatedApis = Array.isArray(lookupSummary?.related_apis || lookupSummary?.relatedApis)
+          ? (lookupSummary.related_apis || lookupSummary.relatedApis)
+            .map((item) => normalizeLookupSummaryItem(item))
+            .filter((item) => item.qualifiedSymbol)
+          : [];
+        const negativeEvidence = toStringValue(lookupSummary?.negative_evidence || lookupSummary?.negativeEvidence);
         const referenceAnchors = extractReferenceAnchors(sources);
         const examples = extractCodeExamples(sources, clampInt(input.max_chars || input.maxChars, 400, 8000, 4000));
-        const hydratedWindows = await hydrateReferenceAnchors({
-          baseUrl,
-          apiToken,
-          sessionId: toStringValue(context.sessionId),
-          anchors: referenceAnchors,
-          maxChars: clampInt(input.max_chars || input.maxChars, 400, 8000, 4000),
-          maxLineSpan: clampInt(input.max_line_span || input.maxLineSpan, 20, 240, 120),
-        });
+        const shouldHydrateAnchors = !searchStatus && windows.length === 0 && referenceAnchors.length > 0;
+        const hydratedWindows = shouldHydrateAnchors
+          ? await hydrateReferenceAnchors({
+            baseUrl,
+            apiToken,
+            sessionId: toStringValue(context.sessionId),
+            anchors: referenceAnchors,
+            maxChars: clampInt(input.max_chars || input.maxChars, 400, 8000, 4000),
+            maxLineSpan: clampInt(input.max_line_span || input.maxLineSpan, 20, 240, 120),
+          })
+          : [];
         const mergedWindows = uniqueBy(
           [...windows, ...hydratedWindows],
           (item) => `${toStringValue(item?.path)}:${toStringValue(item?.lineRange)}`,
@@ -390,6 +430,30 @@ function CompanyReferenceSearchTool() {
         if (apiFacts.length > 0) {
           messageParts.push(`${apiFacts.length} api facts`);
         }
+        if (searchStatus === 'exact_match' && matchedApi.qualifiedSymbol) {
+          messageParts.unshift(`Exact API match: ${matchedApi.qualifiedSymbol}`);
+        } else if (searchStatus === 'no_exact_match') {
+          if (negativeEvidence) {
+            messageParts.unshift(negativeEvidence);
+          }
+          if (relatedApis.length > 0) {
+            messageParts.push(`related APIs: ${relatedApis.map((item) => item.qualifiedSymbol).join(', ')}`);
+          }
+        }
+        const statusMessage = searchStatus === 'exact_match'
+          ? `Exact verified API match: ${matchedApi.qualifiedSymbol || query}`
+          : searchStatus === 'no_exact_match'
+            ? [
+              negativeEvidence || 'No exact verified API match found.',
+              relatedApis.length > 0
+                ? `Related verified APIs: ${relatedApis.map((item) => item.qualifiedSymbol).join(', ')}.`
+                : '',
+            ].filter(Boolean).join(' ')
+            : (
+              messageParts.length > 0
+                ? `Collected ${messageParts.join(', ')} from backend reference sources.`
+                : 'No backend reference evidence matched the query.'
+            );
 
         return {
           ok: true,
@@ -402,9 +466,11 @@ function CompanyReferenceSearchTool() {
           api_facts: apiFacts,
           fact_sheet: factBundle.factSheet,
           known_types: factBundle.knownTypes,
-          message: messageParts.length > 0
-            ? `Collected ${messageParts.join(', ')} from backend reference sources.`
-            : 'No backend reference evidence matched the query.',
+          search_status: searchStatus || 'broad_match',
+          matched_api: matchedApi,
+          related_apis: relatedApis,
+          negative_evidence: negativeEvidence,
+          message: statusMessage,
         };
       } catch (error) {
         return {

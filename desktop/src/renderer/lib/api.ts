@@ -57,6 +57,43 @@ export type ExecutionRun = {
   metadata?: Record<string, unknown>;
 };
 
+export type WikiInfo = {
+  id?: string;
+  name?: string;
+  description?: string;
+  root_path?: string;
+  page_count?: number;
+  updated_at?: string;
+};
+
+export type WikiSearchResult = {
+  path: string;
+  title?: string;
+  kind?: string;
+  summary?: string;
+  excerpt?: string;
+  content?: string;
+  updated_at?: string;
+  score?: number;
+};
+
+export type WikiContextResponse = {
+  wiki?: WikiInfo | null;
+  pages?: WikiSearchResult[];
+  coordination_pages?: WikiSearchResult[];
+};
+
+export type WikiPage = {
+  wiki_id?: string;
+  path: string;
+  title?: string;
+  kind?: string;
+  content?: string;
+  summary?: string;
+  updated_at?: string;
+  version?: number;
+};
+
 export type StreamStatusPayload = {
   phase?: string;
   message?: string;
@@ -214,6 +251,111 @@ export const approveRun = (baseUrl: string, token: string, runId: string, approv
   invokeDesktop<RunApproval>('apiApproveRun', baseUrl, token, runId, approvalId, note);
 export const rejectRun = (baseUrl: string, token: string, runId: string, approvalId: string, note = '') =>
   invokeDesktop<RunApproval>('apiRejectRun', baseUrl, token, runId, approvalId, note);
+
+function toStringValue(value: unknown): string {
+  return String(value || '').trim();
+}
+
+function normalizeBaseUrl(baseUrl: string): string {
+  return toStringValue(baseUrl).replace(/\/$/, '');
+}
+
+function buildHeaders(apiToken: string): Record<string, string> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+  const token = toStringValue(apiToken);
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+    headers['x-api-token'] = token;
+  }
+  return headers;
+}
+
+function buildApiTarget(baseUrl: string, requestPath: string): string {
+  const normalizedBaseUrl = normalizeBaseUrl(baseUrl);
+  const normalizedPath = toStringValue(requestPath);
+  if (/(?:^|\/)api\/v1$/i.test(normalizedBaseUrl) && /^\/v1\//i.test(normalizedPath)) {
+    return `${normalizedBaseUrl}${normalizedPath.slice(3)}`;
+  }
+  return `${normalizedBaseUrl}${normalizedPath}`;
+}
+
+async function backendRequest<T>(baseUrl: string, apiToken: string, requestPath: string, method = 'POST', body?: unknown): Promise<T> {
+  const response = await fetch(buildApiTarget(baseUrl, requestPath), {
+    method,
+    headers: buildHeaders(apiToken),
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const rawText = await response.text();
+  let payload: unknown = null;
+  try {
+    payload = rawText ? JSON.parse(rawText) : null;
+  } catch {
+    throw new Error(rawText || `HTTP ${response.status}`);
+  }
+  const record = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
+  if (!response.ok || record.ok !== true) {
+    const errorRecord = record.error && typeof record.error === 'object' ? record.error as Record<string, unknown> : {};
+    throw new Error(
+      toStringValue(errorRecord.message)
+      || toStringValue(record.message)
+      || rawText
+      || `HTTP ${response.status}`,
+    );
+  }
+  return (record.data ?? {}) as T;
+}
+
+export const fetchWikiContext = (baseUrl: string, token: string, wikiId: string) =>
+  backendRequest<WikiContextResponse>(baseUrl, token, '/v1/wiki/context', 'POST', { wiki_id: toStringValue(wikiId) || 'engine' });
+
+export const searchWiki = (
+  baseUrl: string,
+  token: string,
+  wikiId: string,
+  query: string,
+  limit = 12,
+  includeContent = false,
+  kind = '',
+) =>
+  backendRequest<{ wiki_id?: string; total?: number; results?: WikiSearchResult[] }>(
+    baseUrl,
+    token,
+    '/v1/wiki/search',
+    'POST',
+    {
+      wiki_id: toStringValue(wikiId) || 'engine',
+      query: toStringValue(query),
+      limit,
+      include_content: includeContent,
+      kind: toStringValue(kind),
+    },
+  );
+
+export const readWikiPage = (baseUrl: string, token: string, wikiId: string, path: string) =>
+  backendRequest<WikiPage>(baseUrl, token, '/v1/wiki/page/read', 'POST', {
+    wiki_id: toStringValue(wikiId) || 'engine',
+    path: toStringValue(path),
+  });
+
+export const writeWikiPage = (
+  baseUrl: string,
+  token: string,
+  wikiId: string,
+  path: string,
+  content: string,
+  title = '',
+  kind = '',
+) =>
+  backendRequest<WikiPage>(baseUrl, token, '/v1/wiki/page', 'PUT', {
+    wiki_id: toStringValue(wikiId) || 'engine',
+    path: toStringValue(path),
+    content: String(content || ''),
+    title: toStringValue(title),
+    kind: toStringValue(kind),
+  });
+
 export async function streamLocalAgentChat(
   payload: {
     workspacePath: string;
