@@ -95,6 +95,7 @@
       detail?: unknown;
       timestamp: Date;
     }>;
+    localTranscript?: Array<Record<string, unknown>>;
     localTrace?: LocalToolTraceEntry[];
     localSummary?: string;
     localError?: string;
@@ -267,8 +268,14 @@
   $: visibleExecutionItems = executionItems;
   $: activeExecutionMessageId = executionMessage?.id || '';
   $: if (visibleExecutionItems.length > 0) {
-    if (!visibleExecutionItems.some((item) => item.id === selectedExecutionItemId)) {
-      selectedExecutionItemId = visibleExecutionItems[visibleExecutionItems.length - 1].id;
+    const hasSelectedExecutionItem =
+      Boolean(selectedExecutionItemId)
+      && visibleExecutionItems.some((item) => item.id === selectedExecutionItemId);
+    const userCollapsedActiveExecutionItem =
+      selectedExecutionMessageId === activeExecutionMessageId
+      && selectedExecutionItemId === '';
+    if (!hasSelectedExecutionItem && !userCollapsedActiveExecutionItem) {
+      selectedExecutionItemId = defaultExecutionItemId(visibleExecutionItems);
     }
   } else if (selectedExecutionItemId) {
     selectedExecutionItemId = '';
@@ -535,6 +542,43 @@
     if (record.detail !== undefined) return record.detail;
     if (record.result !== undefined) return record.result;
     return null;
+  }
+
+  function modelDetailPayload(item: ExecutionInspectorItem): unknown {
+    if (item.title === 'Model request payload') {
+      return item.detail;
+    }
+    if (item.title === 'Model response') {
+      const record = isRecord(item.detail) ? item.detail : null;
+      if (!record) return item.detail;
+      const rawText = toNonEmptyString(record.rawText);
+      return rawText || record.payload || record;
+    }
+    if (item.title === 'Model error') {
+      return item.detail;
+    }
+    return null;
+  }
+
+  function modelDetailLabel(item: ExecutionInspectorItem): string {
+    if (item.title === 'Model request payload') return 'Request payload';
+    if (item.title === 'Model response') return 'Model response';
+    if (item.title === 'Model error') return 'Model error';
+    return 'Detail';
+  }
+
+  function executionInputLabel(item: ExecutionInspectorItem): string {
+    return item.title === 'Model request payload' ? 'Request payload' : 'Execution input';
+  }
+
+  function executionResultLabel(item: ExecutionInspectorItem): string {
+    if (item.title === 'Model response') return 'Model response';
+    if (item.title === 'Model error') return 'Model error';
+    return 'Execution detail';
+  }
+
+  function showRawPayloadFallback(item: ExecutionInspectorItem): boolean {
+    return !['Model request payload', 'Model response', 'Model error'].includes(item.title);
   }
 
   function executionDetailMessage(detail: unknown): string {
@@ -1093,6 +1137,26 @@
     return parts.join(' / ') || `${total} execution items`;
   }
 
+  function defaultExecutionItemId(items: ExecutionInspectorItem[]): string {
+    const preferred =
+      items.find((item) => item.title === 'Model response')
+      || items.find((item) => item.title === 'Model error')
+      || items[items.length - 1];
+    return preferred?.id || '';
+  }
+
+  function shouldHideExecutionUpdate(event: { phase?: string; tool?: string }): boolean {
+    const phase = String(event?.phase || '').trim().toLowerCase();
+    return [
+      'tool_use',
+      'tool_result',
+      'assistant_message',
+      'tool_batch_start',
+      'tool_batch_end',
+      'transition',
+    ].includes(phase);
+  }
+
   function buildExecutionInspectorItems(message: ConversationMessage): ExecutionInspectorItem[] {
     if (!hasExecutionData(message)) {
       return [];
@@ -1101,6 +1165,9 @@
     const items: ExecutionInspectorItem[] = [];
 
     for (const [index, event] of (message.statusEvents ?? []).entries()) {
+      if (shouldHideExecutionUpdate(event)) {
+        continue;
+      }
       const subtitleParts = [
         event.phase,
         event.tool,
@@ -1113,14 +1180,8 @@
         badge: 'update',
         tone: toneClass(event.phase || message.state || 'active'),
         detailTitle: `Execution update ${index + 1}`,
-        detail: event.detail ?? {
-          order: index + 1,
-          message: event.message,
-          phase: event.phase || '',
-          tool: event.tool || '',
-          timestamp: event.timestamp.toISOString()
-        },
-        note: event.note || event.message || ''
+        detail: event.detail ?? null,
+        note: ''
       });
     }
 
@@ -1158,6 +1219,36 @@
         detail,
         diffs: diffViewsFromUnknown(detail),
         note: step.thought || ''
+      });
+    }
+
+    for (const [index, entry] of (message.localTranscript ?? []).entries()) {
+      const kind = String(entry?.kind || '');
+      if (!['model_response', 'model_error'].includes(kind)) {
+        continue;
+      }
+      const payload = entry?.payload && typeof entry.payload === 'object' ? entry.payload : entry;
+      const attempt = Number(entry?.attempt || 0);
+      const subtitleParts = [
+        kind.replace(/_/g, ' '),
+        attempt > 0 ? `attempt ${attempt}` : '',
+        typeof entry?.turn === 'number' ? `turn ${entry.turn}` : ''
+      ].filter(Boolean);
+      items.push({
+        id: `${message.id}-transcript-${kind}-${index + 1}`,
+        title:
+          kind === 'model_response'
+            ? 'Model response'
+            : 'Model error',
+        subtitle: subtitleParts.join(' / '),
+        badge: 'model',
+        tone: kind === 'model_error' ? 'danger' : 'neutral',
+        detailTitle:
+          kind === 'model_response'
+            ? 'Raw model response'
+            : 'Model request error',
+        detail: payload,
+        note: ''
       });
     }
 
@@ -1248,6 +1339,9 @@
             input: step?.input && typeof step.input === 'object' ? step.input : {},
             observation: step?.observation ?? null
           }))
+        : [],
+      localTranscript: Array.isArray(item.localTranscript)
+        ? item.localTranscript.filter((entry) => entry && typeof entry === 'object') as Array<Record<string, unknown>>
         : [],
       localSummary: typeof item.localSummary === 'string' ? item.localSummary : undefined,
       localError: typeof item.localError === 'string' ? item.localError : undefined,
@@ -1892,6 +1986,7 @@
                 payload?.answer && !message.content.trim() ? payload.answer : message.content,
               status: undefined,
               state: 'done',
+              localTranscript: Array.isArray(payload?.local_transcript) ? payload.local_transcript : [],
               localTrace: localToolTrace,
               localSummary: localToolSummary,
               localError: '',
@@ -2670,11 +2765,8 @@
                                     </button>
                                     {#if selectedExecutionMessageId === message.id && selectedExecutionItemId === item.id}
                                       <div class="activity-result">
-                                        {#if item.note && item.note !== item.subtitle}
+                                        {#if item.note && item.note !== item.subtitle && item.note !== item.title}
                                           <div class="details-note">{item.note}</div>
-                                        {/if}
-                                        {#if executionDetailMessage(item.detail)}
-                                          <div class="error-box activity-error">{executionDetailMessage(item.detail)}</div>
                                         {/if}
                                         {#if executionDetailList(item.detail, 'mentions').length > 0}
                                           <div class="activity-pill-list">
@@ -2695,15 +2787,21 @@
                                             <pre>{stringifyDetail(executionDetailList(item.detail, 'successfulToolNames'))}</pre>
                                           </details>
                                         {/if}
+                                        {#if modelDetailPayload(item) != null}
+                                          <details class="activity-raw" open>
+                                            <summary>{modelDetailLabel(item)}</summary>
+                                            <pre>{stringifyDetail(modelDetailPayload(item))}</pre>
+                                          </details>
+                                        {/if}
                                         {#if executionInputDetail(item.detail) !== null}
                                           <details class="activity-raw" open>
-                                            <summary>Execution input</summary>
+                                            <summary>{executionInputLabel(item)}</summary>
                                             <pre>{stringifyDetail(executionInputDetail(item.detail))}</pre>
                                           </details>
                                         {/if}
                                         {#if executionResultDetail(item.detail) !== null}
                                           <details class="activity-raw" open>
-                                            <summary>Execution detail</summary>
+                                            <summary>{executionResultLabel(item)}</summary>
                                             <pre>{stringifyDetail(executionResultDetail(item.detail))}</pre>
                                           </details>
                                         {/if}
@@ -2745,10 +2843,12 @@
                                             {/each}
                                           </div>
                                         {/if}
-                                        <details class="activity-raw">
-                                          <summary>Raw payload</summary>
-                                          <pre>{stringifyDetail(item.detail)}</pre>
-                                        </details>
+                                        {#if showRawPayloadFallback(item) && item.detail != null}
+                                          <details class="activity-raw">
+                                            <summary>Raw payload</summary>
+                                            <pre>{stringifyDetail(item.detail)}</pre>
+                                          </details>
+                                        {/if}
                                       </div>
                                     {/if}
                                   </div>

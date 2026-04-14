@@ -393,6 +393,29 @@ function summarizeObservation(toolName, observation, maxChars = 16000) {
           truncated: Boolean(item?.truncated),
         }))
         : [],
+      api_facts: Array.isArray(payload.api_facts || payload.apiFacts)
+        ? (payload.api_facts || payload.apiFacts).slice(0, 20).map((item) => ({
+          kind: item?.kind || '',
+          namespace: item?.namespace || '',
+          typeName: item?.typeName || '',
+          qualifiedType: item?.qualifiedType || '',
+          memberName: item?.memberName || '',
+          signature: String(item?.signature || '').slice(0, 320),
+          stubSignature: String(item?.stubSignature || '').slice(0, 320),
+          path: item?.path || '',
+          lineRange: item?.lineRange || item?.line_range || '',
+          evidenceType: item?.evidenceType || item?.evidence_type || '',
+        }))
+        : [],
+      fact_sheet: String(payload.fact_sheet || payload.factSheet || '').slice(0, Math.min(2400, maxChars)),
+      known_types: Array.isArray(payload.known_types || payload.knownTypes)
+        ? (payload.known_types || payload.knownTypes).slice(0, 20).map((item) => ({
+          qualifiedType: item?.qualifiedType || '',
+          namespace: item?.namespace || '',
+          typeName: item?.typeName || '',
+          kind: item?.kind || '',
+        }))
+        : [],
       citations: Array.isArray(payload.citations) ? payload.citations.slice(0, 12) : [],
       error: payload.error || '',
       message: payload.message || '',

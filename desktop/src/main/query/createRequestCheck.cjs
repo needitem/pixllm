@@ -6,6 +6,7 @@ const VERIFY_PROMPT = [
   'Determine whether the produced workspace file actually satisfies the user request.',
   'The files may be real workspace files or draft code snippets proposed in the assistant answer.',
   'Be conservative. Mark the result as needing changes if any required interaction path is missing, if runtime-required input is left as a placeholder in source code, if UI elements needed for the workflow are created but not attached to the window, or if method/property usage appears incompatible with the provided reference excerpts.',
+  'If deterministic compile or build checks failed, require changes unless the draft explicitly explains the blocker as unverified.',
   'Return JSON only with:',
   '{"satisfies_request":true,"needs_changes":false,"reasoning":"brief explanation","required_changes":["short concrete issues"],"target_paths":["path"]}',
 ].join('\n');
@@ -37,6 +38,8 @@ async function verifyCreateRequestSatisfaction({
   userPrompt = '',
   files = [],
   referenceExcerpts = [],
+  apiFacts = [],
+  deterministicChecks = [],
 } = {}) {
   const normalizedFiles = (Array.isArray(files) ? files : [])
     .map((item) => ({
@@ -59,6 +62,25 @@ async function verifyCreateRequestSatisfaction({
       const content = String(item?.content || '').slice(0, 4000);
       if (!path || !content) return '';
       return `REFERENCE: ${path}${lineRange ? `:${lineRange}` : ''}${evidenceType ? ` [${evidenceType}]` : ''}\n${content}`;
+    })
+    .filter(Boolean)
+    .join('\n\n---\n\n');
+  const apiFactBody = (Array.isArray(apiFacts) ? apiFacts : [])
+    .map((item) => {
+      const signature = toStringValue(item?.stubSignature || item?.signature);
+      const location = [toStringValue(item?.path), toStringValue(item?.lineRange || item?.line_range)].filter(Boolean).join(':');
+      if (!signature) return '';
+      return `${signature}${location ? ` @ ${location}` : ''}`;
+    })
+    .filter(Boolean)
+    .slice(0, 16)
+    .join('\n');
+  const deterministicBody = (Array.isArray(deterministicChecks) ? deterministicChecks : [])
+    .map((item) => {
+      const header = [toStringValue(item?.kind || 'check'), item?.ok === false ? 'failed' : 'passed'].join(': ');
+      const reasoning = toStringValue(item?.reasoning);
+      const diagnostics = Array.isArray(item?.diagnostics) ? item.diagnostics.slice(0, 8).join('\n') : '';
+      return [header, reasoning, diagnostics].filter(Boolean).join('\n');
     })
     .filter(Boolean)
     .join('\n\n---\n\n');
@@ -90,6 +112,8 @@ async function verifyCreateRequestSatisfaction({
           content: [
             `USER REQUEST:\n${toStringValue(userPrompt)}`,
             referenceBody ? `REFERENCE EXCERPTS:\n${referenceBody}` : '',
+            apiFactBody ? `VERIFIED API FACTS:\n${apiFactBody}` : '',
+            deterministicBody ? `DETERMINISTIC CHECKS:\n${deterministicBody}` : '',
             `WORKSPACE FILES:\n${fileBody}`,
           ].join('\n\n'),
         },

@@ -30,6 +30,60 @@ function buildRequestTarget(baseUrl = '', path = '') {
   return `${normalizeBaseUrl(baseUrl)}${path}`;
 }
 
+const DEBUG_TEXT_LIMIT = 12000;
+const DEBUG_ARRAY_LIMIT = 24;
+
+function clipDebugText(value = '', maxChars = DEBUG_TEXT_LIMIT) {
+  const text = String(value || '');
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, Math.max(0, maxChars - 15))}\n...[truncated]`;
+}
+
+function sanitizeDebugValue(value, depth = 0) {
+  if (depth > 4) {
+    return '[depth-truncated]';
+  }
+  if (typeof value === 'string') {
+    return clipDebugText(value);
+  }
+  if (Array.isArray(value)) {
+    return value.slice(0, DEBUG_ARRAY_LIMIT).map((item) => sanitizeDebugValue(item, depth + 1));
+  }
+  if (value && typeof value === 'object') {
+    const output = {};
+    for (const [key, item] of Object.entries(value)) {
+      output[key] = sanitizeDebugValue(item, depth + 1);
+    }
+    return output;
+  }
+  return value;
+}
+
+function buildDebugSnapshot({
+  candidate = {},
+  requestPath = '',
+  requestBody = {},
+  responseStatus = 0,
+  responsePayload = null,
+  responseText = '',
+} = {}) {
+  return {
+    request: {
+      endpoint: buildRequestTarget(candidate.baseUrl, requestPath),
+      mode: toStringValue(candidate.mode),
+      label: toStringValue(candidate.label),
+      body: sanitizeDebugValue(requestBody),
+    },
+    response: {
+      status: Number(responseStatus || 0),
+      payload: sanitizeDebugValue(responsePayload),
+      rawText: typeof responseText === 'string' && responseText
+        ? clipDebugText(responseText)
+        : '',
+    },
+  };
+}
+
 const DEFAULT_MAX_TOKENS = 1200;
 const MIN_COMPLETION_TOKENS = 1;
 const MAX_CONTEXT_OVERFLOW_RETRIES = 3;
@@ -420,24 +474,26 @@ async function callModelCompletion({
     let contextOverflowRetries = 0;
     while (true) {
       try {
+        const requestPath = candidate.mode === 'proxy'
+          ? '/v1/llm/chat_completions'
+          : '/v1/chat/completions';
+        const requestBody = buildCompletionRequestBody({
+          mode: candidate.mode,
+          model,
+          messages,
+          maxTokens: requestedMaxTokens,
+          temperature,
+          responseFormat,
+          stop,
+          extraBody: resolvedExtraBody,
+        });
         const response = await fetch(
-          candidate.mode === 'proxy'
-            ? buildRequestTarget(candidate.baseUrl, '/v1/llm/chat_completions')
-            : buildRequestTarget(candidate.baseUrl, '/v1/chat/completions'),
+          buildRequestTarget(candidate.baseUrl, requestPath),
           {
             method: 'POST',
             headers: buildHeaders(candidate.apiToken),
             signal: signal || undefined,
-            body: JSON.stringify(buildCompletionRequestBody({
-              mode: candidate.mode,
-              model,
-              messages,
-              maxTokens: requestedMaxTokens,
-              temperature,
-              responseFormat,
-              stop,
-              extraBody: resolvedExtraBody,
-            })),
+            body: JSON.stringify(requestBody),
           },
         );
         const text = await response.text();
@@ -457,7 +513,17 @@ async function callModelCompletion({
             }
             throw new Error(extractErrorMessage(payload, text) || `HTTP ${response.status}`);
           }
-          return payload.data || {};
+          return {
+            ...(payload.data || {}),
+            debug: buildDebugSnapshot({
+              candidate,
+              requestPath,
+              requestBody,
+              responseStatus: response.status,
+              responsePayload: payload,
+              responseText: text,
+            }),
+          };
         }
         if (!response.ok) {
           if (hasFallback && shouldRetryWithFallback(response.status, payload, text)) {
@@ -476,6 +542,14 @@ async function callModelCompletion({
           tool_calls: normalizeOpenAiToolCalls(choice?.message?.tool_calls),
           finish_reason: toStringValue(choice?.finish_reason),
           usage: payload?.usage && typeof payload.usage === 'object' ? payload.usage : {},
+          debug: buildDebugSnapshot({
+            candidate,
+            requestPath,
+            requestBody,
+            responseStatus: response.status,
+            responsePayload: payload,
+            responseText: text,
+          }),
         };
       } catch (error) {
         lastError = error;
@@ -536,22 +610,26 @@ async function streamModelCompletion({
     let contextOverflowRetries = 0;
     while (true) {
       try {
+        const requestPath = candidate.mode === 'proxy'
+          ? '/v1/llm/chat_completions/stream'
+          : '/v1/chat/completions';
+        const requestBody = buildCompletionRequestBody({
+          mode: candidate.mode,
+          model,
+          messages,
+          maxTokens: requestedMaxTokens,
+          temperature,
+          responseFormat,
+          stop,
+          extraBody: resolvedExtraBody,
+          stream: candidate.mode === 'openai',
+        });
         const response = await fetch(candidate.mode === 'proxy'
-          ? buildRequestTarget(candidate.baseUrl, '/v1/llm/chat_completions/stream')
-          : buildRequestTarget(candidate.baseUrl, '/v1/chat/completions'), {
+          ? buildRequestTarget(candidate.baseUrl, requestPath)
+          : buildRequestTarget(candidate.baseUrl, requestPath), {
           method: 'POST',
           headers: buildHeaders(candidate.apiToken),
-          body: JSON.stringify(buildCompletionRequestBody({
-            mode: candidate.mode,
-            model,
-            messages,
-            maxTokens: requestedMaxTokens,
-            temperature,
-            responseFormat,
-            stop,
-            extraBody: resolvedExtraBody,
-            stream: candidate.mode === 'openai',
-          })),
+          body: JSON.stringify(requestBody),
           signal: signal || undefined,
         });
 
@@ -669,6 +747,14 @@ async function streamModelCompletion({
             tool_calls: normalizeOpenAiToolCalls(donePayload.tool_calls || openAiToolCalls),
             finish_reason: toStringValue(donePayload.finish_reason),
             usage: donePayload.usage && typeof donePayload.usage === 'object' ? donePayload.usage : {},
+            debug: buildDebugSnapshot({
+              candidate,
+              requestPath,
+              requestBody,
+              responseStatus: response.status,
+              responsePayload: donePayload,
+              responseText: aggregated,
+            }),
           };
         }
 
@@ -678,6 +764,20 @@ async function streamModelCompletion({
           tool_calls: normalizeOpenAiToolCalls(openAiToolCalls),
           finish_reason: '',
           usage: {},
+          debug: buildDebugSnapshot({
+            candidate,
+            requestPath,
+            requestBody,
+            responseStatus: response.status,
+            responsePayload: {
+              text: aggregated,
+              reasoning_content: aggregatedReasoning,
+              tool_calls: normalizeOpenAiToolCalls(openAiToolCalls),
+              finish_reason: '',
+              usage: {},
+            },
+            responseText: aggregated,
+          }),
         };
       } catch (error) {
         lastError = error;

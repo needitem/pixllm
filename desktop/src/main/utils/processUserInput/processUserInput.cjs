@@ -170,11 +170,23 @@ function normalizeIntent(intent = {}) {
 }
 
 function analyzeIntent(prompt, directives = {}) {
+  const source = toStringValue(prompt);
   return normalizeIntent({
-    wantsChanges: Boolean(directives.change),
+    wantsChanges: Boolean(
+      directives.change
+      || /\b(edit|change|modify|patch|update|rewrite|fix)\b/i.test(source)
+      || /수정|변경|고쳐|패치/.test(source)
+    ),
     wantsExecution: Boolean(directives.exec),
-    wantsAnalysis: Boolean(directives.analysis),
-    createLikely: false,
+    wantsAnalysis: Boolean(
+      directives.analysis
+      || /\b(explain|analyze|investigate|trace|review|summarize)\b/i.test(source)
+      || /설명|분석|추적|검토|요약/.test(source)
+    ),
+    createLikely: Boolean(
+      /\b(create|make|build|generate|implement|scaffold)\b/i.test(source)
+      || /만들|구현|생성|작성/.test(source)
+    ),
     compareLikely: false,
   });
 }
@@ -340,6 +352,7 @@ function summarizeRequestContext(context = {}) {
 
   if (context.artifactPlan?.requiresWorkspaceArtifact) {
     lines.push('The request is expected to produce a workspace artifact, not just an in-chat explanation.');
+    lines.push('Before finalizing generated code, gather a verified API fact sheet and prefer compile/build verification over prose-only confidence.');
   }
   const likelyPaths = Array.isArray(context.artifactPlan?.likelyPaths) ? context.artifactPlan.likelyPaths : [];
   if (likelyPaths.length > 0) {

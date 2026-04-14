@@ -35,7 +35,6 @@ function NotebookEditTool() {
         relativePath: input?.path,
         fileCache: context?.fileCache,
         allowMissing: false,
-        action: 'edit',
       });
     },
     async description() {

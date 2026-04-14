@@ -1,46 +1,8 @@
 const {
   processUserInput,
 } = require('../../utils/processUserInput/processUserInput.cjs');
-const { canUseTool: authorizeLocalToolUse, collectGroundedPaths } = require('../../hooks/useCanUseTool.cjs');
-const { findUngroundedSourceMentions } = require('../../query/sourceGuard.cjs');
-const { summarizeCompanyReferenceEvidence } = require('../../query/referenceEvidence.cjs');
-const { evaluateFinalAnswerPolicy } = require('../../query/finalizationPolicy.cjs');
 const { createToolResultBlock, toStringValue } = require('../../query.cjs');
-const { summarizeObservation, failedSteps } = require('../../queryTrace.cjs');
-
-const MUTATION_TOOL_NAMES = new Set(['write', 'edit', 'notebook_edit']);
-const EXECUTION_TOOL_NAMES = new Set(['run_build', 'bash', 'powershell', 'task_create', 'task_update', 'task_stop']);
-const RUNTIME_TASK_READ_TOOL_NAMES = new Set(['terminal_capture', 'task_get', 'task_list', 'task_output']);
-const META_RECOVERY_TOOL_NAMES = new Set(['tool_search']);
-const ANSWER_SEARCH_LOOKBACK_TURNS = 3;
-const MIN_ANSWER_SEARCH_TURNS_BEFORE_SATURATION = 4;
-const MIN_ANSWER_SEARCH_STEPS_BEFORE_SATURATION = 6;
-const READ_CONTEXT_TOOL_NAMES = new Set([
-  'list_files',
-  'glob',
-  'grep',
-  'project_context_search',
-  'find_symbol',
-  'find_callers',
-  'find_references',
-  'lsp',
-  'read_file',
-  'read_symbol_span',
-  'symbol_outline',
-  'symbol_neighborhood',
-  'company_reference_search',
-]);
-const WORKSPACE_PROGRESS_TOOL_NAMES = new Set(
-  Array.from(READ_CONTEXT_TOOL_NAMES).filter((name) => name !== 'company_reference_search'),
-);
-const WORKSPACE_ANSWER_SATURATION_TOOL_NAMES = new Set(Array.from(WORKSPACE_PROGRESS_TOOL_NAMES));
-const BROAD_WORKSPACE_DISCOVERY_TOOL_NAMES = new Set([
-  'list_files',
-  'glob',
-  'project_context_search',
-  'find_callers',
-  'find_references',
-]);
+const { summarizeObservation } = require('../../queryTrace.cjs');
 
 function summarizeToolRequests(toolUses, describeTool = null) {
   return (Array.isArray(toolUses) ? toolUses : [])
@@ -119,22 +81,6 @@ function buildToolExecutionResult(toolUse, observation) {
       isError: observation?.ok === false,
     }),
   };
-}
-
-function isExecutionFailure(step = {}) {
-  const toolName = toStringValue(step?.tool);
-  if (EXECUTION_TOOL_NAMES.has(toolName)) {
-    return true;
-  }
-  const error = toStringValue(step?.observation?.error).toLowerCase();
-  return [
-    'build_failed',
-    'command_failed',
-    'process_error',
-    'task_failed',
-    'task_runtime_failed',
-    'timeout',
-  ].includes(error);
 }
 
 function clipModelText(value = '', maxChars = 800) {
@@ -246,6 +192,20 @@ function summarizeObservationForModel(toolName, observation = {}) {
       lines.push('sources:');
       lines.push(...sources.map((item) => `- ${item}`));
     }
+    const apiFacts = summarizePathItems(payload.api_facts || payload.apiFacts, (item) => {
+      const signature = toStringValue(item?.stubSignature || item?.signature);
+      const location = [toStringValue(item?.path), toStringValue(item?.lineRange || item?.line_range)].filter(Boolean).join(':');
+      return [signature, location ? `@ ${location}` : ''].filter(Boolean).join(' ');
+    }, 6);
+    if (apiFacts.length > 0) {
+      lines.push('verified_api_facts:');
+      lines.push(...apiFacts.map((item) => `- ${item}`));
+    }
+    const factSheet = toStringValue(payload.fact_sheet || payload.factSheet);
+    if (factSheet) {
+      lines.push('fact_sheet:');
+      lines.push(clipModelText(factSheet, 1000));
+    }
     return lines.join('\n').trim();
   }
 
@@ -302,105 +262,6 @@ function failedToolExecutionResult(toolUse, signal, error) {
   return buildToolExecutionResult(toolUse, observation);
 }
 
-function traceHasSuccessfulTool(trace = [], names = new Set()) {
-  return (Array.isArray(trace) ? trace : []).some((step) => {
-    const toolName = toStringValue(step?.tool);
-    return names.has(toolName) && step?.observation?.ok !== false;
-  });
-}
-
-function normalizeTracePath(value = '') {
-  return toStringValue(value).replace(/\\/g, '/');
-}
-
-function uniquePaths(items = []) {
-  const seen = new Set();
-  const output = [];
-  for (const item of Array.isArray(items) ? items : []) {
-    const normalized = normalizeTracePath(item);
-    if (!normalized) continue;
-    const key = normalized.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    output.push(normalized);
-  }
-  return output;
-}
-
-function collectObservationPaths(observation = {}) {
-  const payload = observation && typeof observation === 'object' ? observation : {};
-  const paths = [];
-  if (payload.path) {
-    paths.push(payload.path);
-  }
-  for (const group of [payload.items, payload.matches, payload.windows, payload.sources, payload.doc_results, payload.doc_chunks, payload.citations]) {
-    for (const item of Array.isArray(group) ? group : []) {
-      paths.push(item?.path);
-      paths.push(item?.file_path);
-    }
-  }
-  return uniquePaths(paths);
-}
-
-function stepTurn(step = {}) {
-  return Math.max(0, Number(step?.round || 0));
-}
-
-function countOccurrences(items = []) {
-  const counts = new Map();
-  for (const item of Array.isArray(items) ? items : []) {
-    const key = normalizeTracePath(item).toLowerCase();
-    if (!key) continue;
-    counts.set(key, (counts.get(key) || 0) + 1);
-  }
-  return counts;
-}
-
-function getWorkspaceAnswerLoopState({ trace = [], intent = {} } = {}) {
-  const answerOriented = !Boolean(intent?.wantsChanges || intent?.createLikely || intent?.wantsExecution);
-  const successfulReadContextSteps = (Array.isArray(trace) ? trace : [])
-    .filter((step) => WORKSPACE_ANSWER_SATURATION_TOOL_NAMES.has(toStringValue(step?.tool)) && step?.observation?.ok !== false);
-  const turns = Array.from(new Set(successfulReadContextSteps.map((step) => stepTurn(step)).filter(Boolean))).sort((a, b) => a - b);
-  const recentTurns = turns.slice(-ANSWER_SEARCH_LOOKBACK_TURNS);
-  const recentTurnSet = new Set(recentTurns);
-  const recentSteps = successfulReadContextSteps.filter((step) => recentTurnSet.has(stepTurn(step)));
-  const earlierSteps = successfulReadContextSteps.filter((step) => !recentTurnSet.has(stepTurn(step)));
-  const earlierPaths = new Set(
-    earlierSteps.flatMap((step) => collectObservationPaths(step?.observation)).map((item) => item.toLowerCase()),
-  );
-  const recentPaths = uniquePaths(recentSteps.flatMap((step) => collectObservationPaths(step?.observation)));
-  const newRecentPaths = recentPaths.filter((item) => !earlierPaths.has(item.toLowerCase()));
-  const repeatedReadTargetCounts = countOccurrences(
-    recentSteps
-      .filter((step) => ['read_file', 'read_symbol_span'].includes(toStringValue(step?.tool)))
-      .map((step) => step?.observation?.path),
-  );
-  const repeatedReadTargets = Array.from(repeatedReadTargetCounts.entries())
-    .filter(([, count]) => count >= 2)
-    .map(([path]) => path);
-  const hasGroundedReadEvidence = traceHasSuccessfulTool(
-    trace,
-    WORKSPACE_ANSWER_SATURATION_TOOL_NAMES,
-  );
-  const saturated = answerOriented
-    && hasGroundedReadEvidence
-    && turns.length >= MIN_ANSWER_SEARCH_TURNS_BEFORE_SATURATION
-    && recentSteps.length >= MIN_ANSWER_SEARCH_STEPS_BEFORE_SATURATION
-    && newRecentPaths.length === 0
-    && (repeatedReadTargets.length > 0 || recentPaths.length <= 2);
-
-  return {
-    answerOriented,
-    saturated,
-    recentTurnCount: recentTurns.length,
-    recentStepCount: recentSteps.length,
-    recentTurns,
-    recentPaths,
-    newRecentPaths,
-    repeatedReadTargets,
-  };
-}
-
 function buildToolResultStreamPayload({
   turn = 0,
   toolUse = null,
@@ -423,25 +284,21 @@ class ToolRuntime {
   constructor({
     workspacePath = '',
     selectedFilePath = '',
-    sessionId = '',
     state = null,
     tools = null,
     recordTranscript = () => {},
     recordTransition = () => {},
     persistState = () => {},
-    pushMetaUserMessage = () => {},
     updateFileCache = () => {},
   } = {}) {
     this.workspacePath = toStringValue(workspacePath);
     this.selectedFilePath = toStringValue(selectedFilePath);
-    this.sessionId = toStringValue(sessionId);
     this.state = state && typeof state === 'object' ? state : {};
     this.tools = tools;
     this.requestContext = null;
     this.recordTranscript = typeof recordTranscript === 'function' ? recordTranscript : () => {};
     this.recordTransition = typeof recordTransition === 'function' ? recordTransition : () => {};
     this.persistState = typeof persistState === 'function' ? persistState : () => {};
-    this.pushMetaUserMessage = typeof pushMetaUserMessage === 'function' ? pushMetaUserMessage : () => {};
     this.updateFileCache = typeof updateFileCache === 'function' ? updateFileCache : () => {};
   }
 
@@ -468,193 +325,6 @@ class ToolRuntime {
     return toStringValue(this.requestContext?.summary);
   }
 
-  groundedSourcePaths(trace = []) {
-    return collectGroundedPaths({
-      trace,
-      fileCache: this.state.fileCache,
-      requestContext: this.requestContext,
-    });
-  }
-
-  activeToolNames({ turn = 1 } = {}) {
-    const available = new Set(
-      (Array.isArray(this.tools?.tools) ? this.tools.tools : [])
-        .map((tool) => toStringValue(tool?.name))
-        .filter(Boolean),
-    );
-    const seeded = Array.isArray(this.requestContext?.initialToolNames)
-      ? this.requestContext.initialToolNames
-      : Array.from(available);
-    const active = new Set(seeded.filter((name) => available.has(name)));
-    const intent = this.requestContext?.intent && typeof this.requestContext.intent === 'object'
-      ? this.requestContext.intent
-      : {};
-    const requiresWorkspaceArtifact = Boolean(
-      this.requestContext?.artifactPlan?.requiresWorkspaceArtifact || intent.createLikely,
-    );
-    const trace = Array.isArray(this.state?.trace) ? this.state.trace : [];
-    const hasFailures = failedSteps(trace).length > 0;
-    const hasExecutionFailures = failedSteps(trace).some((step) => isExecutionFailure(step));
-    const hasReadContext = traceHasSuccessfulTool(trace, READ_CONTEXT_TOOL_NAMES);
-    const hasMutation = traceHasSuccessfulTool(trace, MUTATION_TOOL_NAMES);
-    const workspaceAnswerLoop = getWorkspaceAnswerLoopState({ trace, intent });
-    const referenceEvidence = summarizeCompanyReferenceEvidence(trace);
-    const narrowingPreferred = Boolean(this.requestContext?.narrowingPreferred);
-    const referenceEvidenceSufficient = referenceEvidence.hasCodeEvidence && referenceEvidence.searchCount >= 1;
-
-    if ((intent.wantsChanges || requiresWorkspaceArtifact) && (turn > 1 || hasReadContext || hasFailures || hasMutation)) {
-      for (const name of MUTATION_TOOL_NAMES) {
-        if (available.has(name)) active.add(name);
-      }
-    }
-    if (requiresWorkspaceArtifact && referenceEvidence.hasCodeEvidence) {
-      active.delete('company_reference_search');
-      for (const name of MUTATION_TOOL_NAMES) {
-        if (available.has(name)) active.add(name);
-      }
-    }
-    if (referenceEvidenceSufficient) {
-      active.delete('company_reference_search');
-    }
-
-    if ((intent.wantsExecution || hasExecutionFailures || hasMutation) && (turn > 1 || hasReadContext || hasMutation || hasExecutionFailures)) {
-      for (const name of EXECUTION_TOOL_NAMES) {
-        if (available.has(name)) active.add(name);
-      }
-      for (const name of RUNTIME_TASK_READ_TOOL_NAMES) {
-        if (available.has(name)) active.add(name);
-      }
-    }
-
-    if (hasFailures) {
-      for (const name of META_RECOVERY_TOOL_NAMES) {
-        if (available.has(name)) active.add(name);
-      }
-    }
-
-    if (narrowingPreferred && !hasFailures && turn < 3 && !hasReadContext) {
-      for (const name of BROAD_WORKSPACE_DISCOVERY_TOOL_NAMES) {
-        active.delete(name);
-      }
-    }
-
-    if (workspaceAnswerLoop.saturated) {
-      for (const name of WORKSPACE_ANSWER_SATURATION_TOOL_NAMES) {
-        active.delete(name);
-      }
-    }
-
-    if (this.state?.phaseLock?.kind === 'draft_verification') {
-      const allowedDuringVerification = new Set(['read_file', 'write', 'edit', 'notebook_edit']);
-      for (const name of Array.from(active)) {
-        if (!allowedDuringVerification.has(name)) {
-          active.delete(name);
-        }
-      }
-      for (const name of allowedDuringVerification) {
-        if (available.has(name)) {
-          active.add(name);
-        }
-      }
-    }
-
-    const names = Array.from(active);
-    if (this.requestContext && typeof this.requestContext === 'object') {
-      this.requestContext.activeToolNames = names;
-    }
-    return names;
-  }
-
-  authorizeToolUse({ tool, input = {}, context = {} } = {}) {
-    const activeToolNames = Array.isArray(context?.activeToolNames) && context.activeToolNames.length > 0
-      ? context.activeToolNames
-      : this.activeToolNames({
-          turn: Number(context?.turn || this.state?.currentTurn || 1),
-        });
-    return authorizeLocalToolUse({
-      tool,
-      input,
-      requestContext: this.requestContext,
-      trace: this.state.trace,
-      fileCache: this.state.fileCache,
-      context: {
-        ...context,
-        activeToolNames,
-      },
-    });
-  }
-
-  ensureGroundedFinalAnswer(answer, { trace = [], turn = 0 } = {}) {
-    const unknownMentions = findUngroundedSourceMentions(answer, this.groundedSourcePaths(trace));
-    const mentions = unknownMentions.slice(0, 8);
-    this.state.ungroundedAnswerRetries = 0;
-    if (unknownMentions.length === 0) {
-      return { ok: true, mentions: [], warning: null };
-    }
-
-    this.recordTranscript({
-      kind: 'ungrounded_answer_warning',
-      turn,
-      mentions,
-    });
-    this.recordTransition('ungrounded_answer_warning', {
-      turn,
-      count: unknownMentions.length,
-      mentions,
-    });
-    this.persistState();
-    return {
-      ok: true,
-      mentions,
-      warning: {
-        type: 'grounding',
-        mentions,
-        count: unknownMentions.length,
-      },
-    };
-  }
-
-  evaluateFinalAnswer(answer, { trace = [], turn = 0 } = {}) {
-    const policyResult = evaluateFinalAnswerPolicy({
-      requestContext: this.requestContext,
-      trace,
-      finalAnswer: answer,
-      describeTool: (toolName) => (this.tools?.describe ? this.tools.describe(toolName) : null),
-      turn,
-    });
-    if (!policyResult?.ok) {
-      this.state.totalUsage.stop_hooks += 1;
-      this.recordTranscript({
-        kind: 'final_answer_policy',
-        turn,
-        reason: toStringValue(policyResult.reason || 'final_answer_policy'),
-        details: policyResult.details || {},
-      });
-      this.recordTransition('final_answer_policy', {
-        turn,
-        reason: toStringValue(policyResult.reason || 'final_answer_policy'),
-      });
-      this.persistState();
-      return {
-        ok: false,
-        type: 'policy',
-        reason: toStringValue(policyResult.reason || 'final_answer_policy'),
-        blockingMessage: toStringValue(policyResult.blockingMessage),
-        details: policyResult.details || {},
-      };
-    }
-
-    const grounded = this.ensureGroundedFinalAnswer(answer, { trace, turn });
-    return {
-      ok: true,
-      type: 'final',
-      details: {
-        ...(policyResult.details || {}),
-        groundingWarnings: grounded?.warning ? [grounded.warning] : [],
-      },
-    };
-  }
-
   canParallelize(toolUses) {
     return Array.isArray(toolUses)
       && toolUses.length > 1
@@ -667,16 +337,6 @@ class ToolRuntime {
             })
           : false;
       });
-  }
-
-  getWorkspaceAnswerLoopState(trace = this.state?.trace) {
-    const intent = this.requestContext?.intent && typeof this.requestContext.intent === 'object'
-      ? this.requestContext.intent
-      : {};
-    return getWorkspaceAnswerLoopState({
-      trace: Array.isArray(trace) ? trace : [],
-      intent,
-    });
   }
 
   _recordToolExecution({
@@ -731,6 +391,7 @@ class ToolRuntime {
     turn = 0,
     assistantText = '',
     toolUse = null,
+    activeToolNames = [],
     signal = null,
     onToolUse = async () => {},
     onToolResult = async () => {},
@@ -757,7 +418,7 @@ class ToolRuntime {
         requestContext: this.requestContext,
         trace: this.state.trace,
         fileCache: this.state.fileCache,
-        activeToolNames: this.activeToolNames({ turn }),
+        activeToolNames: Array.isArray(activeToolNames) ? activeToolNames : [],
         turn,
       });
     } catch (error) {
@@ -788,6 +449,7 @@ class ToolRuntime {
     turn = 0,
     assistantText = '',
     toolUses = [],
+    activeToolNames = [],
     signal = null,
     onToolUse = async () => {},
     onToolResult = async () => {},
@@ -824,11 +486,12 @@ class ToolRuntime {
     const executeOne = (toolUse) => this.executeToolUse({
       turn,
       assistantText,
-        toolUse,
-        signal,
-        onToolUse,
-        onToolResult,
-      });
+      toolUse,
+      activeToolNames,
+      signal,
+      onToolUse,
+      onToolResult,
+    });
 
     const getPrefetchedExecution = async (toolUse) => {
       if (streamingExecutor && typeof streamingExecutor.claim === 'function') {
@@ -882,26 +545,6 @@ class ToolRuntime {
 
     const allFailed = toolExecutions.length > 0 && toolExecutions.every((item) => item?.observation?.ok === false);
     const interrupted = toolExecutions.some((item) => item?.observation?.interrupted === true);
-    const referenceEvidence = summarizeCompanyReferenceEvidence(this.state.trace);
-    const onlyReferenceSearch = toolUses.length > 0
-      && toolUses.every((toolUse) => toStringValue(toolUse?.name) === 'company_reference_search');
-
-    if (onlyReferenceSearch && referenceEvidence.hasCodeEvidence && referenceEvidence.searchCount >= 1) {
-      this.pushMetaUserMessage(
-        'Verified reference signatures are already collected. Stop calling company_reference_search and move to the next step: create the workspace file, inspect the target workspace path, or answer with the verified API facts.',
-        {
-          turn,
-          hook: 'reference_evidence_sufficient',
-          searchCount: referenceEvidence.searchCount,
-          evidenceTypes: referenceEvidence.evidenceTypes.slice(0, 6),
-        },
-      );
-      this.recordTransition('reference_evidence_sufficient', {
-        turn,
-        searchCount: referenceEvidence.searchCount,
-        evidenceTypes: referenceEvidence.evidenceTypes.slice(0, 6),
-      });
-    }
 
     await onToolBatchEnd({
       turn,

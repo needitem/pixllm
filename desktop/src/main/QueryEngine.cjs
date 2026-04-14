@@ -18,9 +18,11 @@ const {
   buildSystemPrompt,
   toStringValue,
 } = require('./query.cjs');
-const { checkNextSpeaker } = require('./query/nextSpeakerCheck.cjs');
 const { verifyCreateRequestSatisfaction } = require('./query/createRequestCheck.cjs');
 const { verifyDraftAnswerSatisfaction } = require('./query/finalAnswerCheck.cjs');
+const { evaluateFinalAnswerPolicy } = require('./query/finalizationPolicy.cjs');
+const { findUngroundedSourceMentions } = require('./query/sourceGuard.cjs');
+const { verifyStandaloneCSharpArtifacts } = require('./query/compileArtifactCheck.cjs');
 const { buildRequestContext } = require('./utils/processUserInput/processUserInput.cjs');
 const { analyzePromptSemantics } = require('./services/model/QwenQueryRewrite.cjs');
 const { loadAgentState, saveAgentState } = require('./state/agentStateStore.cjs');
@@ -30,6 +32,7 @@ const {
   failedSteps,
 } = require('./queryTrace.cjs');
 const { safeResolve } = require('./workspace.cjs');
+const { collectGroundedPaths } = require('./query/groundedPaths.cjs');
 
 const MAX_TURNS = 14;
 const MAX_CONSECUTIVE_PARSE_ERRORS = 2;
@@ -49,8 +52,6 @@ const MAX_FILE_CACHE_ENTRIES = 24;
 const MAX_PROMPT_TOKEN_CACHE_ENTRIES = 32;
 const MAX_TRANSITIONS = 64;
 const MAX_UNGROUNDED_ANSWER_RETRIES = 2;
-const MAX_NO_PROGRESS_RETRIES = 2;
-const MAX_REPEATED_TOOL_BATCHES = 3;
 const MAX_CREATE_VERIFICATION_RETRIES = 2;
 const MAX_CREATE_VERIFICATION_EXTRA_TURNS = 6;
 const NO_WORKSPACE_TOOL_NAMES = Object.freeze([
@@ -67,6 +68,72 @@ const NO_WORKSPACE_TOOL_NAMES = Object.freeze([
   'wiki_write',
   'wiki_append_log',
 ]);
+
+function deriveLoopControlState({
+  availableToolNames = [],
+  state = {},
+} = {}) {
+  const available = new Set((Array.isArray(availableToolNames) ? availableToolNames : []).map((item) => toStringValue(item)).filter(Boolean));
+  const verificationLocked = state?.phaseLock?.kind === 'draft_verification';
+
+  return {
+    phase: verificationLocked ? 'draft_verification' : '',
+    activeToolNames: Array.from(available),
+    verificationLocked,
+  };
+}
+
+function evaluateFinalAnswerState({
+  requestContext = {},
+  trace = [],
+  finalAnswer = '',
+  groundedPaths = [],
+  describeTool = () => null,
+  deterministicChecks = [],
+} = {}) {
+  const policyResult = evaluateFinalAnswerPolicy({
+    requestContext,
+    trace,
+    finalAnswer,
+    describeTool,
+    deterministicChecks,
+  });
+  if (!policyResult?.ok) {
+    return {
+      ok: false,
+      type: 'policy',
+      reason: toStringValue(policyResult.reason || 'final_answer_policy'),
+      blockingMessage: toStringValue(policyResult.blockingMessage),
+      details: policyResult.details || {},
+    };
+  }
+
+  const unknownMentions = findUngroundedSourceMentions(finalAnswer, groundedPaths);
+  if (unknownMentions.length > 0) {
+    return {
+      ok: false,
+      type: 'grounding',
+      mentions: unknownMentions.slice(0, 8),
+      details: {
+        ...(policyResult.details || {}),
+        groundingWarnings: [{
+          type: 'grounding',
+          mentions: unknownMentions.slice(0, 8),
+          count: unknownMentions.length,
+        }],
+      },
+    };
+  }
+
+  return {
+    ok: true,
+    type: 'final',
+    details: {
+      ...(policyResult.details || {}),
+      groundingWarnings: [],
+    },
+  };
+}
 function toSerializableTraceStep(step = {}) {
   return {
     round: Number(step?.round || 0),
@@ -126,10 +193,12 @@ function hashText(text) {
   return createHash('sha1').update(String(text || ''), 'utf8').digest('hex');
 }
 
-function resolveFallbackTerminalReason(terminalReason = '', failedStep = null) {
+function resolveFallbackTerminalReason(terminalReason = '', failedStep = null, lastStep = null) {
   const reason = toStringValue(terminalReason);
   if (reason) return reason;
-  return failedStep ? 'tool_failure' : 'turn_budget';
+  const failedRound = Math.max(0, Number(failedStep?.round || 0));
+  const lastRound = Math.max(0, Number(lastStep?.round || 0));
+  return failedStep && failedRound >= lastRound ? 'tool_failure' : 'turn_budget';
 }
 
 function buildFallbackAnswer({ terminalReason = '', failedStep = null } = {}) {
@@ -139,12 +208,6 @@ function buildFallbackAnswer({ terminalReason = '', failedStep = null } = {}) {
       ? `The desktop agent stopped after tool failures. Last error: ${toStringValue(failedStep?.observation?.error)}`
       : 'The desktop agent stopped after tool failures.';
   }
-  if (reason === 'no_progress') {
-    return 'The desktop agent stopped because it was repeating the same reasoning without making progress.';
-  }
-  if (reason === 'repeated_tool_batch') {
-    return 'The desktop agent stopped because it repeated the same tool batch without converging.';
-  }
   if (reason === 'ungrounded_answer') {
     return 'The desktop agent stopped because it could not produce a grounded final answer from the collected evidence.';
   }
@@ -152,6 +215,18 @@ function buildFallbackAnswer({ terminalReason = '', failedStep = null } = {}) {
     return 'The desktop agent stopped because the assistant repeatedly returned malformed output.';
   }
   return 'The desktop agent reached its turn budget before producing a final answer.';
+}
+
+function mergeBooleanHints(base = {}, incoming = {}) {
+  const output = {};
+  const keys = new Set([
+    ...Object.keys(base && typeof base === 'object' ? base : {}),
+    ...Object.keys(incoming && typeof incoming === 'object' ? incoming : {}),
+  ]);
+  for (const key of keys) {
+    output[key] = Boolean(base?.[key] || incoming?.[key]);
+  }
+  return output;
 }
 
 function messageCharLength(message) {
@@ -528,24 +603,6 @@ function toolUseCacheKey(toolUse = {}) {
   return `${toStringValue(toolUse?.name)}:${stableSerialize(toolUse?.input || {})}`;
 }
 
-function lastAssistantBlockType(blocks = []) {
-  const items = Array.isArray(blocks) ? blocks : [];
-  const lastBlock = items.length > 0 ? items[items.length - 1] : null;
-  return toStringValue(lastBlock?.type).toLowerCase();
-}
-
-function isResultSuccessful(message = null, stopReason = '') {
-  if (!message || toStringValue(message?.role).toLowerCase() !== 'assistant') {
-    return false;
-  }
-  const lastType = lastAssistantBlockType(message?.content);
-  if (lastType === 'text' || lastType === 'thinking' || lastType === 'redacted_thinking') {
-    return true;
-  }
-  // Anthropic uses end_turn; OpenAI-compatible backends usually surface stop.
-  return /^(stop|end_turn)$/i.test(toStringValue(stopReason));
-}
-
 async function describeTools(toolCollection, allowedToolNames = []) {
   const allowed = new Set((Array.isArray(allowedToolNames) ? allowedToolNames : []).map((item) => toStringValue(item)));
   const items = [];
@@ -599,14 +656,9 @@ function initialState({ historyMessages = [] } = {}) {
     lastTransition: null,
     maxOutputTokensRecoveryCount: 0,
     maxOutputTokensOverride: 0,
-    repeatedToolBatchSignature: '',
-    repeatedToolBatchCount: 0,
     pendingAssistantContinuation: '',
     ungroundedAnswerRetries: 0,
     createVerificationRetries: 0,
-    workspaceAnswerSaturationNotifiedTurn: 0,
-    noProgressTurns: 0,
-    lastProgressSignature: '',
     terminalReason: '',
     currentTurn: 0,
     totalUsage: normalizeUsage(),
@@ -647,19 +699,16 @@ class QueryEngine {
     this.runtime = new ToolRuntime({
       workspacePath: this.workspacePath,
       selectedFilePath: this.selectedFilePath,
-      sessionId: this.sessionId,
       state: this.state,
       recordTranscript: (entry) => this._recordTranscript(entry),
       recordTransition: (reason, extra) => this._recordTransition(reason, extra),
       persistState: () => this._persistState(),
-      pushMetaUserMessage: (text, meta) => this._pushMetaUserMessage(text, meta),
       updateFileCache: (toolName, observation) => this._updateFileCache(toolName, observation),
     });
     this.tools = createLocalToolCollection({
       workspacePath: this.workspacePath,
       sessionId: this.sessionId,
       runtimeBridge: this.runtimeBridge,
-      authorizeToolUse: (payload) => this.runtime.authorizeToolUse(payload),
       getBackendConfig: () => ({
         baseUrl: this.serverBaseUrl,
         apiToken: this.serverApiToken,
@@ -733,14 +782,9 @@ class QueryEngine {
         : null,
       maxOutputTokensRecoveryCount: Number(restored.maxOutputTokensRecoveryCount || 0),
       maxOutputTokensOverride: Number(restored.maxOutputTokensOverride || 0),
-      repeatedToolBatchSignature: toStringValue(restored.repeatedToolBatchSignature),
-      repeatedToolBatchCount: Number(restored.repeatedToolBatchCount || 0),
       pendingAssistantContinuation: toStringValue(restored.pendingAssistantContinuation),
       ungroundedAnswerRetries: Number(restored.ungroundedAnswerRetries || 0),
       createVerificationRetries: Number(restored.createVerificationRetries || 0),
-      workspaceAnswerSaturationNotifiedTurn: Number(restored.workspaceAnswerSaturationNotifiedTurn || 0),
-      noProgressTurns: Number(restored.noProgressTurns || 0),
-      lastProgressSignature: toStringValue(restored.lastProgressSignature),
       terminalReason: toStringValue(restored.terminalReason),
       currentTurn: Number(restored.currentTurn || 0),
       totalUsage: {
@@ -773,14 +817,9 @@ class QueryEngine {
         : null,
       maxOutputTokensRecoveryCount: Number(this.state.maxOutputTokensRecoveryCount || 0),
       maxOutputTokensOverride: Number(this.state.maxOutputTokensOverride || 0),
-      repeatedToolBatchSignature: toStringValue(this.state.repeatedToolBatchSignature),
-      repeatedToolBatchCount: Number(this.state.repeatedToolBatchCount || 0),
       pendingAssistantContinuation: toStringValue(this.state.pendingAssistantContinuation),
       ungroundedAnswerRetries: Number(this.state.ungroundedAnswerRetries || 0),
       createVerificationRetries: Number(this.state.createVerificationRetries || 0),
-      workspaceAnswerSaturationNotifiedTurn: Number(this.state.workspaceAnswerSaturationNotifiedTurn || 0),
-      noProgressTurns: Number(this.state.noProgressTurns || 0),
-      lastProgressSignature: toStringValue(this.state.lastProgressSignature),
       terminalReason: toStringValue(this.state.terminalReason),
       currentTurn: Number(this.state.currentTurn || 0),
       totalUsage: { ...this.state.totalUsage },
@@ -904,20 +943,20 @@ class QueryEngine {
     this._persistState();
   }
 
-  _updateProgressSignature(signature) {
-    const normalized = toStringValue(signature);
-    if (!normalized) return 0;
-    if (normalized === toStringValue(this.state.lastProgressSignature)) {
-      this.state.noProgressTurns += 1;
-    } else {
-      this.state.noProgressTurns = 0;
-      this.state.lastProgressSignature = normalized;
+  _loopControlState(turn = 1) {
+    const availableToolNames = (Array.isArray(this.tools?.tools) ? this.tools.tools : [])
+      .map((tool) => toStringValue(tool?.name))
+      .filter(Boolean);
+    const controlState = deriveLoopControlState({
+      availableToolNames,
+      requestContext: this.runtime?.requestContext || {},
+      state: this.state,
+      turn,
+    });
+    if (this.runtime?.requestContext && typeof this.runtime.requestContext === 'object') {
+      this.runtime.requestContext.activeToolNames = controlState.activeToolNames;
     }
-    return Number(this.state.noProgressTurns || 0);
-  }
-
-  _activeToolNames(turn = 1) {
-    return this.runtime.activeToolNames({ turn });
+    return controlState;
   }
 
   async _describeTools(allowedToolNames = []) {
@@ -936,6 +975,7 @@ class QueryEngine {
     signal = null,
     onModelToken = async () => {},
     onToolCalls = async () => {},
+    turn = 0,
   } = {}) {
     let lastError = null;
     for (let attempt = 0; attempt <= MAX_MODEL_RETRIES; attempt += 1) {
@@ -967,9 +1007,33 @@ class QueryEngine {
         this._addUsage(result?.usage);
         this.state.totalUsage.completion_calls += 1;
         this.state.totalUsage.streamed_completion_calls += 1;
+        if (result?.debug?.request) {
+          this._recordTranscript({
+            kind: 'model_request',
+            turn,
+            attempt: attempt + 1,
+            payload: result.debug.request,
+          });
+        }
+        if (result?.debug?.response) {
+          this._recordTranscript({
+            kind: 'model_response',
+            turn,
+            attempt: attempt + 1,
+            payload: result.debug.response,
+          });
+        }
         return result;
       } catch (error) {
         lastError = error;
+        this._recordTranscript({
+          kind: 'model_error',
+          turn,
+          attempt: attempt + 1,
+          payload: {
+            message: error instanceof Error ? error.message : String(error),
+          },
+        });
         if (signal?.aborted) throw error;
         if (attempt >= MAX_MODEL_RETRIES) {
           throw error;
@@ -1295,7 +1359,11 @@ class QueryEngine {
     if (toStringValue(this.runtime?.contextSummary())) {
       lines.push(toStringValue(this.runtime.contextSummary()));
     }
-    const activeToolNames = this._activeToolNames(Number(this.state.currentTurn || 1));
+    const controlState = this._loopControlState(Number(this.state.currentTurn || 1));
+    const activeToolNames = controlState.activeToolNames;
+    if (toStringValue(controlState.phase)) {
+      lines.push(`Current loop phase: ${toStringValue(controlState.phase)}`);
+    }
     if (activeToolNames.length > 0) {
       lines.push(`Enabled tools this turn: ${activeToolNames.slice(0, 16).join(', ')}`);
     }
@@ -1311,6 +1379,13 @@ class QueryEngine {
     if (cachedEntries.length > 0) {
       lines.push('Cached file context:');
       lines.push(...cachedEntries);
+    }
+    if (controlState.verificationLocked) {
+      const targets = Array.isArray(this.state.phaseLock.targetPaths) ? this.state.phaseLock.targetPaths : [];
+      lines.push('Verification phase lock: do not summarize or explain yet. Use only read_file/write/edit on the generated workspace file until the verifier passes.');
+      if (targets.length > 0) {
+        lines.push(`Verification target files: ${targets.slice(0, 4).join(', ')}`);
+      }
     }
     return lines.join('\n').trim();
   }
@@ -1343,57 +1418,20 @@ class QueryEngine {
     ];
   }
 
-  async _checkNextSpeaker(assistantMessage, { signal = null, turn = 0 } = {}) {
-    const result = await checkNextSpeaker({
-      baseUrl: this.llmBaseUrl || this.baseUrl || this.serverBaseUrl,
-      apiToken: this.llmApiToken || this.apiToken || this.serverApiToken,
-      fallbackBaseUrl: this.serverBaseUrl,
-      fallbackApiToken: this.serverApiToken,
-      model: this.model,
-      assistantMessage,
-      signal,
-    });
-    if (result) {
-      this._recordTranscript({
-        kind: 'next_speaker_check',
-        turn,
-        nextSpeaker: toStringValue(result.next_speaker),
-        reasoning: toStringValue(result.reasoning).slice(0, 320),
-      });
-      this._recordTransition('next_speaker_check', {
-        turn,
-        nextSpeaker: toStringValue(result.next_speaker),
-      });
-      this._persistState();
+  async _collectGeneratedFiles(runTrace = [], runContext = {}) {
+    if (!this.workspacePath) {
+      return [];
     }
-    return result;
-  }
-
-  async _verifyCreateRequestCompletion(runContext, runTrace, { signal = null } = {}) {
-    const intent = runContext?.intent && typeof runContext.intent === 'object' ? runContext.intent : {};
-    const requiresWorkspaceArtifact = Boolean(
-      runContext?.artifactPlan?.requiresWorkspaceArtifact || intent.createLikely,
-    );
-    if (!requiresWorkspaceArtifact || !this.workspacePath) {
-      return null;
-    }
-
-    const mutationPaths = [];
-    for (const step of Array.isArray(runTrace) ? runTrace : []) {
-      if (!['write', 'write_file', 'edit', 'replace_in_file', 'notebook_edit'].includes(toStringValue(step?.tool))) {
-        continue;
+    const candidatePaths = this._collectMutationPaths(runTrace);
+    if (candidatePaths.length === 0) {
+      for (const value of this._resolveRepairTargetPaths(runTrace, runContext)) {
+        if (!candidatePaths.includes(value)) {
+          candidatePaths.push(value);
+        }
       }
-      if (step?.observation?.ok === false) continue;
-      const pathValue = toStringValue(step?.observation?.path);
-      if (!pathValue || mutationPaths.includes(pathValue)) continue;
-      mutationPaths.push(pathValue);
     }
-    if (mutationPaths.length === 0) {
-      return null;
-    }
-
     const files = [];
-    for (const relativePath of mutationPaths.slice(0, 2)) {
+    for (const relativePath of candidatePaths.slice(0, 3)) {
       try {
         const fullPath = await safeResolve(this.workspacePath, relativePath);
         const content = await fs.promises.readFile(fullPath, 'utf8');
@@ -1405,27 +1443,14 @@ class QueryEngine {
         // ignore unreadable mutation targets
       }
     }
-    if (files.length === 0) {
-      return null;
-    }
-
-    const referenceExcerpts = this._collectReferenceExcerpts(runTrace);
-
-    return verifyCreateRequestSatisfaction({
-      baseUrl: this.llmBaseUrl || this.baseUrl || this.serverBaseUrl,
-      apiToken: this.llmApiToken || this.apiToken || this.serverApiToken,
-      fallbackBaseUrl: this.serverBaseUrl,
-      fallbackApiToken: this.serverApiToken,
-      model: this.model,
-      signal,
-      userPrompt: toStringValue(runContext?.prompt),
-      files,
-      referenceExcerpts,
-    });
+    return files;
   }
 
-  _collectReferenceExcerpts(runTrace = []) {
+  _collectReferenceEvidence(runTrace = []) {
     const referenceExcerpts = [];
+    const apiFacts = [];
+    const knownTypes = [];
+    const factSheetLines = [];
     for (const step of Array.isArray(runTrace) ? runTrace : []) {
       if (toStringValue(step?.tool) !== 'company_reference_search' || step?.observation?.ok === false) {
         continue;
@@ -1438,11 +1463,100 @@ class QueryEngine {
           evidenceType: toStringValue(item?.evidenceType || item?.evidence_type),
           content: String(item?.content || ''),
         });
-        if (referenceExcerpts.length >= 6) break;
+        if (referenceExcerpts.length >= 8) break;
       }
-      if (referenceExcerpts.length >= 6) break;
+      for (const item of Array.isArray(step?.observation?.api_facts || step?.observation?.apiFacts) ? (step.observation.api_facts || step.observation.apiFacts) : []) {
+        apiFacts.push({
+          kind: toStringValue(item?.kind),
+          namespace: toStringValue(item?.namespace),
+          typeName: toStringValue(item?.typeName),
+          qualifiedType: toStringValue(item?.qualifiedType),
+          memberName: toStringValue(item?.memberName),
+          signature: toStringValue(item?.signature),
+          stubSignature: toStringValue(item?.stubSignature),
+          path: toStringValue(item?.path),
+          lineRange: toStringValue(item?.lineRange || item?.line_range),
+          evidenceType: toStringValue(item?.evidenceType || item?.evidence_type),
+        });
+        if (apiFacts.length >= 20) break;
+      }
+      for (const item of Array.isArray(step?.observation?.known_types || step?.observation?.knownTypes) ? (step.observation.known_types || step.observation.knownTypes) : []) {
+        knownTypes.push({
+          qualifiedType: toStringValue(item?.qualifiedType),
+          namespace: toStringValue(item?.namespace),
+          typeName: toStringValue(item?.typeName),
+          kind: toStringValue(item?.kind),
+        });
+        if (knownTypes.length >= 20) break;
+      }
+      if (toStringValue(step?.observation?.fact_sheet || step?.observation?.factSheet)) {
+        factSheetLines.push(toStringValue(step.observation.fact_sheet || step.observation.factSheet));
+      }
+      if (referenceExcerpts.length >= 8 && apiFacts.length >= 20) {
+        break;
+      }
     }
-    return referenceExcerpts;
+    return {
+      referenceExcerpts,
+      apiFacts,
+      knownTypes,
+      factSheet: factSheetLines.slice(0, 2).join('\n').trim(),
+    };
+  }
+
+  async _runDeterministicArtifactCheck(runTrace = [], runContext = {}) {
+    const files = await this._collectGeneratedFiles(runTrace, runContext);
+    if (files.length === 0) {
+      return null;
+    }
+    const referenceEvidence = this._collectReferenceEvidence(runTrace);
+    const compileCheck = await verifyStandaloneCSharpArtifacts({
+      files,
+      referenceExcerpts: referenceEvidence.referenceExcerpts,
+      apiFacts: referenceEvidence.apiFacts,
+      knownTypes: referenceEvidence.knownTypes,
+    });
+    if (!compileCheck) {
+      return null;
+    }
+    return {
+      ...compileCheck,
+      files,
+      referenceEvidence,
+    };
+  }
+
+  async _verifyCreateRequestCompletion(runContext, runTrace, { signal = null, files = null, referenceEvidence = null, deterministicChecks = [] } = {}) {
+    const intent = runContext?.intent && typeof runContext.intent === 'object' ? runContext.intent : {};
+    const requiresWorkspaceArtifact = Boolean(
+      runContext?.artifactPlan?.requiresWorkspaceArtifact || intent.createLikely,
+    );
+    if (!requiresWorkspaceArtifact || !this.workspacePath) {
+      return null;
+    }
+
+    const generatedFiles = Array.isArray(files) ? files : await this._collectGeneratedFiles(runTrace, runContext);
+    if (generatedFiles.length === 0) {
+      return null;
+    }
+
+    const references = referenceEvidence && typeof referenceEvidence === 'object'
+      ? referenceEvidence
+      : this._collectReferenceEvidence(runTrace);
+
+    return verifyCreateRequestSatisfaction({
+      baseUrl: this.llmBaseUrl || this.baseUrl || this.serverBaseUrl,
+      apiToken: this.llmApiToken || this.apiToken || this.serverApiToken,
+      fallbackBaseUrl: this.serverBaseUrl,
+      fallbackApiToken: this.serverApiToken,
+      model: this.model,
+      signal,
+      userPrompt: toStringValue(runContext?.prompt),
+      files: generatedFiles,
+      referenceExcerpts: references.referenceExcerpts,
+      apiFacts: references.apiFacts,
+      deterministicChecks,
+    });
   }
 
   _collectMutationPaths(runTrace = []) {
@@ -1457,6 +1571,416 @@ class QueryEngine {
       paths.push(pathValue);
     }
     return paths;
+  }
+
+  _groundedSourcePaths(runTrace = []) {
+    return collectGroundedPaths({
+      trace: Array.isArray(runTrace) ? runTrace : [],
+      fileCache: this.state.fileCache,
+      requestContext: this.runtime?.requestContext || {},
+    });
+  }
+
+  _evaluateFinalAnswer(finalAnswer, { trace = [], turn = 0, deterministicChecks = [] } = {}) {
+    const finalAnswerCheck = evaluateFinalAnswerState({
+      requestContext: this.runtime?.requestContext || {},
+      trace,
+      finalAnswer,
+      groundedPaths: this._groundedSourcePaths(trace),
+      describeTool: (toolName) => (this.tools?.describe ? this.tools.describe(toolName) : null),
+      deterministicChecks,
+    });
+
+    if (!finalAnswerCheck?.ok && finalAnswerCheck?.type === 'policy') {
+      this.state.totalUsage.stop_hooks += 1;
+      this._recordTranscript({
+        kind: 'final_answer_policy',
+        turn,
+        reason: toStringValue(finalAnswerCheck.reason || 'final_answer_policy'),
+        details: finalAnswerCheck.details || {},
+      });
+      this._recordTransition('final_answer_policy', {
+        turn,
+        reason: toStringValue(finalAnswerCheck.reason || 'final_answer_policy'),
+      });
+      return finalAnswerCheck;
+    }
+
+    if (!finalAnswerCheck?.ok && finalAnswerCheck?.type === 'grounding') {
+      this.state.ungroundedAnswerRetries = Number(this.state.ungroundedAnswerRetries || 0) + 1;
+      this._recordTranscript({
+        kind: 'ungrounded_answer_warning',
+        turn,
+        mentions: Array.isArray(finalAnswerCheck.mentions) ? finalAnswerCheck.mentions.slice(0, 8) : [],
+      });
+      this._recordTransition('ungrounded_answer_warning', {
+        turn,
+        count: Array.isArray(finalAnswerCheck.mentions) ? finalAnswerCheck.mentions.length : 0,
+        mentions: Array.isArray(finalAnswerCheck.mentions) ? finalAnswerCheck.mentions.slice(0, 8) : [],
+      });
+      return {
+        ...finalAnswerCheck,
+        retryCount: Number(this.state.ungroundedAnswerRetries || 0),
+      };
+    }
+
+    this.state.ungroundedAnswerRetries = 0;
+    return finalAnswerCheck;
+  }
+
+  _queueRepairLoop({
+    turn = 0,
+    maxTurns = MAX_TURNS,
+    runTrace = [],
+    runContext = {},
+    hook = 'draft_answer_verification_retry',
+    reasoning = '',
+    requiredChanges = [],
+    fallbackWithTarget = '',
+    fallbackWithoutTarget = '',
+  } = {}) {
+    const targetPaths = this._resolveRepairTargetPaths(runTrace, runContext);
+    this.state.createVerificationRetries += 1;
+    this.state.phaseLock = {
+      kind: 'draft_verification',
+      targetPaths,
+      turn,
+    };
+    const nextMaxTurns = Math.max(maxTurns, MAX_TURNS + MAX_CREATE_VERIFICATION_EXTRA_TURNS);
+    this._pushMetaUserMessage(
+      toStringValue(reasoning)
+        || (targetPaths.length > 0 ? toStringValue(fallbackWithTarget) : toStringValue(fallbackWithoutTarget)),
+      {
+        turn,
+        hook,
+        requiredChanges: (
+          Array.isArray(requiredChanges) && requiredChanges.length > 0
+            ? requiredChanges
+            : ['Re-read the generated file and patch it directly before finalizing.']
+        ).slice(0, 6),
+        targetPaths: targetPaths.slice(0, 4),
+      },
+    );
+    this._recordTransition(hook, {
+      turn,
+      retryCount: Number(this.state.createVerificationRetries || 0),
+      targetPaths: targetPaths.slice(0, 4),
+    });
+    this._persistState();
+    return nextMaxTurns;
+  }
+
+  _resetPendingAnswerState() {
+    this.state.pendingAssistantContinuation = '';
+    this.state.maxOutputTokensRecoveryCount = 0;
+    this.state.maxOutputTokensOverride = 0;
+  }
+
+  _resetRepairState() {
+    this.state.createVerificationRetries = 0;
+    this.state.phaseLock = null;
+  }
+
+  _queueFinalAnswerPolicyRetry(finalAnswerCheck, { turn = 0 } = {}) {
+    this._resetPendingAnswerState();
+    this._pushMetaUserMessage(
+      toStringValue(finalAnswerCheck?.blockingMessage)
+        || 'Do not finalize yet. Inspect the relevant source directly before answering.',
+      {
+        turn,
+        hook: toStringValue(finalAnswerCheck?.reason || 'final_answer_policy'),
+        candidatePaths: Array.isArray(finalAnswerCheck?.details?.candidatePaths)
+          ? finalAnswerCheck.details.candidatePaths.slice(0, 6)
+          : [],
+        successfulToolNames: Array.isArray(finalAnswerCheck?.details?.successfulToolNames)
+          ? finalAnswerCheck.details.successfulToolNames.slice(0, 8)
+          : [],
+      },
+    );
+    this._recordTransition('final_answer_policy_retry', {
+      turn,
+      reason: toStringValue(finalAnswerCheck?.reason || 'final_answer_policy'),
+    });
+    this._persistState();
+  }
+
+  _queueUngroundedAnswerRetry(finalAnswerCheck, { turn = 0 } = {}) {
+    this._pushMetaUserMessage(
+      `Your previous answer referenced ungrounded sources: ${(Array.isArray(finalAnswerCheck?.mentions) ? finalAnswerCheck.mentions : []).join(', ')}. Revise the answer using only paths or sources already shown in tool results, or say the missing detail is unverified.`,
+      {
+        turn,
+        retryCount: Number(finalAnswerCheck?.retryCount || 0),
+        mentions: Array.isArray(finalAnswerCheck?.mentions) ? finalAnswerCheck.mentions.slice(0, 8) : [],
+      },
+    );
+    this._recordTransition('ungrounded_answer_retry', {
+      turn,
+      retryCount: Number(finalAnswerCheck?.retryCount || 0),
+      count: Array.isArray(finalAnswerCheck?.mentions) ? finalAnswerCheck.mentions.length : 0,
+      mentions: Array.isArray(finalAnswerCheck?.mentions) ? finalAnswerCheck.mentions.slice(0, 8) : [],
+    });
+    this._persistState();
+    if (Number(finalAnswerCheck?.retryCount || 0) > MAX_UNGROUNDED_ANSWER_RETRIES) {
+      this.state.terminalReason = 'ungrounded_answer';
+      return 'break';
+    }
+    return 'continue';
+  }
+
+  async _returnFinalAnswer({
+    finalAnswer = '',
+    runTrace = [],
+    turn = 0,
+    transcriptStartIndex = 0,
+    onStatus = async () => {},
+    onToken = async () => {},
+    onTerminal = async () => {},
+  } = {}) {
+    this._resetPendingAnswerState();
+    this._resetRepairState();
+    this.state.terminalReason = 'final_answer';
+    await onStatus({ phase: 'finalize', message: 'Finalizing answer...' });
+    if (finalAnswer) {
+      await onToken(finalAnswer);
+    }
+    const readObservations = readObservationsFromTrace(runTrace);
+    const primary = readObservations[0] || {};
+    this._recordTranscript({
+      kind: 'final_answer',
+      turn,
+      preview: previewText(finalAnswer),
+    });
+    this._recordTransition('final_answer', { turn });
+    this._persistState();
+    await onTerminal({ reason: 'final_answer', turn });
+    return {
+      answer: finalAnswer,
+      trace: runTrace,
+      transcript: this.state.transcript.slice(transcriptStartIndex),
+      runtime: this._runtimeSnapshot(),
+      summary: `Completed in ${turn} turns.`,
+      primaryFilePath: toStringValue(primary.path),
+      primaryFileContent: toStringValue(primary.content).slice(0, 24000),
+      usage: { ...this.state.totalUsage },
+      sessionId: this.sessionId,
+    };
+  }
+
+  async _attemptFinalizeSuccessfulAnswer({
+    assistantMessage = null,
+    assistantText = '',
+    prompt = '',
+    runContext = {},
+    traceStartIndex = 0,
+    transcriptStartIndex = 0,
+    turn = 0,
+    signal = null,
+    maxTurns = MAX_TURNS,
+    onStatus = async () => {},
+    onToken = async () => {},
+    onTerminal = async () => {},
+  } = {}) {
+    const finalAnswer = joinAnswerFragments(this.state.pendingAssistantContinuation, assistantText);
+    const runTrace = this.state.trace.slice(traceStartIndex);
+    const deterministicArtifactCheck = await this._runDeterministicArtifactCheck(runTrace, runContext);
+    const finalAnswerCheck = this._evaluateFinalAnswer(finalAnswer, {
+      trace: runTrace,
+      turn,
+    });
+    if (!finalAnswerCheck?.ok && finalAnswerCheck?.type === 'policy') {
+      this._queueFinalAnswerPolicyRetry(finalAnswerCheck, { turn });
+      return { status: 'continue', maxTurns };
+    }
+
+    const referenceEvidence = this._collectReferenceEvidence(runTrace);
+    if (
+      deterministicArtifactCheck
+      && deterministicArtifactCheck.supported
+      && !deterministicArtifactCheck.ok
+      && Number(this.state.createVerificationRetries || 0) < MAX_CREATE_VERIFICATION_RETRIES
+    ) {
+      return {
+        status: 'continue',
+        maxTurns: this._queueRepairLoop({
+          turn,
+          maxTurns,
+          runTrace,
+          runContext,
+          hook: 'deterministic_compile_retry',
+          reasoning: deterministicArtifactCheck.reasoning,
+          requiredChanges: Array.isArray(deterministicArtifactCheck.required_changes)
+            ? deterministicArtifactCheck.required_changes
+            : [],
+          fallbackWithTarget: 'The generated file does not compile against the verified engine API facts. Re-read and patch the target file directly before finalizing.',
+          fallbackWithoutTarget: 'The generated file does not compile against the verified engine API facts. Re-read the relevant source and patch the generated file before finalizing.',
+        }),
+      };
+    }
+
+    const draftVerification = await verifyDraftAnswerSatisfaction({
+      baseUrl: this.llmBaseUrl || this.baseUrl || this.serverBaseUrl,
+      apiToken: this.llmApiToken || this.apiToken || this.serverApiToken,
+      fallbackBaseUrl: this.serverBaseUrl,
+      fallbackApiToken: this.serverApiToken,
+      model: this.model,
+      signal,
+      userPrompt: toStringValue(runContext?.prompt || prompt),
+      finalAnswer,
+      referenceExcerpts: referenceEvidence.referenceExcerpts,
+      apiFacts: referenceEvidence.apiFacts,
+      deterministicChecks: deterministicArtifactCheck ? [deterministicArtifactCheck] : [],
+    });
+    if (
+      draftVerification
+      && draftVerification.needs_changes
+      && Number(this.state.createVerificationRetries || 0) < MAX_CREATE_VERIFICATION_RETRIES
+    ) {
+      return {
+        status: 'continue',
+        maxTurns: this._queueRepairLoop({
+          turn,
+          maxTurns,
+          runTrace,
+          runContext,
+          hook: 'draft_answer_verification_retry',
+          reasoning: draftVerification.reasoning,
+          requiredChanges: Array.isArray(draftVerification.required_changes)
+            ? draftVerification.required_changes
+            : [],
+          fallbackWithTarget: 'The draft answer still disagrees with verified reference signatures. Re-read and patch the target file directly before finalizing.',
+          fallbackWithoutTarget: 'The draft answer appears incompatible with the verified reference signatures. Fix the generated code or mark the uncertain detail as unverified before finalizing.',
+        }),
+      };
+    }
+
+    const createVerification = await this._verifyCreateRequestCompletion(runContext, runTrace, {
+      signal,
+      files: deterministicArtifactCheck?.files,
+      referenceEvidence: deterministicArtifactCheck?.referenceEvidence || referenceEvidence,
+      deterministicChecks: deterministicArtifactCheck ? [deterministicArtifactCheck] : [],
+    });
+    if (
+      createVerification
+      && createVerification.needs_changes
+      && Number(this.state.createVerificationRetries || 0) < MAX_CREATE_VERIFICATION_RETRIES
+    ) {
+      return {
+        status: 'continue',
+        maxTurns: this._queueRepairLoop({
+          turn,
+          maxTurns,
+          runTrace,
+          runContext: {
+            ...runContext,
+            artifactPlan: {
+              ...(runContext?.artifactPlan && typeof runContext.artifactPlan === 'object' ? runContext.artifactPlan : {}),
+              likelyPaths: Array.isArray(createVerification.target_paths)
+                ? createVerification.target_paths
+                : (Array.isArray(runContext?.artifactPlan?.likelyPaths) ? runContext.artifactPlan.likelyPaths : []),
+            },
+          },
+          hook: 'create_request_verification_retry',
+          reasoning: createVerification.reasoning,
+          requiredChanges: Array.isArray(createVerification.required_changes)
+            ? createVerification.required_changes
+            : [],
+          fallbackWithTarget: 'The generated workspace file does not yet fully satisfy the request. Fix the target file directly instead of finalizing or switching to build/dependency troubleshooting.',
+          fallbackWithoutTarget: 'The generated workspace file does not yet fully satisfy the request. Fix the source file directly instead of finalizing or switching to build/dependency troubleshooting.',
+        }),
+      };
+    }
+
+    if (!finalAnswerCheck?.ok && finalAnswerCheck?.type === 'grounding') {
+      return {
+        status: this._queueUngroundedAnswerRetry(finalAnswerCheck, { turn }),
+        maxTurns,
+      };
+    }
+
+    return {
+      status: 'final',
+      result: await this._returnFinalAnswer({
+        finalAnswer,
+        runTrace,
+        turn,
+        transcriptStartIndex,
+        onStatus,
+        onToken,
+        onTerminal,
+      }),
+    };
+  }
+
+  _resolveRepairTargetPaths(runTrace = [], runContext = {}) {
+    const targets = [];
+    const push = (value) => {
+      const normalized = toStringValue(value);
+      if (!normalized || targets.includes(normalized)) return;
+      targets.push(normalized);
+    };
+
+    for (const value of this._collectMutationPaths(runTrace)) {
+      push(value);
+    }
+
+    for (const observation of readObservationsFromTrace(runTrace)) {
+      const pathValue = toStringValue(observation?.path);
+      if (/\.(cs|xaml|xaml\.cs|csproj|sln)$/i.test(pathValue)) {
+        push(pathValue);
+      }
+    }
+
+    for (const value of Array.isArray(runContext?.artifactPlan?.likelyPaths) ? runContext.artifactPlan.likelyPaths : []) {
+      push(value);
+    }
+
+    const cacheEntries = Object.keys(this.state.fileCache && typeof this.state.fileCache === 'object' ? this.state.fileCache : {});
+    for (const value of cacheEntries) {
+      if (/\.(cs|xaml|xaml\.cs|csproj|sln)$/i.test(value)) {
+        push(value);
+      }
+    }
+
+    return targets.slice(0, 4);
+  }
+
+  _mergeRequestContractContext(requestContext = {}, contract = {}) {
+    return buildRequestContext({
+      ...requestContext,
+      prompt: toStringValue(requestContext?.prompt),
+      workspacePath: this.workspacePath,
+      selectedFilePath: toStringValue(requestContext?.selectedFilePath || this.selectedFilePath),
+      directives: requestContext?.directives,
+      languageProfile: requestContext?.languageProfile,
+      intent: mergeBooleanHints(
+        requestContext?.intent && typeof requestContext.intent === 'object' ? requestContext.intent : {},
+        contract?.intent && typeof contract.intent === 'object' ? contract.intent : {},
+      ),
+      focus: mergeBooleanHints(
+        requestContext?.focus && typeof requestContext.focus === 'object' ? requestContext.focus : {},
+        contract?.focus && typeof contract.focus === 'object' ? contract.focus : {},
+      ),
+      symbolHints: [
+        ...(Array.isArray(requestContext?.symbolHints) ? requestContext.symbolHints : []),
+        ...(Array.isArray(contract?.symbolHints) ? contract.symbolHints : []),
+      ],
+      searchTerms: [
+        ...(Array.isArray(requestContext?.searchTerms) ? requestContext.searchTerms : []),
+        ...(Array.isArray(contract?.searchTerms) ? contract.searchTerms : []),
+      ],
+      artifactPlan: {
+        requiresWorkspaceArtifact: Boolean(
+          contract?.artifact?.requiresWorkspaceArtifact
+          || requestContext?.artifactPlan?.requiresWorkspaceArtifact
+          || requestContext?.intent?.createLikely
+          || contract?.intent?.createLikely,
+        ),
+        likelyPaths: [
+          ...(Array.isArray(requestContext?.artifactPlan?.likelyPaths) ? requestContext.artifactPlan.likelyPaths : []),
+          ...(Array.isArray(contract?.artifact?.likelyPaths) ? contract.artifact.likelyPaths : []),
+        ],
+      },
+    });
   }
 
   async _enrichRunContextWithContract(runContext, { signal = null } = {}) {
@@ -1475,40 +1999,7 @@ class QueryEngine {
       prompt,
       signal,
     });
-    const nextContext = buildRequestContext({
-      ...requestContext,
-      prompt,
-      workspacePath: this.workspacePath,
-      selectedFilePath: toStringValue(requestContext?.selectedFilePath || this.selectedFilePath),
-      directives: requestContext?.directives,
-      languageProfile: requestContext?.languageProfile,
-      intent: {
-        ...(requestContext?.intent && typeof requestContext.intent === 'object' ? requestContext.intent : {}),
-        ...(contract?.intent && typeof contract.intent === 'object' ? contract.intent : {}),
-      },
-      focus: {
-        ...(requestContext?.focus && typeof requestContext.focus === 'object' ? requestContext.focus : {}),
-        ...(contract?.focus && typeof contract.focus === 'object' ? contract.focus : {}),
-      },
-      symbolHints: [
-        ...(Array.isArray(requestContext?.symbolHints) ? requestContext.symbolHints : []),
-        ...(Array.isArray(contract?.symbolHints) ? contract.symbolHints : []),
-      ],
-      searchTerms: [
-        ...(Array.isArray(requestContext?.searchTerms) ? requestContext.searchTerms : []),
-        ...(Array.isArray(contract?.searchTerms) ? contract.searchTerms : []),
-      ],
-      artifactPlan: {
-        requiresWorkspaceArtifact: Boolean(
-          contract?.artifact?.requiresWorkspaceArtifact
-          || requestContext?.artifactPlan?.requiresWorkspaceArtifact,
-        ),
-        likelyPaths: [
-          ...(Array.isArray(requestContext?.artifactPlan?.likelyPaths) ? requestContext.artifactPlan.likelyPaths : []),
-          ...(Array.isArray(contract?.artifact?.likelyPaths) ? contract.artifact.likelyPaths : []),
-        ],
-      },
-    });
+    const nextContext = this._mergeRequestContractContext(requestContext, contract);
     this.runtime.requestContext = nextContext;
     if (
       Object.values(contract?.intent || {}).some(Boolean)
@@ -1646,29 +2137,8 @@ class QueryEngine {
           this._persistState();
         }
 
-        const activeToolNames = this._activeToolNames(turn);
-        const workspaceAnswerLoop = this.runtime.getWorkspaceAnswerLoopState();
-        if (
-          workspaceAnswerLoop?.saturated
-          && Number(this.state.workspaceAnswerSaturationNotifiedTurn || 0) !== turn
-        ) {
-          this.state.workspaceAnswerSaturationNotifiedTurn = turn;
-          this._pushMetaUserMessage(
-            'Recent workspace searches are revisiting the same files without discovering new paths. Stop searching and answer using the evidence already collected. If a detail remains uncertain, say it is unverified.',
-            {
-              turn,
-              hook: 'workspace_search_answer_saturated',
-              recentPaths: Array.isArray(workspaceAnswerLoop?.recentPaths) ? workspaceAnswerLoop.recentPaths.slice(0, 6) : [],
-              repeatedReadTargets: Array.isArray(workspaceAnswerLoop?.repeatedReadTargets) ? workspaceAnswerLoop.repeatedReadTargets.slice(0, 4) : [],
-            },
-          );
-          this._recordTransition('workspace_search_answer_saturated', {
-            turn,
-            recentPaths: Array.isArray(workspaceAnswerLoop?.recentPaths) ? workspaceAnswerLoop.recentPaths.length : 0,
-            repeatedReadTargets: Array.isArray(workspaceAnswerLoop?.repeatedReadTargets) ? workspaceAnswerLoop.repeatedReadTargets.length : 0,
-          });
-          this._persistState();
-        }
+        const controlState = this._loopControlState(turn);
+        const activeToolNames = controlState.activeToolNames;
         const toolDefinitions = await this._describeTools(activeToolNames);
         const systemPrompt = buildSystemPrompt({
           workspacePath: this.workspacePath,
@@ -1700,6 +2170,7 @@ class QueryEngine {
         try {
           completion = await this._callModel(this._modelMessages(systemPrompt), {
             signal,
+            turn,
             onToolCalls: async (toolCalls) => {
               streamingPrefetch.sync(toolCalls);
             },
@@ -1806,22 +2277,29 @@ class QueryEngine {
         const assistantBlocks = parsed.blocks;
         const assistantText = extractTextFromBlocks(assistantBlocks);
         const toolUses = toolUseBlocks(assistantBlocks);
-        const needsFollowUp = toolUses.length > 0;
-        const progressSignature = `${assistantText}::${toolBatchSignature(toolUses)}`;
-        const noProgressTurns = this._updateProgressSignature(progressSignature);
-        if (noProgressTurns >= MAX_NO_PROGRESS_RETRIES) {
+        if (
+          this.state.phaseLock?.kind === 'draft_verification'
+          && toolUses.length === 0
+        ) {
+          const targetPaths = Array.isArray(this.state.phaseLock.targetPaths) ? this.state.phaseLock.targetPaths : [];
           this._pushMetaUserMessage(
-            'You are repeating the same reasoning without making progress. Change strategy, use different tools, or answer with the blocker directly.',
-            { turn, noProgressTurns },
+            targetPaths.length > 0
+              ? `Do not summarize yet. Read and patch ${targetPaths[0]} directly. Reply only with read_file, edit, or write tool calls until verification passes.`
+              : 'Do not summarize yet. Reply only with read_file, edit, or write tool calls until verification passes.',
+            {
+              turn,
+              hook: 'draft_verification_tool_only',
+              targetPaths: targetPaths.slice(0, 4),
+            },
           );
-          this._recordTransition('no_progress_retry', { turn, noProgressTurns });
+          this._recordTransition('draft_verification_tool_only', {
+            turn,
+            targetPaths: targetPaths.slice(0, 4),
+          });
           this._persistState();
-          if (noProgressTurns > MAX_NO_PROGRESS_RETRIES) {
-            this.state.terminalReason = 'no_progress';
-            break;
-          }
           continue;
         }
+        const needsFollowUp = toolUses.length > 0;
         this.state.messages.push({ role: 'assistant', content: assistantBlocks });
         this._recordTransition('assistant_message', { turn, toolUses: toolUses.length });
         this._recordTranscript({
@@ -1864,202 +2342,35 @@ class QueryEngine {
         }
 
         const assistantMessage = { role: 'assistant', content: assistantBlocks };
-        if (!needsFollowUp && isResultSuccessful(assistantMessage, finishReason)) {
-          const finalAnswer = joinAnswerFragments(this.state.pendingAssistantContinuation, assistantText);
-          const runTrace = this.state.trace.slice(traceStartIndex);
-          const finalAnswerCheck = this.runtime.evaluateFinalAnswer(finalAnswer, {
-            trace: runTrace,
+        if (!needsFollowUp && assistantText) {
+          const finalizeOutcome = await this._attemptFinalizeSuccessfulAnswer({
+            assistantMessage,
+            assistantText,
+            prompt,
+            runContext,
+            traceStartIndex,
+            transcriptStartIndex,
             turn,
-          });
-          if (!finalAnswerCheck?.ok && finalAnswerCheck?.type === 'policy') {
-            this.state.pendingAssistantContinuation = '';
-            this.state.maxOutputTokensRecoveryCount = 0;
-            this.state.maxOutputTokensOverride = 0;
-            this._pushMetaUserMessage(
-              toStringValue(finalAnswerCheck.blockingMessage)
-                || 'Do not finalize yet. Inspect the relevant source directly before answering.',
-              {
-                turn,
-                hook: toStringValue(finalAnswerCheck.reason || 'final_answer_policy'),
-                candidatePaths: Array.isArray(finalAnswerCheck?.details?.candidatePaths)
-                  ? finalAnswerCheck.details.candidatePaths.slice(0, 6)
-                  : [],
-                successfulToolNames: Array.isArray(finalAnswerCheck?.details?.successfulToolNames)
-                  ? finalAnswerCheck.details.successfulToolNames.slice(0, 8)
-                  : [],
-              },
-            );
-            this._recordTransition('final_answer_policy_retry', {
-              turn,
-              reason: toStringValue(finalAnswerCheck.reason || 'final_answer_policy'),
-            });
-            this._persistState();
-            continue;
-          }
-          const draftVerification = await verifyDraftAnswerSatisfaction({
-            baseUrl: this.llmBaseUrl || this.baseUrl || this.serverBaseUrl,
-            apiToken: this.llmApiToken || this.apiToken || this.serverApiToken,
-            fallbackBaseUrl: this.serverBaseUrl,
-            fallbackApiToken: this.serverApiToken,
-            model: this.model,
             signal,
-            userPrompt: toStringValue(runContext?.prompt || prompt),
-            finalAnswer,
-            referenceExcerpts: this._collectReferenceExcerpts(runTrace),
+            maxTurns,
+            onStatus,
+            onToken,
+            onTerminal,
           });
-          if (
-            draftVerification
-            && draftVerification.needs_changes
-            && Number(this.state.createVerificationRetries || 0) < MAX_CREATE_VERIFICATION_RETRIES
-          ) {
-            const targetPaths = this._collectMutationPaths(runTrace);
-            this.state.createVerificationRetries += 1;
-            this.state.phaseLock = {
-              kind: 'draft_verification',
-              targetPaths,
-              turn,
-            };
-            maxTurns = Math.max(maxTurns, MAX_TURNS + MAX_CREATE_VERIFICATION_EXTRA_TURNS);
-            this._pushMetaUserMessage(
-              toStringValue(draftVerification.reasoning)
-                || (
-                  targetPaths.length > 0
-                    ? `The draft answer still disagrees with verified reference signatures. Re-read and patch ${targetPaths[0]} directly before finalizing.`
-                    : 'The draft answer appears incompatible with the verified reference signatures. Fix the generated code or mark the uncertain detail as unverified before finalizing.'
-                ),
-              {
-                turn,
-                hook: 'draft_answer_verification_retry',
-                requiredChanges: (
-                  Array.isArray(draftVerification.required_changes) && draftVerification.required_changes.length > 0
-                    ? draftVerification.required_changes
-                    : ['Re-read the generated file and patch the API signatures to match the verified reference excerpts.']
-                ).slice(0, 6),
-                targetPaths: targetPaths.slice(0, 4),
-              },
-            );
-            this._recordTransition('draft_answer_verification_retry', {
-              turn,
-              retryCount: Number(this.state.createVerificationRetries || 0),
-              targetPaths: targetPaths.slice(0, 4),
-            });
-            this._persistState();
+          maxTurns = Number(finalizeOutcome?.maxTurns || maxTurns);
+          if (finalizeOutcome?.status === 'continue') {
             continue;
           }
-          const createVerification = await this._verifyCreateRequestCompletion(runContext, runTrace, {
-            signal,
-          });
-          if (
-            createVerification
-            && createVerification.needs_changes
-            && Number(this.state.createVerificationRetries || 0) < MAX_CREATE_VERIFICATION_RETRIES
-          ) {
-            this.state.createVerificationRetries += 1;
-            maxTurns = Math.max(maxTurns, MAX_TURNS + MAX_CREATE_VERIFICATION_EXTRA_TURNS);
-            this._pushMetaUserMessage(
-              toStringValue(createVerification.reasoning)
-                || 'The generated workspace file does not yet fully satisfy the request. Fix the source file directly instead of finalizing or switching to build/dependency troubleshooting.',
-              {
-                turn,
-                hook: 'create_request_verification_retry',
-                requiredChanges: Array.isArray(createVerification.required_changes)
-                  ? createVerification.required_changes.slice(0, 6)
-                  : [],
-                targetPaths: Array.isArray(createVerification.target_paths)
-                  ? createVerification.target_paths.slice(0, 4)
-                  : [],
-              },
-            );
-            this._recordTransition('create_request_verification_retry', {
-              turn,
-              retryCount: Number(this.state.createVerificationRetries || 0),
-              targetPaths: Array.isArray(createVerification.target_paths)
-                ? createVerification.target_paths.slice(0, 4)
-                : [],
-            });
-            this._persistState();
-            continue;
+          if (finalizeOutcome?.status === 'break') {
+            break;
           }
-          const nextSpeakerCheck = await this._checkNextSpeaker(assistantMessage, {
-            signal,
-            turn,
-          });
-          if (toStringValue(nextSpeakerCheck?.next_speaker).toLowerCase() === 'model') {
-            this._pushMetaUserMessage('Please continue.', {
-              turn,
-              hook: 'next_speaker',
-              reasoning: toStringValue(nextSpeakerCheck?.reasoning).slice(0, 240),
-            });
-            this._recordTransition('next_speaker_continue', {
-              turn,
-              reasoning: toStringValue(nextSpeakerCheck?.reasoning).slice(0, 160),
-            });
-            this._persistState();
-            continue;
+          if (finalizeOutcome?.status === 'final' && finalizeOutcome?.result) {
+            return finalizeOutcome.result;
           }
-          this.state.pendingAssistantContinuation = '';
-          this.state.maxOutputTokensRecoveryCount = 0;
-          this.state.maxOutputTokensOverride = 0;
-          this.state.repeatedToolBatchSignature = '';
-          this.state.repeatedToolBatchCount = 0;
-          this.state.createVerificationRetries = 0;
-          this.state.phaseLock = null;
-          if (!finalAnswerCheck?.ok && finalAnswerCheck?.type === 'grounding') {
-            this._pushMetaUserMessage(
-              `Your previous answer referenced ungrounded sources: ${(Array.isArray(finalAnswerCheck?.mentions) ? finalAnswerCheck.mentions : []).join(', ')}. Revise the answer using only paths or sources already shown in tool results, or say the missing detail is unverified.`,
-              {
-                turn,
-                retryCount: Number(finalAnswerCheck?.retryCount || 0),
-                mentions: Array.isArray(finalAnswerCheck?.mentions) ? finalAnswerCheck.mentions.slice(0, 8) : [],
-              },
-            );
-            this._recordTransition('ungrounded_answer_retry', {
-              turn,
-              retryCount: Number(finalAnswerCheck?.retryCount || 0),
-              count: Array.isArray(finalAnswerCheck?.mentions) ? finalAnswerCheck.mentions.length : 0,
-              mentions: Array.isArray(finalAnswerCheck?.mentions) ? finalAnswerCheck.mentions.slice(0, 8) : [],
-            });
-            this._persistState();
-            if (Number(finalAnswerCheck?.retryCount || 0) > MAX_UNGROUNDED_ANSWER_RETRIES) {
-              this.state.terminalReason = 'ungrounded_answer';
-              break;
-            }
-            continue;
-          }
-          this.state.terminalReason = 'final_answer';
-          await onStatus({ phase: 'finalize', message: 'Finalizing answer...' });
-          if (finalAnswer) {
-            await onToken(finalAnswer);
-          }
-          const readObservations = readObservationsFromTrace(runTrace);
-          const primary = readObservations[0] || {};
-          this._recordTranscript({
-            kind: 'final_answer',
-            turn,
-            preview: previewText(finalAnswer),
-          });
-          this._recordTransition('final_answer', { turn });
-          this._persistState();
-          await onTerminal({ reason: 'final_answer', turn });
-          return {
-            answer: finalAnswer,
-            trace: runTrace,
-            transcript: this.state.transcript.slice(transcriptStartIndex),
-            runtime: this._runtimeSnapshot(),
-            summary: `Completed in ${turn} turns.`,
-            primaryFilePath: toStringValue(primary.path),
-            primaryFileContent: toStringValue(primary.content).slice(0, 24000),
-            usage: { ...this.state.totalUsage },
-            sessionId: this.sessionId,
-          };
         }
 
-        if (toolUses.length === 0) {
+        if (toolUses.length === 0 && !assistantText) {
           this.state.totalUsage.parse_retries += 1;
-          this._pushMetaUserMessage(
-            'You must either provide a final text answer or issue at least one valid tool call.',
-            { turn },
-          );
           this._recordTransition('missing_tool_use_or_answer', { turn });
           this._persistState();
           continue;
@@ -2070,14 +2381,6 @@ class QueryEngine {
         this.state.maxOutputTokensOverride = 0;
         this.state.ungroundedAnswerRetries = 0;
         this.state.createVerificationRetries = 0;
-        const batchSignature = toolBatchSignature(toolUses);
-        if (batchSignature && batchSignature === this.state.repeatedToolBatchSignature) {
-          this.state.repeatedToolBatchCount += 1;
-        } else {
-          this.state.repeatedToolBatchSignature = batchSignature;
-          this.state.repeatedToolBatchCount = batchSignature ? 1 : 0;
-        }
-
         const {
           toolExecutions,
           toolResultBlocks,
@@ -2088,6 +2391,7 @@ class QueryEngine {
           turn,
           assistantText,
           toolUses,
+          activeToolNames,
           signal,
           onToolUse,
           onToolResult,
@@ -2121,25 +2425,6 @@ class QueryEngine {
           });
         }
 
-        if (this.state.repeatedToolBatchCount >= MAX_REPEATED_TOOL_BATCHES) {
-          this._pushMetaUserMessage(
-            'You have repeated the same tool batch too many times. Use different tools, narrow the target, or explain the blocker instead of re-running the same batch.',
-            {
-              turn,
-              repeatedToolBatchCount: this.state.repeatedToolBatchCount,
-              batchSignature,
-            },
-          );
-          this._recordTransition('repeated_tool_batch_retry', {
-            turn,
-            repeatedToolBatchCount: this.state.repeatedToolBatchCount,
-          });
-          if (this.state.repeatedToolBatchCount > MAX_REPEATED_TOOL_BATCHES) {
-            this.state.terminalReason = 'repeated_tool_batch';
-            break;
-          }
-        }
-
         this._recordTransition('next_turn', {
           turn,
           toolUses: toolUses.length,
@@ -2160,7 +2445,11 @@ class QueryEngine {
       const readObservations = readObservationsFromTrace(runTrace);
       const primary = readObservations[0] || {};
       const failed = failedSteps(runTrace)[0];
-      const resolvedTerminalReason = resolveFallbackTerminalReason(this.state.terminalReason, failed);
+      const resolvedTerminalReason = resolveFallbackTerminalReason(
+        this.state.terminalReason,
+        failed,
+        runTrace.at(-1),
+      );
       const fallbackAnswer = buildFallbackAnswer({
         terminalReason: resolvedTerminalReason,
         failedStep: failed,

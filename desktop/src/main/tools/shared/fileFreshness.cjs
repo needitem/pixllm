@@ -24,7 +24,6 @@ async function requireFreshWorkspaceRead({
   relativePath = '',
   fileCache = {},
   allowMissing = false,
-  action = 'modify',
 } = {}) {
   const pathValue = toStringValue(relativePath);
   if (!pathValue) {
@@ -59,12 +58,9 @@ async function requireFreshWorkspaceRead({
   const cached = cacheEntryForPath(fileCache, pathValue);
   if (!cached) {
     return {
-      allow: false,
-      reason: action === 'overwrite' ? 'read_required_before_write' : 'read_required_before_edit',
-      message:
-        action === 'overwrite'
-          ? `Read ${pathValue} before overwriting it so the write is grounded in the current file content.`
-          : `Read ${pathValue} before editing it so replacements are based on the current file content.`,
+      allow: true,
+      stat: statResult.stat,
+      missingCache: true,
     };
   }
 
@@ -83,9 +79,10 @@ async function requireFreshWorkspaceRead({
       }
     }
     return {
-      allow: false,
-      reason: 'stale_file_read',
-      message: `${pathValue} changed after it was read. Read it again before continuing.`,
+      allow: true,
+      stat: statResult.stat,
+      cacheEntry: cached,
+      stale: true,
     };
   }
 

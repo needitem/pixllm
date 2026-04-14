@@ -6,6 +6,7 @@ const {
 } = require('../../services/tools/BackendToolClient.cjs');
 const { defineLocalTool } = require('../../Tool.cjs');
 const { extractCodeExamples, extractReferenceAnchors } = require('../../query/referenceArtifacts.cjs');
+const { extractEngineApiFacts } = require('../../query/engineApiFacts.cjs');
 const {
   toStringValue,
   objectSchema,
@@ -13,7 +14,6 @@ const {
   integerSchema,
   booleanSchema,
   arraySchema,
-  enumSchema,
 } = require('../shared/schema.cjs');
 
 function clampInt(value, low, high, fallback) {
@@ -202,13 +202,17 @@ function CompanyReferenceSearchTool() {
     kind: 'read',
     inputSchema: objectSchema({
       query: stringSchema('Search query for company engine source or internal reference docs'),
-      mode: enumSchema(['auto', 'code', 'docs', 'hybrid'], 'Evidence collection mode'),
       response_type: stringSchema('Backend response type hint such as api_lookup or general'),
       top_k: integerSchema('Maximum number of document search results to consider', { minimum: 1 }),
       limit: integerSchema('Maximum number of code matches to consider', { minimum: 1 }),
       max_chars: integerSchema('Maximum total characters to read per code/doc window', { minimum: 200 }),
       max_line_span: integerSchema('Maximum code line span per opened window', { minimum: 1 }),
     }, ['query']),
+    async backfillObservableInput(input) {
+      if (input && typeof input === 'object' && !Array.isArray(input) && Object.prototype.hasOwnProperty.call(input, 'mode')) {
+        delete input.mode;
+      }
+    },
     outputSchema: {
       type: 'object',
       properties: {
@@ -253,6 +257,25 @@ function CompanyReferenceSearchTool() {
           filePath: stringSchema('Originating doc path'),
           headingPath: stringSchema('Originating heading path'),
         }), 'Extracted reference code blocks'),
+        api_facts: arraySchema(objectSchema({
+          kind: stringSchema('Fact kind such as type, method, property, constructor, or enum_member'),
+          namespace: stringSchema('Type namespace'),
+          typeName: stringSchema('Type name'),
+          qualifiedType: stringSchema('Qualified type name'),
+          memberName: stringSchema('Member name'),
+          signature: stringSchema('Observed source signature'),
+          stubSignature: stringSchema('Normalized C#-style stub signature'),
+          path: stringSchema('Source path'),
+          lineRange: stringSchema('Source line range'),
+          evidenceType: stringSchema('Evidence type such as declaration or implementation'),
+        }), 'Structured API facts extracted from source windows'),
+        fact_sheet: stringSchema('Compact verified API fact sheet for model grounding'),
+        known_types: arraySchema(objectSchema({
+          qualifiedType: stringSchema('Qualified type name'),
+          namespace: stringSchema('Type namespace'),
+          typeName: stringSchema('Type name'),
+          kind: stringSchema('Associated kind hint'),
+        }), 'Known engine types observed in the reference results'),
         error: stringSchema('Error code'),
         message: stringSchema('Human-readable status'),
       },
@@ -304,7 +327,6 @@ function CompanyReferenceSearchTool() {
           sessionId: toStringValue(context.sessionId),
           userId: 'desktop-local',
           query,
-          mode: toStringValue(input.mode || 'code') || 'code',
           responseType: toStringValue(input.response_type || input.responseType || 'api_lookup') || 'api_lookup',
           topK: clampInt(input.top_k || input.topK, 1, 50, 8),
           limit: clampInt(input.limit, 1, 50, 8),
@@ -332,11 +354,19 @@ function CompanyReferenceSearchTool() {
           [...windows, ...hydratedWindows],
           (item) => `${toStringValue(item?.path)}:${toStringValue(item?.lineRange)}`,
         );
+        const factBundle = extractEngineApiFacts({
+          query,
+          windows: mergedWindows,
+          sources,
+        });
         const messageParts = [];
         if (mergedWindows.length > 0) messageParts.push(`${mergedWindows.length} code windows`);
         if (sources.length > 0) messageParts.push(`${sources.length} sources`);
         if (referenceAnchors.length > 0) messageParts.push(`${referenceAnchors.length} source anchors`);
         if (examples.length > 0) messageParts.push(`${examples.length} code examples`);
+        if (Array.isArray(factBundle.apiFacts) && factBundle.apiFacts.length > 0) {
+          messageParts.push(`${factBundle.apiFacts.length} api facts`);
+        }
 
         return {
           ok: true,
@@ -346,6 +376,9 @@ function CompanyReferenceSearchTool() {
           citations,
           reference_anchors: referenceAnchors,
           examples,
+          api_facts: factBundle.apiFacts,
+          fact_sheet: factBundle.factSheet,
+          known_types: factBundle.knownTypes,
           message: messageParts.length > 0
             ? `Collected ${messageParts.join(', ')} from backend reference sources.`
             : 'No backend reference evidence matched the query.',

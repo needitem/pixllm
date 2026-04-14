@@ -6,6 +6,7 @@ const VERIFY_FINAL_ANSWER_PROMPT = [
   'Determine whether the assistant draft can be finalized as-is.',
   'Use the user request, the draft answer, and the provided reference excerpts.',
   'Be conservative. Mark the draft as needing changes if method signatures, enum names, property names, parameter direction (ref/out), or tool usage appear incompatible with the references.',
+  'If deterministic compile or build checks failed, require changes unless the draft explicitly marks the detail as unverified.',
   'Do not require references for statements that are explicitly marked unverified.',
   'Return JSON only with:',
   '{"can_finalize":true,"needs_changes":false,"reasoning":"brief explanation","required_changes":["short concrete issues"]}',
@@ -49,6 +50,8 @@ async function verifyDraftAnswerSatisfaction({
   userPrompt = '',
   finalAnswer = '',
   referenceExcerpts = [],
+  apiFacts = [],
+  deterministicChecks = [],
 } = {}) {
   const draft = toStringValue(finalAnswer);
   if (!draft) {
@@ -62,6 +65,25 @@ async function verifyDraftAnswerSatisfaction({
       const content = String(item?.content || '').slice(0, 4000);
       if (!path || !content) return '';
       return `REFERENCE: ${path}${lineRange ? `:${lineRange}` : ''}${evidenceType ? ` [${evidenceType}]` : ''}\n${content}`;
+    })
+    .filter(Boolean)
+    .join('\n\n---\n\n');
+  const apiFactBody = (Array.isArray(apiFacts) ? apiFacts : [])
+    .map((item) => {
+      const signature = toStringValue(item?.stubSignature || item?.signature);
+      const location = [toStringValue(item?.path), toStringValue(item?.lineRange || item?.line_range)].filter(Boolean).join(':');
+      if (!signature) return '';
+      return `${signature}${location ? ` @ ${location}` : ''}`;
+    })
+    .filter(Boolean)
+    .slice(0, 16)
+    .join('\n');
+  const deterministicBody = (Array.isArray(deterministicChecks) ? deterministicChecks : [])
+    .map((item) => {
+      const header = [toStringValue(item?.kind || 'check'), item?.ok === false ? 'failed' : 'passed'].join(': ');
+      const reasoning = toStringValue(item?.reasoning);
+      const diagnostics = Array.isArray(item?.diagnostics) ? item.diagnostics.slice(0, 8).join('\n') : '';
+      return [header, reasoning, diagnostics].filter(Boolean).join('\n');
     })
     .filter(Boolean)
     .join('\n\n---\n\n');
@@ -101,6 +123,8 @@ async function verifyDraftAnswerSatisfaction({
           content: [
             `USER REQUEST:\n${toStringValue(userPrompt)}`,
             normalizedReferences ? `REFERENCE EXCERPTS:\n${normalizedReferences}` : '',
+            apiFactBody ? `VERIFIED API FACTS:\n${apiFactBody}` : '',
+            deterministicBody ? `DETERMINISTIC CHECKS:\n${deterministicBody}` : '',
             `ASSISTANT DRAFT:\n${draft.slice(0, 12000)}`,
             `DRAFT MATERIAL:\n${draftBody}`,
           ].join('\n\n'),

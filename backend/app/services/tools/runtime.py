@@ -22,11 +22,7 @@ from .query_strategy import (
     parse_line_range,
     prioritize_usage_matches,
 )
-from .support import (
-    clamp_int,
-    decode_file as _decode_file,
-    is_subpath as _is_subpath,
-)
+from .support import clamp_int
 
 
 logger = logging.getLogger(__name__)
@@ -149,24 +145,6 @@ async def get_doc_metadata(doc_store, doc_id: str) -> Dict[str, Any]:
     return await _get_doc_metadata_impl(doc_store, doc_id)
 
 
-def _collect_code_evidence(
-    *,
-    state,
-    session_id: str,
-    query: str,
-    capped_limit: int,
-    max_chars: int,
-    max_line_span: int,
-    response_type: Optional[str],
-    search_only: bool,
-    code_window_cap: int,
-    # redis passed separately since this is sync-called wrapper; actual search_code is async
-    # caller must have already done search_code; this branch is for sync fallback path
-) -> Tuple[Dict[str, Any], List[Dict[str, Any]], List[Dict[str, Any]]]:
-    """Sync shell — actual code search is done via async search_code in callers."""
-    raise NotImplementedError("Use _collect_code_evidence_async instead")
-
-
 async def _collect_code_evidence_async(
     *,
     redis,
@@ -188,26 +166,57 @@ async def _collect_code_evidence_async(
     code_windows: List[Dict[str, Any]] = []
     code_search_result: Dict[str, Any] = {"matches": [], "limit": capped_limit}
 
-    code_search_result = await search_code(
-        redis,
-        code_tools,
-        query_or_regex=query,
-        path_filter=None,
-        limit=capped_limit,
-        session_id=session_id,
-    )
+    symbol_candidates = extract_symbol_query_candidates(query, max_candidates=4)
+    query_candidates: List[str] = []
+    for candidate in [query, *symbol_candidates]:
+        normalized = str(candidate or "").strip()
+        if not normalized or normalized in query_candidates:
+            continue
+        query_candidates.append(normalized)
+
+    merged_matches: List[Dict[str, Any]] = []
+    search_variants: List[Dict[str, Any]] = []
+    code_search_result = {"matches": [], "limit": capped_limit}
+    for candidate_query in query_candidates[: max(1, min(4, capped_limit))]:
+        candidate_result = await search_code(
+            redis,
+            code_tools,
+            query_or_regex=candidate_query,
+            path_filter=None,
+            limit=capped_limit,
+            session_id=session_id,
+        )
+        search_variants.append(
+            {
+                "query": candidate_query,
+                "result_count": len(candidate_result.get("matches", [])),
+                "reason": candidate_result.get("reason"),
+            }
+        )
+        if candidate_query == query:
+            code_search_result = candidate_result
+        merged_matches.extend(candidate_result.get("matches", []) or [])
+
+    deduped_matches: List[Dict[str, Any]] = []
+    seen_match_keys: Set[Tuple[str, str]] = set()
+    for row in merged_matches:
+        key = (str(row.get("path") or "").strip(), str(row.get("line_range") or "").strip())
+        if key in seen_match_keys:
+            continue
+        seen_match_keys.add(key)
+        deduped_matches.append(row)
+    merged_matches = deduped_matches
+
     trace_steps.append(
         {
             "step": "search_code",
-            "status": "ok" if not code_search_result.get("reason") else "skipped",
-            "result_count": len(code_search_result.get("matches", [])),
+            "status": "ok" if merged_matches else ("skipped" if code_search_result.get("reason") else "ok"),
+            "result_count": len(merged_matches),
             "reason": code_search_result.get("reason"),
+            "variants": search_variants,
         }
     )
 
-    merged_matches = list(code_search_result.get("matches", []))
-
-    symbol_candidates = extract_symbol_query_candidates(query, max_candidates=1)
     if symbol_candidates:
         merged_matches = prioritize_usage_matches(
             merged_matches,
@@ -284,7 +293,6 @@ async def lookup_sources_and_code(
     user_id: Optional[str],
     query: str,
     filters: Optional[Dict[str, Any]],
-    mode: str,
     top_k: int,
     limit: int,
     max_chars: int,
@@ -302,7 +310,6 @@ async def lookup_sources_and_code(
         user_id=user_id,
         query=query,
         filters=filters,
-        mode=mode,
         top_k=top_k,
         limit=limit,
         max_chars=max_chars,

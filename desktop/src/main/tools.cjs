@@ -601,7 +601,6 @@ function createLocalToolCollection({
   sessionId = '',
   limits = {},
   runtimeBridge = {},
-  authorizeToolUse = null,
   getBackendConfig = null,
   allowedToolNames = null,
 } = {}) {
@@ -653,23 +652,6 @@ function createLocalToolCollection({
           details: Array.isArray(invocation.details) ? invocation.details : [],
           ...(invocation.path ? { path: toStringValue(invocation.path) } : {}),
         };
-      }
-      if (typeof authorizeToolUse === 'function') {
-        const decision = await authorizeToolUse({
-          tool,
-          input: invocation.input || {},
-          context: effectiveContext,
-        });
-        if (decision && decision.allow === false) {
-          return {
-            ok: false,
-            tool: normalizedToolName,
-            error: 'tool_permission_denied',
-            reason: toStringValue(decision.reason || 'tool_permission_denied'),
-            message: toStringValue(decision.message || 'Tool call rejected by local policy'),
-            suggested_tools: Array.isArray(decision.suggestedTools) ? decision.suggestedTools : [],
-          };
-        }
       }
       if (typeof tool?.checkPermissions === 'function') {
         const decision = await tool.checkPermissions(invocation.input || {}, effectiveContext);

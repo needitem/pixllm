@@ -13,6 +13,7 @@ function summarizeCompanyReferenceEvidence(trace = []) {
   let citationCount = 0;
   let referenceAnchorCount = 0;
   let exampleCount = 0;
+  let apiFactCount = 0;
 
   for (const step of Array.isArray(trace) ? trace : []) {
     if (toStringValue(step?.tool) !== 'company_reference_search' || step?.observation?.ok === false) {
@@ -36,6 +37,9 @@ function summarizeCompanyReferenceEvidence(trace = []) {
     const examples = Array.isArray(observation.examples)
       ? observation.examples
       : extractCodeExamples(sources);
+    const apiFacts = Array.isArray(observation.api_facts || observation.apiFacts)
+      ? (observation.api_facts || observation.apiFacts)
+      : [];
 
     codeMatchCount += matches.length;
     codeWindowCount += windows.length;
@@ -43,6 +47,7 @@ function summarizeCompanyReferenceEvidence(trace = []) {
     citationCount += citations.length;
     referenceAnchorCount += referenceAnchors.length;
     exampleCount += examples.length;
+    apiFactCount += apiFacts.length;
 
     for (const item of [...matches, ...windows]) {
       const evidenceType = toStringValue(item?.evidenceType || item?.evidence_type).toLowerCase();
@@ -56,6 +61,12 @@ function summarizeCompanyReferenceEvidence(trace = []) {
         evidenceTypes.add(evidenceType);
       }
     }
+    for (const item of apiFacts) {
+      const evidenceType = toStringValue(item?.evidenceType || item?.evidence_type).toLowerCase();
+      if (evidenceType) {
+        evidenceTypes.add(evidenceType);
+      }
+    }
   }
 
   const normalizedEvidenceTypes = Array.from(evidenceTypes);
@@ -63,6 +74,7 @@ function summarizeCompanyReferenceEvidence(trace = []) {
   const hasDocEvidence = docResultCount > 0 || citationCount > 0;
   const hasVerifiedCodeEvidence = hasCodeEvidence
     || referenceAnchorCount > 0
+    || apiFactCount > 0
     || normalizedEvidenceTypes.some((item) => ['declaration', 'implementation'].includes(item));
 
   return {
@@ -73,6 +85,7 @@ function summarizeCompanyReferenceEvidence(trace = []) {
     citationCount,
     referenceAnchorCount,
     exampleCount,
+    apiFactCount,
     evidenceTypes: normalizedEvidenceTypes,
     hasCodeEvidence,
     hasDocEvidence,

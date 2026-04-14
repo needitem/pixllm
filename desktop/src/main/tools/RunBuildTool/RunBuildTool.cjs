@@ -10,6 +10,7 @@ const {
   booleanSchema,
   arraySchema,
 } = require('../shared/schema.cjs');
+const { normalizeBuildInput } = require('../shared/targetPathHints.cjs');
 
 function RunBuildTool() {
   return defineLocalTool({
@@ -44,12 +45,17 @@ function RunBuildTool() {
       const args = Array.isArray(input?.args) ? input.args.map((item) => toStringValue(item)).filter(Boolean) : [];
       return `Run build ${[toolName, ...args].join(' ').trim()}`.trim();
     },
+    async backfillObservableInput(input) {
+      const normalized = normalizeBuildInput(input);
+      Object.assign(input, normalized);
+    },
     async description() {
       return 'Run a supported workspace build command such as dotnet, msbuild, cmake, or ninja';
     },
     async call(input, context) {
-      const toolName = toStringValue(input.tool);
-      const args = Array.isArray(input.args) ? input.args.map((item) => toStringValue(item)).filter(Boolean) : [];
+      const normalizedInput = normalizeBuildInput(input);
+      const toolName = toStringValue(normalizedInput.tool);
+      const args = Array.isArray(normalizedInput.args) ? normalizedInput.args.map((item) => toStringValue(item)).filter(Boolean) : [];
       if (input.run_in_background || input.runInBackground) {
         const command = [toolName, ...(toolName === 'dotnet' ? ['build'] : toolName === 'cmake' ? ['--build', '.'] : []), ...args]
           .filter(Boolean)

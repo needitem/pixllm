@@ -8,6 +8,7 @@ const {
   booleanSchema,
 } = require('../shared/schema.cjs');
 const { requireFreshWorkspaceRead } = require('../shared/fileFreshness.cjs');
+const { inferWorkspaceTargetPath } = require('../shared/targetPathHints.cjs');
 
 function FileWriteTool() {
   return defineLocalTool({
@@ -42,13 +43,19 @@ function FileWriteTool() {
     isDestructive: () => true,
     userFacingName: () => 'Write file',
     getToolUseSummary: (input) => `Write ${toStringValue(input?.path)}`,
+    async backfillObservableInput(input, context) {
+      if (typeof input.path !== 'string' || !toStringValue(input.path)) {
+        input.path = inferWorkspaceTargetPath(context || {}, {
+          preferredExtensions: ['.cs', '.xaml', '.xaml.cs', '.csproj', '.sln'],
+        });
+      }
+    },
     async checkPermissions(input, context) {
       return requireFreshWorkspaceRead({
         workspacePath: context?.workspacePath,
         relativePath: input?.path,
         fileCache: context?.fileCache,
         allowMissing: true,
-        action: 'overwrite',
       });
     },
     async description() {

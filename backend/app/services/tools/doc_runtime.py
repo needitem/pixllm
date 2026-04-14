@@ -132,10 +132,9 @@ async def collect_sources(
     max_chars: int,
     active_collection: str,
     search_only: bool,
+    response_type: str,
 ) -> List[Dict[str, Any]]:
     wiki_rows = list(search_wiki(query=query, top_k=min(top_k, doc_open_limit), max_chars=max_chars).get("results", []) or [])
-    if wiki_rows:
-        return merge_doc_sources([wiki_rows])[:doc_open_limit]
 
     doc_rows = list(
         (
@@ -148,6 +147,7 @@ async def collect_sources(
                 top_k=top_k,
                 collection=active_collection,
                 session_id=session_id,
+                use_reranker=str(response_type or "").strip().lower() in {"api_lookup", "code_generate"},
             )
         ).get("results", [])
         or []
@@ -171,11 +171,6 @@ async def collect_sources(
         explicit_reference=False,
     )
     return merge_doc_sources([wiki_rows, opened.get("chunks", []), doc_rows])[:doc_open_limit]
-
-
-def is_docs_only_request(*, response_type: str, mode: str) -> bool:
-    requested = str(mode or "auto").strip().lower()
-    return requested == "docs" or (requested not in {"code", "hybrid"} and str(response_type or "").strip().lower() == "doc_lookup")
 
 
 def extract_wiki_source_anchors(doc_chunks: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -306,7 +301,6 @@ async def lookup_sources_and_code(
     user_id: Optional[str],
     query: str,
     filters: Optional[Dict[str, Any]],
-    mode: str,
     top_k: int,
     limit: int,
     max_chars: int,
@@ -323,7 +317,6 @@ async def lookup_sources_and_code(
         code_tools = code_tools if code_tools is not None else getattr(state, "code_tools", None)
 
     await resolve_tool_user_context(redis, session_id=session_id, user_id=user_id)
-    docs_only = is_docs_only_request(response_type=response_type, mode=mode)
 
     capped_top_k = clamp_int(top_k, 1, 50)
     capped_limit = clamp_int(limit, 1, 50)
@@ -343,6 +336,7 @@ async def lookup_sources_and_code(
         max_chars=max_chars,
         active_collection=active_collection,
         search_only=search_only,
+        response_type=response_type,
     )
     wiki_code_windows = await collect_wiki_anchor_code_windows(
         redis=redis,
@@ -355,22 +349,19 @@ async def lookup_sources_and_code(
         code_window_cap=code_window_cap,
         search_only=search_only,
     )
-    code_windows = wiki_code_windows
-
-    if not docs_only:
-        _, searched_code_windows, _ = await collect_code_evidence_async(
-            redis=redis,
-            code_tools=code_tools,
-            session_id=session_id,
-            query=query,
-            capped_limit=capped_limit,
-            max_chars=max_chars,
-            max_line_span=max_line_span,
-            response_type=response_type,
-            search_only=search_only,
-            code_window_cap=code_window_cap,
-        )
-        code_windows = merge_code_windows([wiki_code_windows, searched_code_windows])
+    _, searched_code_windows, _ = await collect_code_evidence_async(
+        redis=redis,
+        code_tools=code_tools,
+        session_id=session_id,
+        query=query,
+        capped_limit=capped_limit,
+        max_chars=max_chars,
+        max_line_span=max_line_span,
+        response_type=response_type,
+        search_only=search_only,
+        code_window_cap=code_window_cap,
+    )
+    code_windows = merge_code_windows([wiki_code_windows, searched_code_windows])
 
     return {
         "query": query,

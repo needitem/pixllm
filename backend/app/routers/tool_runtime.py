@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends
 
-from ..deps import state, get_redis, get_search_svc, get_embed_model, get_code_tools
+from ..deps import get_redis, get_search_svc, get_embed_model, get_code_tools
 from ..envelopes import ok
 from ..envelopes import ApiError
 from ..schemas.tool_api import (
@@ -274,7 +274,6 @@ async def orchestrate_lookup_sources_and_code(
         user_id=request.user_id,
         query=request.query,
         filters=request.filters,
-        mode=request.mode,
         response_type=request.response_type,
         top_k=request.top_k,
         limit=request.limit,

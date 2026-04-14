@@ -162,16 +162,20 @@ function evaluateFinalAnswerPolicy({
   finalAnswer = '',
   describeTool = () => null,
   turn = 0,
+  deterministicChecks = [],
 } = {}) {
   const summary = summarizeTraceEvidence({ trace, describeTool });
   const referenceEvidence = summarizeCompanyReferenceEvidence(trace);
   const acknowledgesMissingVerification = answerAcknowledgesMissingVerification(finalAnswer);
+  const successfulDeterministicCheck = (Array.isArray(deterministicChecks) ? deterministicChecks : [])
+    .some((item) => item?.supported && item?.ok === true);
   const hasWorkspaceGrounding =
     summary.hasDiscoveryEvidence
     || summary.hasInspectionEvidence
     || summary.hasMutationEvidence;
   const hasGroundedChangeEvidence =
     hasWorkspaceGrounding
+    || successfulDeterministicCheck
     || referenceEvidence.hasVerifiedCodeEvidence;
   const usedTools = Array.isArray(trace) && trace.length > 0;
 
@@ -201,6 +205,7 @@ function evaluateFinalAnswerPolicy({
     requestRequiresWorkspaceMutation(requestContext)
     && usedTools
     && !summary.hasMutationEvidence
+    && !successfulDeterministicCheck
     && !acknowledgesMissingVerification
   ) {
     return {
@@ -211,6 +216,7 @@ function evaluateFinalAnswerPolicy({
         turn,
         finalAnswerPreview: toStringValue(finalAnswer).slice(0, 240),
         acknowledgesMissingVerification,
+        successfulDeterministicCheck,
         referenceEvidence,
         ...summary,
       },
@@ -226,6 +232,7 @@ function evaluateFinalAnswerPolicy({
         turn,
         finalAnswerPreview: toStringValue(finalAnswer).slice(0, 240),
         acknowledgesMissingVerification,
+        successfulDeterministicCheck,
         referenceEvidence,
         ...summary,
       },
@@ -239,6 +246,7 @@ function evaluateFinalAnswerPolicy({
       turn,
       finalAnswerPreview: toStringValue(finalAnswer).slice(0, 240),
       acknowledgesMissingVerification,
+      successfulDeterministicCheck,
       referenceEvidence,
       ...summary,
     },

@@ -8,8 +8,14 @@ const {
   booleanSchema,
 } = require('../shared/schema.cjs');
 const { requireFreshWorkspaceRead } = require('../shared/fileFreshness.cjs');
+const { inferWorkspaceTargetPath } = require('../shared/targetPathHints.cjs');
 
-function normalizeReplacementInput(input = {}) {
+function normalizeReplacementInput(input = {}, context = {}) {
+  if (typeof input.path !== 'string' || !toStringValue(input.path)) {
+    input.path = inferWorkspaceTargetPath(context || {}, {
+      preferredExtensions: ['.cs', '.xaml', '.xaml.cs', '.csproj', '.sln'],
+    });
+  }
   if (typeof input.old_string !== 'string' && typeof input.search === 'string') {
     input.old_string = input.search;
   }
@@ -58,8 +64,8 @@ function FileEditTool() {
     isDestructive: () => true,
     userFacingName: () => 'Edit file',
     getToolUseSummary: (input) => `Edit ${toStringValue(input?.path)}`,
-    async backfillObservableInput(input) {
-      normalizeReplacementInput(input);
+    async backfillObservableInput(input, context) {
+      normalizeReplacementInput(input, context);
     },
     async checkPermissions(input, context) {
       return requireFreshWorkspaceRead({
@@ -67,7 +73,6 @@ function FileEditTool() {
         relativePath: input?.path,
         fileCache: context?.fileCache,
         allowMissing: false,
-        action: 'edit',
       });
     },
     async description() {

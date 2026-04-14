@@ -95,7 +95,6 @@ class LookupSourcesAndCodeRequest(BaseModel):
     user_id: Optional[str] = None
     query: str
     filters: Optional[Dict[str, Any]] = None
-    mode: Literal["auto", "docs", "code", "hybrid"] = "auto"
     response_type: str = "general"
     top_k: int = Field(default=50, ge=1, le=50)
     limit: int = Field(default=50, ge=1, le=50)
