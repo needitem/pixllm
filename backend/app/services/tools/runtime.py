@@ -150,6 +150,7 @@ async def _collect_code_evidence_async(
     redis,
     session_id: str,
     query: str,
+    extra_query_candidates: Optional[Sequence[str]] = None,
     capped_limit: int,
     max_chars: int,
     max_line_span: int,
@@ -166,14 +167,15 @@ async def _collect_code_evidence_async(
 
     symbol_candidates = extract_symbol_query_candidates(query, max_candidates=4)
     query_candidates: List[str] = []
-    for candidate in [query, *symbol_candidates]:
+    for candidate in [query, *symbol_candidates, *(extra_query_candidates or [])]:
         normalized = str(candidate or "").strip()
         if not normalized or normalized in query_candidates:
             continue
         query_candidates.append(normalized)
 
     merged_matches: List[Dict[str, Any]] = []
-    for candidate_query in query_candidates[: max(1, min(4, capped_limit))]:
+    max_query_candidates = max(1, min(8, capped_limit, len(query_candidates)))
+    for candidate_query in query_candidates[:max_query_candidates]:
         candidate_result = await search_code(
             redis,
             code_tools,
@@ -218,6 +220,18 @@ async def _collect_code_evidence_async(
     per_path_cap = 3 if symbol_candidates else 2
     max_windows = min(code_window_cap, max(capped_limit // 2, 6))
 
+    def _window_overlap_ratio(left_range: str, right_range: str) -> float:
+        left_start, left_end = parse_line_range(str(left_range or "1-1"))
+        right_start, right_end = parse_line_range(str(right_range or "1-1"))
+        left_span = max(1, left_end - left_start + 1)
+        right_span = max(1, right_end - right_start + 1)
+        overlap_start = max(left_start, right_start)
+        overlap_end = min(left_end, right_end)
+        if overlap_end < overlap_start:
+            return 0.0
+        overlap_span = overlap_end - overlap_start + 1
+        return overlap_span / max(1, min(left_span, right_span))
+
     for match in merged_matches:
         if len(code_windows) >= max_windows:
             break
@@ -241,6 +255,15 @@ async def _collect_code_evidence_async(
             continue
         window_key = f"{window.get('path')}::{window.get('line_range')}"
         if window_key in seen_windows:
+            continue
+        if any(
+            str(existing.get("path") or "") == str(window.get("path") or "")
+            and _window_overlap_ratio(
+                str(existing.get("line_range") or ""),
+                str(window.get("line_range") or ""),
+            ) >= 0.6
+            for existing in code_windows
+        ):
             continue
         seen_windows.add(window_key)
         per_path_count[path] = per_path_count.get(path, 0) + 1

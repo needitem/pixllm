@@ -23,13 +23,14 @@ tags:
   - imageview
   - xdm
   - csharp
+  - wpf
   - winforms
 ---
 
 # Overview
 - Goal: load an XDM-capable raster through `XRasterIO`, build an `XDMComposite`, register it in `NXImageLayerComposites`, and render it through `NXImageView`.
 - Minimal verified type chain: `XRasterIO -> XRSLoadFile -> XDMBand -> XDMComposite -> XDMCompManager -> NXImageLayerComposites -> NXImageView`.
-- `NXImageView` itself is a WinForms-backed control, so the simplest verified program shape is WinForms. See `Source/NXImage/NXImageView.h:55` and `Source/NXImage/NXImageView.cpp:162`.
+- `NXImageView` itself is a WinForms-backed control. For new C# desktop programs, prefer a WPF shell that hosts it through `WindowsFormsHost`; use a pure WinForms form only when the user explicitly asks for WinForms. See `Source/NXImage/NXImageView.h:55` and `Source/NXImage/NXImageView.cpp:162`.
 
 # Required Calls
 - Initialize raster IO: `XRasterIO.Initialize` -> `Source/NXDLio/NXDLio.h:198`, `Source/NXDLio/XRasterIO.cpp:72`
@@ -41,41 +42,75 @@ tags:
 - Attach the layer to the view: `NXImageView.AddImageLayer` -> `Source/NXImage/NXImageView.h:836`, `Source/NXImage/NXImageView.cpp:162`
 - Refresh rendering: `NXImageLayerComposites.ZoomFit` / `Invalidate` -> `Source/NXImage/NXImageLayerComposites.h:142`, `Source/NXImage/NXImageLayerComposites.cpp:56`; `Source/NXImage/NXImageLayerComposites.h:146`, `Source/NXImage/NXImageLayerComposites.cpp:61`
 
-# Verified Steps
-1. Create `NXImageView` and `NXImageLayerComposites`.
-2. Add the layer to the view through `AddImageLayer(ref layer)`.
-3. Create `XRasterIO` and call `Initialize`.
-4. Call `LoadFile(path, out error, false, eIOCreateXLDMode.All_NoMsg)` to get `XRSLoadFile`.
-5. Create `XDMComposite`.
-6. Pull one band for grayscale, or three bands for RGB, using `GetBandAt`.
-7. Call `SetBand(ref band, index)` for each band.
-8. Call `GetXDMCompManager()` on the composites layer.
-9. Lock the layer if you are mutating the manager while rendering is active: `Lock` -> `Source/NXImage/NXImageLayerComposites.h:153`, `Source/NXImage/NXImageLayerComposites.cpp:71`
-10. Register the composite with `AddXDMComposite(ref composite)`.
-11. Call `ZoomFit()` and `Invalidate()`, then release `UnLock` -> `Source/NXImage/NXImageLayerComposites.h:157`, `Source/NXImage/NXImageLayerComposites.cpp:76`
+# Verified Workflow Source Anchors
+- `NXImageView` control host: `Source/NXImage/NXImageView.h:55`, `Source/NXImage/NXImageView.cpp:162`
+- `NXImageLayerComposites` display layer: `Source/NXImage/NXImageLayerComposites.h:122`, `Source/NXImage/NXImageLayerComposites.cpp:56`
+- `XRasterIO` initialization and file load: `Source/NXDLio/NXDLio.h:198`, `Source/NXDLio/NXDLio.h:222`, `Source/NXDLio/XRasterIO.cpp:102`
+- `XRSLoadFile` band access: `Source/NXDLrs/XRSFile.h:986`, `Source/NXDLrs/XRSFile.cpp:125`
+- `XDMComposite` band binding: `Source/NXDLrs/NXDLrs.h:1423`, `Source/NXDLrs/XDMComposite.cpp:81`
+- `XDMCompManager` composite registration: `Source/NXDLrs/NXDLrs.h:1867`, `Source/NXDLrs/XDMCompManager.cpp:68`
 
-# Minimal WinForms Program
+# Verified Steps
+1. Create a WPF `Window` with `System.Windows.Forms.Integration.WindowsFormsHost`.
+2. Create `NXImageView` and `NXImageLayerComposites`.
+3. Assign `host.Child = imageView`, then add the layer through `AddImageLayer(ref layer)`.
+4. Create `XRasterIO` and call `Initialize`.
+5. Call `LoadFile(path, out error, false, eIOCreateXLDMode.All_NoMsg)` to get `XRSLoadFile`.
+6. Create `XDMComposite`.
+7. Pull one band for grayscale, or three bands for RGB, using `GetBandAt`.
+8. Call `SetBand(ref band, index)` for each band.
+9. Call `GetXDMCompManager()` on the composites layer.
+10. Lock the layer if you are mutating the manager while rendering is active: `Lock` -> `Source/NXImage/NXImageLayerComposites.h:153`, `Source/NXImage/NXImageLayerComposites.cpp:71`
+11. Register the composite with `AddXDMComposite(ref composite)`.
+12. Call `ZoomFit()` and `Invalidate()`, then release `UnLock` -> `Source/NXImage/NXImageLayerComposites.h:157`, `Source/NXImage/NXImageLayerComposites.cpp:76`
+
+# Preferred WPF Program Shape
+```xml
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+</Project>
+```
+
+```xml
+<Window x:Class="XdmViewer.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:wf="clr-namespace:System.Windows.Forms.Integration;assembly=WindowsFormsIntegration"
+        Title="XDM ImageView"
+        Width="1280"
+        Height="800">
+  <Grid>
+    <wf:WindowsFormsHost x:Name="ImageHost" />
+  </Grid>
+</Window>
+```
+
 ```csharp
 using System;
-using System.Windows.Forms;
+using System.Windows;
 using Pixoneer.NXDL.NIO;
 using Pixoneer.NXDL.NRS;
 using Pixoneer.NXDL.NXImage;
 
-public sealed class MainForm : Form
+namespace XdmViewer;
+
+public partial class MainWindow : Window
 {
-    private readonly NXImageView _imageView = new NXImageView();
-    private readonly NXImageLayerComposites _compositeLayer = new NXImageLayerComposites();
-    private readonly XRasterIO _rasterIo = new XRasterIO();
+    private readonly NXImageView _imageView = new();
+    private readonly NXImageLayerComposites _compositeLayer = new();
+    private readonly XRasterIO _rasterIo = new();
 
-    public MainForm()
+    public MainWindow()
     {
-        Text = "XDM ImageView";
-        Width = 1280;
-        Height = 800;
+        InitializeComponent();
 
-        _imageView.Dock = DockStyle.Fill;
-        Controls.Add(_imageView);
+        ImageHost.Child = _imageView;
 
         NXImageLayer layer = _compositeLayer;
         _imageView.AddImageLayer(ref layer);
@@ -115,7 +150,26 @@ public sealed class MainForm : Form
 }
 ```
 
+# Explicit WinForms Variant
+```csharp
+using System.Windows.Forms;
+using Pixoneer.NXDL.NXImage;
+
+public sealed class MainForm : Form
+{
+    private readonly NXImageView _imageView = new NXImageView();
+
+    public MainForm()
+    {
+        _imageView.Dock = DockStyle.Fill;
+        Controls.Add(_imageView);
+    }
+}
+```
+
 # Notes
 - Do not invent an `NXImage.LoadImage(...)` path for this workflow. The verified load entry point here is `XRasterIO.LoadFile`.
-- The snippet above is WinForms-first because `NXImageView` is a WinForms control. For WPF hosting, see `workflows/nximageview-wpf-hosting.md`.
+- Keep `UseWindowsForms=true` even in the preferred WPF shape because `NXImageView` is still a WinForms control under `WindowsFormsHost`.
+- Prefer the WPF shell above when the user asks for a generic C# desktop program. Use the WinForms variant only when WinForms is explicitly requested.
+- For focused hosting details, see `workflows/nximageview-wpf-hosting.md`.
 - If the file is grayscale, a single `SetBand` call is enough. If the file has three or more channels, fill indices `0`, `1`, and `2`.

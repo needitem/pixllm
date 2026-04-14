@@ -395,6 +395,15 @@ function extractFocusSymbols(query = '', sources = []) {
     tokens.push(toStringValue(match[0]).replace(/::/g, '.'));
   }
   for (const sourceItem of Array.isArray(sources) ? sources : []) {
+    for (const symbol of Array.isArray(sourceItem?.symbols) ? sourceItem.symbols : []) {
+      const normalized = toStringValue(symbol).replace(/::/g, '.');
+      if (!normalized) continue;
+      tokens.push(normalized);
+      const tail = normalized.split('.').pop();
+      if (tail) {
+        tokens.push(tail);
+      }
+    }
     const parsed = parseQualifiedTypeFromHeading(sourceItem?.heading_path || sourceItem?.headingPath);
     if (parsed?.typeName) {
       tokens.push(parsed.typeName);

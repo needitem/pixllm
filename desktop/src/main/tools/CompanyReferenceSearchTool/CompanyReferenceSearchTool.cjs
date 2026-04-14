@@ -179,6 +179,9 @@ function normalizeDocEvidenceItem(item) {
     paragraph_range: toStringValue(item?.paragraph_range || item?.paragraphRange),
     text: String(item?.text || '').slice(0, 2400),
     truncated: Boolean(item?.truncated),
+    title: toStringValue(item?.title),
+    symbols: Array.isArray(item?.symbols) ? item.symbols.map((value) => toStringValue(value)).filter(Boolean).slice(0, 16) : [],
+    tags: Array.isArray(item?.tags) ? item.tags.map((value) => toStringValue(value)).filter(Boolean).slice(0, 16) : [],
   };
 }
 
@@ -233,10 +236,13 @@ function CompanyReferenceSearchTool() {
           chunk_id: stringSchema('Chunk id'),
           file_path: stringSchema('Document file path'),
           source_url: stringSchema('Document source URL'),
+          title: stringSchema('Document title'),
           heading_path: stringSchema('Document heading path'),
           paragraph_range: stringSchema('Document paragraph range'),
           text: stringSchema('Chunk text'),
           truncated: booleanSchema('Whether the source text was truncated'),
+          symbols: arraySchema(stringSchema('Relevant workflow or engine symbols'), 'Workflow or engine symbol hints'),
+          tags: arraySchema(stringSchema('Relevant document tags'), 'Document tags'),
         }), 'Source excerpts'),
         reference_anchors: arraySchema(objectSchema({
           path: stringSchema('Anchored source path'),

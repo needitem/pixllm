@@ -12,6 +12,8 @@ from .support import build_citations, clamp_int, dedupe_doc_items, normalize_doc
 from .wiki_runtime import search_wiki
 
 _WIKI_SOURCE_REF_RE = re.compile(r"\b(Source/[^`:\s]+):(\d+)(?:-(\d+))?\b")
+_BACKTICK_TOKEN_RE = re.compile(r"`([^`]+)`")
+_TYPE_LIKE_RE = re.compile(r"^(?:[A-Z][A-Za-z0-9_]*|e[A-Z][A-Za-z0-9_]*)$")
 
 
 async def search_docs(
@@ -176,11 +178,12 @@ async def collect_sources(
 def extract_wiki_source_anchors(doc_chunks: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
     anchors: List[Dict[str, Any]] = []
     seen = set()
-    for chunk in doc_chunks or []:
+    for chunk_index, chunk in enumerate(doc_chunks or []):
         text = str(chunk.get("text") or "")
         if not text:
             continue
-        for raw_line in text.splitlines():
+        page_symbols = extract_doc_symbol_candidates([chunk], max_candidates=12)
+        for line_index, raw_line in enumerate(text.splitlines()):
             line = str(raw_line or "").strip()
             if not line:
                 continue
@@ -190,6 +193,7 @@ def extract_wiki_source_anchors(doc_chunks: Sequence[Dict[str, Any]]) -> List[Di
                 evidence_type = "declaration"
             elif "implementation:" in lowered:
                 evidence_type = "implementation"
+            line_symbols = _extract_line_symbols(line) or page_symbols
             for match in _WIKI_SOURCE_REF_RE.finditer(line):
                 path = str(match.group(1) or "").strip().replace("\\", "/")
                 start_line = max(1, int(match.group(2) or 1))
@@ -205,9 +209,104 @@ def extract_wiki_source_anchors(doc_chunks: Sequence[Dict[str, Any]]) -> List[Di
                         "evidence_type": evidence_type,
                         "source_url": chunk.get("source_url"),
                         "heading_path": chunk.get("heading_path"),
+                        "symbols": list(line_symbols),
+                        "_chunk_index": chunk_index,
+                        "_line_index": line_index,
                     }
                 )
     return anchors
+
+
+def _anchor_priority(anchor: Dict[str, Any]) -> int:
+    evidence_type = str(anchor.get("evidence_type") or "").strip().lower()
+    if evidence_type == "implementation":
+        return 0
+    if evidence_type == "declaration":
+        return 1
+    return 2
+
+
+def prioritize_wiki_source_anchors(
+    anchors: Sequence[Dict[str, Any]],
+    *,
+    max_candidates: int,
+) -> List[Dict[str, Any]]:
+    pending = list(anchors or [])
+    ordered: List[Dict[str, Any]] = []
+    covered_symbols = set()
+
+    while pending and len(ordered) < max_candidates:
+        scored: List[Tuple[int, int, int, int, int]] = []
+        for index, anchor in enumerate(pending):
+            symbols = [
+                str(item or "").strip()
+                for item in anchor.get("symbols") or []
+                if str(item or "").strip()
+            ]
+            novelty = len([item for item in symbols if item.lower() not in covered_symbols])
+            scored.append(
+                (
+                    novelty,
+                    -_anchor_priority(anchor),
+                    -int(anchor.get("_chunk_index") or 0),
+                    -int(anchor.get("_line_index") or 0),
+                    -index,
+                )
+            )
+        best_index = max(range(len(pending)), key=lambda idx: scored[idx])
+        best_anchor = pending.pop(best_index)
+        ordered.append(best_anchor)
+        for symbol in best_anchor.get("symbols") or []:
+            normalized = str(symbol or "").strip().lower()
+            if normalized:
+                covered_symbols.add(normalized)
+
+    if len(ordered) >= max_candidates:
+        return ordered[:max_candidates]
+
+    remainder = sorted(
+        pending,
+        key=lambda item: (
+            _anchor_priority(item),
+            int(item.get("_chunk_index") or 0),
+            int(item.get("_line_index") or 0),
+        ),
+    )
+    ordered.extend(remainder[: max(0, max_candidates - len(ordered))])
+    return ordered[:max_candidates]
+
+
+def _window_overlap_ratio(left_range: str, right_range: str) -> float:
+    left_start, left_end = parse_line_range(str(left_range or "1-1"))
+    right_start, right_end = parse_line_range(str(right_range or "1-1"))
+    left_span = max(1, left_end - left_start + 1)
+    right_span = max(1, right_end - right_start + 1)
+    overlap_start = max(left_start, right_start)
+    overlap_end = min(left_end, right_end)
+    if overlap_end < overlap_start:
+        return 0.0
+    overlap_span = overlap_end - overlap_start + 1
+    return overlap_span / max(1, min(left_span, right_span))
+
+
+def windows_overlap_strongly(
+    existing_windows: Sequence[Dict[str, Any]],
+    candidate_window: Dict[str, Any],
+    *,
+    threshold: float = 0.6,
+) -> bool:
+    candidate_path = str(candidate_window.get("path") or "").strip()
+    candidate_range = str(candidate_window.get("line_range") or candidate_window.get("lineRange") or "").strip()
+    if not candidate_path or not candidate_range:
+        return False
+    for existing in existing_windows or []:
+        existing_path = str(existing.get("path") or "").strip()
+        existing_range = str(existing.get("line_range") or existing.get("lineRange") or "").strip()
+        if existing_path != candidate_path or not existing_range:
+            continue
+        if _window_overlap_ratio(existing_range, candidate_range) >= threshold:
+            return True
+    return False
 
 
 def merge_code_windows(groups: Sequence[Sequence[Dict[str, Any]]]) -> List[Dict[str, Any]]:
@@ -217,6 +316,8 @@ def merge_code_windows(groups: Sequence[Sequence[Dict[str, Any]]]) -> List[Dict[
         for row in group or []:
             key = (str(row.get("path") or "").strip(), str(row.get("line_range") or "").strip())
             if not key[0] or key in seen:
+                continue
+            if windows_overlap_strongly(merged, row):
                 continue
             seen.add(key)
             merged.append(row)
@@ -228,6 +329,52 @@ def merge_doc_sources(groups: Sequence[Sequence[Dict[str, Any]]]) -> List[Dict[s
     for group in groups or []:
         merged.extend(list(group or []))
     return dedupe_doc_items(merged)
+
+
+def _unique_strings(values: Iterable[str], *, limit: Optional[int] = None) -> List[str]:
+    output: List[str] = []
+    seen = set()
+    for item in values or []:
+        normalized = str(item or "").strip()
+        if not normalized:
+            continue
+        key = normalized.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        output.append(normalized)
+        if limit is not None and len(output) >= limit:
+            break
+    return output
+
+
+def _extract_line_symbols(line: str) -> List[str]:
+    tokens: List[str] = []
+    for raw_token in _BACKTICK_TOKEN_RE.findall(str(line or "")):
+        normalized = str(raw_token or "").replace("::", ".")
+        for part in normalized.split("."):
+            candidate = str(part or "").strip()
+            if _TYPE_LIKE_RE.match(candidate):
+                tokens.append(candidate)
+    return _unique_strings(tokens)
+
+
+def extract_doc_symbol_candidates(
+    doc_chunks: Sequence[Dict[str, Any]],
+    *,
+    max_candidates: int = 12,
+) -> List[str]:
+    candidates: List[str] = []
+    for chunk in doc_chunks or []:
+        for raw_symbol in chunk.get("symbols") or []:
+            normalized = str(raw_symbol or "").replace("::", ".")
+            for part in normalized.split("."):
+                candidate = str(part or "").strip()
+                if _TYPE_LIKE_RE.match(candidate):
+                    candidates.append(candidate)
+        for raw_line in str(chunk.get("text") or "").splitlines():
+            candidates.extend(_extract_line_symbols(raw_line))
+    return _unique_strings(candidates, limit=max_candidates)
 
 
 async def collect_wiki_anchor_code_windows(
@@ -242,7 +389,10 @@ async def collect_wiki_anchor_code_windows(
     code_window_cap: int,
     search_only: bool,
 ) -> List[Dict[str, Any]]:
-    anchors = extract_wiki_source_anchors(doc_chunks)
+    anchors = prioritize_wiki_source_anchors(
+        extract_wiki_source_anchors(doc_chunks),
+        max_candidates=clamp_int(code_window_cap, 1, 32),
+    )
     if not anchors or code_tools is None:
         return []
 
@@ -254,7 +404,7 @@ async def collect_wiki_anchor_code_windows(
     seen = set()
     per_path_count: Dict[str, int] = {}
     per_path_cap = 2
-    max_windows = min(clamp_int(code_window_cap, 1, 24), max(4, len(anchors)))
+    max_windows = min(clamp_int(code_window_cap, 1, 24), max(6, len(anchors)))
 
     for anchor in anchors:
         if len(windows) >= max_windows:
@@ -276,6 +426,8 @@ async def collect_wiki_anchor_code_windows(
             continue
         key = (str(window.get("path") or "").strip(), str(window.get("line_range") or "").strip())
         if key in seen:
+            continue
+        if windows_overlap_strongly(windows, window):
             continue
         seen.add(key)
         per_path_count[path] = per_path_count.get(path, 0) + 1
@@ -338,6 +490,7 @@ async def lookup_sources_and_code(
         search_only=search_only,
         response_type=response_type,
     )
+    doc_symbol_candidates = extract_doc_symbol_candidates(sources, max_candidates=12)
     wiki_code_windows = await collect_wiki_anchor_code_windows(
         redis=redis,
         session_id=session_id,
@@ -354,6 +507,7 @@ async def lookup_sources_and_code(
         code_tools=code_tools,
         session_id=session_id,
         query=query,
+        extra_query_candidates=doc_symbol_candidates,
         capped_limit=capped_limit,
         max_chars=max_chars,
         max_line_span=max_line_span,

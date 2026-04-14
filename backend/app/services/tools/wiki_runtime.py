@@ -147,6 +147,8 @@ def _page_result(
     root: Path,
     file_path: Path,
     title: str,
+    symbols: Iterable[str],
+    tags: Iterable[str],
     section_heading: str,
     section_text: str,
     max_chars: int,
@@ -170,6 +172,9 @@ def _page_result(
         "source_kind": "wiki",
         "document_type": "wiki",
         "score": score,
+        "title": title,
+        "symbols": [str(item or "").strip() for item in symbols if str(item or "").strip()],
+        "tags": [str(item or "").strip() for item in tags if str(item or "").strip()],
     }
 
 
@@ -209,6 +214,8 @@ def search_wiki(
                     root=root,
                     file_path=file_path,
                     title=title,
+                    symbols=symbols,
+                    tags=tags,
                     section_heading=section.get("heading") or "Overview",
                     section_text=section.get("text") or "",
                     max_chars=max_chars,
