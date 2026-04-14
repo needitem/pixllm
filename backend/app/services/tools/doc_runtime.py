@@ -349,7 +349,7 @@ async def lookup_sources_and_code(
         code_window_cap=code_window_cap,
         search_only=search_only,
     )
-    _, searched_code_windows, _ = await collect_code_evidence_async(
+    searched_code_windows = await collect_code_evidence_async(
         redis=redis,
         code_tools=code_tools,
         session_id=session_id,

@@ -158,13 +158,11 @@ async def _collect_code_evidence_async(
     code_window_cap: int,
     code_tools=None,
     state=None,
-) -> Tuple[Dict[str, Any], List[Dict[str, Any]], List[Dict[str, Any]]]:
+) -> List[Dict[str, Any]]:
     if code_tools is None and state is not None:
         code_tools = getattr(state, "code_tools", None)
 
-    trace_steps: List[Dict[str, Any]] = []
     code_windows: List[Dict[str, Any]] = []
-    code_search_result: Dict[str, Any] = {"matches": [], "limit": capped_limit}
 
     symbol_candidates = extract_symbol_query_candidates(query, max_candidates=4)
     query_candidates: List[str] = []
@@ -175,8 +173,6 @@ async def _collect_code_evidence_async(
         query_candidates.append(normalized)
 
     merged_matches: List[Dict[str, Any]] = []
-    search_variants: List[Dict[str, Any]] = []
-    code_search_result = {"matches": [], "limit": capped_limit}
     for candidate_query in query_candidates[: max(1, min(4, capped_limit))]:
         candidate_result = await search_code(
             redis,
@@ -186,15 +182,6 @@ async def _collect_code_evidence_async(
             limit=capped_limit,
             session_id=session_id,
         )
-        search_variants.append(
-            {
-                "query": candidate_query,
-                "result_count": len(candidate_result.get("matches", [])),
-                "reason": candidate_result.get("reason"),
-            }
-        )
-        if candidate_query == query:
-            code_search_result = candidate_result
         merged_matches.extend(candidate_result.get("matches", []) or [])
 
     deduped_matches: List[Dict[str, Any]] = []
@@ -206,16 +193,6 @@ async def _collect_code_evidence_async(
         seen_match_keys.add(key)
         deduped_matches.append(row)
     merged_matches = deduped_matches
-
-    trace_steps.append(
-        {
-            "step": "search_code",
-            "status": "ok" if merged_matches else ("skipped" if code_search_result.get("reason") else "ok"),
-            "result_count": len(merged_matches),
-            "reason": code_search_result.get("reason"),
-            "variants": search_variants,
-        }
-    )
 
     if symbol_candidates:
         merged_matches = prioritize_usage_matches(
@@ -232,17 +209,9 @@ async def _collect_code_evidence_async(
             row for row in merged_matches
             if row not in high_confidence_matches
         ]]
-    code_search_result["matches"] = merged_matches
-    code_search_result["truncated"] = len(merged_matches) > capped_limit
-    code_search_result["evidence_summary"] = {
-        "declaration_count": sum(1 for row in merged_matches if str(row.get("evidence_type") or "").lower() == "declaration"),
-        "implementation_count": sum(1 for row in merged_matches if str(row.get("evidence_type") or "").lower() == "implementation"),
-        "example_count": sum(1 for row in merged_matches if str(row.get("evidence_type") or "").lower() == "example"),
-    }
 
     if search_only:
-        trace_steps.append({"step": "read_code_windows", "status": "skipped", "count": 0, "reason": "search_only"})
-        return code_search_result, code_windows, trace_steps
+        return code_windows
 
     seen_windows: Set[str] = set()
     per_path_count: Dict[str, int] = {}
@@ -280,8 +249,7 @@ async def _collect_code_evidence_async(
             window["match_kind"] = str(match.get("match_kind") or "")
         code_windows.append(window)
 
-    trace_steps.append({"step": "read_code_windows", "status": "ok", "count": len(code_windows), "max_windows": max_windows})
-    return code_search_result, code_windows, trace_steps
+    return code_windows
 
 
 async def lookup_sources_and_code(
