@@ -13,6 +13,7 @@ const REQUEST_CONTRACT_PROMPT = [
   '- If the user asks you to make, create, write, generate, or implement a program/app/viewer/sample/example, set wants_changes=true.',
   '- If the request should be fulfilled by creating or editing files in the current workspace, set artifact.requires_workspace_artifact=true and usually create_likely=true.',
   '- If the user only wants explanation, guidance, review, analysis, or comparison, set wants_analysis=true.',
+  '- If the user is asking how to do something, asking for an explanation, or uses phrases like how, how to, explain, 알려줘, 방법, or 설명 without explicitly asking you to create or edit files, keep create_likely=false and artifact.requires_workspace_artifact=false.',
   '- If the user wants commands executed, builds run, tests run, or runtime failures debugged, set wants_execution=true.',
   '- Use likely_paths only when a target filename or file type is genuinely implied.',
   '- search_terms should contain 0 to 6 short English technical phrases suitable for grep/search.',

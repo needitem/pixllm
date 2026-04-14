@@ -171,6 +171,14 @@ function normalizeIntent(intent = {}) {
 
 function analyzeIntent(prompt, directives = {}) {
   const source = toStringValue(prompt);
+  const wantsExplanation = Boolean(
+    /\b(how|how to|explain|guide|guidance|tell me)\b/i.test(source)
+    || /알려줘|방법|설명|어떻게/.test(source)
+  );
+  const explicitCreate = Boolean(
+    /\b(create|make|build|generate|implement|scaffold)\b/i.test(source)
+    || /만들|구현|생성|작성/.test(source)
+  );
   return normalizeIntent({
     wantsChanges: Boolean(
       directives.change
@@ -182,10 +190,10 @@ function analyzeIntent(prompt, directives = {}) {
       directives.analysis
       || /\b(explain|analyze|investigate|trace|review|summarize)\b/i.test(source)
       || /설명|분석|추적|검토|요약/.test(source)
+      || wantsExplanation
     ),
     createLikely: Boolean(
-      /\b(create|make|build|generate|implement|scaffold)\b/i.test(source)
-      || /만들|구현|생성|작성/.test(source)
+      explicitCreate && !wantsExplanation
     ),
     compareLikely: false,
   });

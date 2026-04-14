@@ -1453,9 +1453,23 @@ class QueryEngine {
     }
     if (controlState.verificationLocked) {
       const targets = Array.isArray(this.state.phaseLock.targetPaths) ? this.state.phaseLock.targetPaths : [];
-      lines.push('Verification phase lock: do not summarize or explain yet. Use only read_file/write/edit on the generated workspace file until the verifier passes.');
+      const requiredChanges = Array.isArray(this.state.phaseLock.requiredChanges) ? this.state.phaseLock.requiredChanges : [];
+      const reasoning = toStringValue(this.state.phaseLock.reasoning);
+      const referenceFactSheet = toStringValue(this.state.phaseLock.referenceFactSheet);
+      lines.push('Verification phase lock: do not summarize or explain yet. Use only read_file/write/edit on the generated workspace file until the verifier passes. Do not call wiki_read, wiki_search, or company_reference_search during repair.');
       if (targets.length > 0) {
         lines.push(`Verification target files: ${targets.slice(0, 4).join(', ')}`);
+      }
+      if (reasoning) {
+        lines.push(`Verifier reasoning: ${reasoning}`);
+      }
+      if (requiredChanges.length > 0) {
+        lines.push('Verifier-required changes:');
+        lines.push(...requiredChanges.map((item) => `- ${item}`));
+      }
+      if (referenceFactSheet) {
+        lines.push('Verified API facts:');
+        lines.push(referenceFactSheet.slice(0, 1200));
       }
     }
     return lines.join('\n').trim();
@@ -1523,6 +1537,19 @@ class QueryEngine {
     const knownTypes = [];
     const factSheetLines = [];
     for (const step of Array.isArray(runTrace) ? runTrace : []) {
+      if (toStringValue(step?.tool) === 'wiki_read' && step?.observation?.ok !== false) {
+        const wikiPath = toStringValue(step?.observation?.path);
+        const wikiContent = String(step?.observation?.content || '').trim();
+        if (wikiPath && wikiContent) {
+          referenceExcerpts.push({
+            path: wikiPath,
+            lineRange: '',
+            evidenceType: 'workflow',
+            content: wikiContent.slice(0, 4000),
+          });
+        }
+        continue;
+      }
       if (toStringValue(step?.tool) !== 'company_reference_search' || step?.observation?.ok === false) {
         continue;
       }
@@ -1686,13 +1713,36 @@ class QueryEngine {
     fallbackWithTarget = '',
     fallbackWithoutTarget = '',
   } = {}) {
-    const targetPaths = this._resolveRepairTargetPaths(runTrace, runContext);
+    const intent = runContext?.intent && typeof runContext.intent === 'object'
+      ? runContext.intent
+      : {};
+    const requiresWorkspaceArtifact = Boolean(
+      runContext?.artifactPlan?.requiresWorkspaceArtifact
+      || intent.createLikely
+      || intent.wantsChanges,
+    );
+    const targetPaths = requiresWorkspaceArtifact
+      ? this._resolveRepairTargetPaths(runTrace, runContext)
+      : [];
+    const normalizedRequiredChanges = (
+      Array.isArray(requiredChanges) && requiredChanges.length > 0
+        ? requiredChanges
+        : [requiresWorkspaceArtifact
+          ? 'Re-read the generated file and patch it directly before finalizing.'
+          : 'Revise the answer text so it matches the verified reference evidence before finalizing.']
+    ).map((item) => toStringValue(item)).filter(Boolean).slice(0, 6);
+    const referenceEvidence = this._collectReferenceEvidence(runTrace);
     this.state.createVerificationRetries += 1;
-    this.state.phaseLock = {
-      kind: 'draft_verification',
-      targetPaths,
-      turn,
-    };
+    this.state.phaseLock = requiresWorkspaceArtifact
+      ? {
+        kind: 'draft_verification',
+        targetPaths,
+        turn,
+        reasoning: toStringValue(reasoning),
+        requiredChanges: normalizedRequiredChanges,
+        referenceFactSheet: toStringValue(referenceEvidence?.factSheet),
+      }
+      : null;
     const nextMaxTurns = Math.max(maxTurns, MAX_TURNS + MAX_CREATE_VERIFICATION_EXTRA_TURNS);
     this._pushMetaUserMessage(
       toStringValue(reasoning)
@@ -1700,11 +1750,7 @@ class QueryEngine {
       {
         turn,
         hook,
-        requiredChanges: (
-          Array.isArray(requiredChanges) && requiredChanges.length > 0
-            ? requiredChanges
-            : ['Re-read the generated file and patch it directly before finalizing.']
-        ).slice(0, 6),
+        requiredChanges: normalizedRequiredChanges,
         targetPaths: targetPaths.slice(0, 4),
       },
     );
@@ -1869,7 +1915,7 @@ class QueryEngine {
             ? draftVerification.required_changes
             : [],
           fallbackWithTarget: 'The draft answer still disagrees with verified reference signatures. Re-read and patch the target file directly before finalizing.',
-          fallbackWithoutTarget: 'The draft answer appears incompatible with the verified reference signatures. Fix the generated code or mark the uncertain detail as unverified before finalizing.',
+          fallbackWithoutTarget: 'The draft answer appears incompatible with the verified reference signatures. Revise the answer using only verified signatures, or mark the uncertain detail as unverified before finalizing.',
         }),
       };
     }
@@ -2164,6 +2210,7 @@ class QueryEngine {
           workspacePath: this.workspacePath,
           selectedFilePath: this.selectedFilePath,
           toolDefinitions,
+          requestContext: this.runtime?.requestContext || {},
         });
         await this._compactMessagesToSoftBudget({
           systemPrompt,

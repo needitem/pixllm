@@ -846,8 +846,17 @@ function buildSystemPrompt({
   workspacePath = '',
   selectedFilePath = '',
   toolDefinitions = [],
+  requestContext = {},
 } = {}) {
   const toolCatalog = renderToolCatalog(toolDefinitions);
+  const intent = requestContext?.intent && typeof requestContext.intent === 'object'
+    ? requestContext.intent
+    : {};
+  const prefersWorkspaceArtifact = Boolean(
+    intent.wantsChanges
+    || intent.createLikely
+    || requestContext?.artifactPlan?.requiresWorkspaceArtifact,
+  );
   return [
     'You are the desktop coding engine for a Qwen-based local coding agent.',
     'Decide whether to answer directly or call tools.',
@@ -865,7 +874,9 @@ function buildSystemPrompt({
     '- Do not wrap tool calls in markdown fences. You may emit multiple independent <tool_call> blocks.',
     '- After the last </tool_call>, write nothing else. Tool results will arrive inside <tool_response> blocks.',
     '- Prefer dedicated tools over shell commands. Use discovery tools for search, read tools for inspection, and write/edit tools for file changes.',
-    '- If the user asks you to create a program, sample, viewer, app, or implementation and workspace write/edit tools are enabled, prefer producing a workspace file instead of only answering in chat.',
+    prefersWorkspaceArtifact
+      ? '- The request expects workspace changes. Prefer producing or editing the needed workspace files instead of only answering in chat.'
+      : '- If the user is asking for explanation, guidance, review, or analysis, answer directly in chat. Do not create workspace files unless the user explicitly asks for code, a file, or an edit.',
     '- Do not use bash or powershell to create or edit files when write/edit tools are enabled.',
     '- Use company_reference_search only for company/internal material outside the workspace and treat it as read-only guidance until verified by code evidence or workspace inspection.',
     '- Paths returned from company_reference_search belong to backend reference sources, not the local workspace. Do not pass those paths to local file tools or shell commands.',

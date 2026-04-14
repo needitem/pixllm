@@ -222,7 +222,7 @@
   let busy = false;
   let showConnectionEditor = false;
   let detailTab: 'summary' | 'approvals' | 'tasks' | 'artifacts' = 'summary';
-  let viewMode: 'main' | 'runs' = 'main';
+  let viewMode: 'main' | 'runs' | 'wiki' = 'main';
   let conversation: ConversationMessage[] = [];
   let conversationScroller: HTMLDivElement | null = null;
   let sessions: SessionListItem[] = [];
@@ -321,7 +321,7 @@
       conversationScroller?.scrollTo({ top: conversationScroller.scrollHeight, behavior: 'auto' });
     });
   }
-  $: wikiLoadKey = viewMode === 'main'
+  $: wikiLoadKey = viewMode === 'wiki'
     ? `${String(settings.serverBaseUrl || '').trim()}|${resolvedSharedWikiId}`
     : '';
   $: if (wikiLoadKey && wikiLoadKey !== lastWikiLoadKey) {
@@ -2501,7 +2501,11 @@
   onMount(async () => {
     if (typeof window !== 'undefined') {
       const search = new URLSearchParams(window.location.search);
-      viewMode = search.get('view') === 'runs' ? 'runs' : 'main';
+      viewMode = search.get('view') === 'runs'
+        ? 'runs'
+        : search.get('view') === 'wiki'
+          ? 'wiki'
+          : 'main';
     }
     appInfo = await desktop.appInfo();
     const loadedSettings = await desktop.loadSettings();
@@ -2966,6 +2970,14 @@
             </div>
 
             <div class="hero-actions">
+              <div class="segmented view-tabs">
+                <button class:active={viewMode === 'main'} on:click={() => (viewMode = 'main')}>
+                  Workspace
+                </button>
+                <button class:active={viewMode === 'wiki'} on:click={() => (viewMode = 'wiki')}>
+                  Shared Wiki
+                </button>
+              </div>
               <button class="secondary" on:click={toggleSidebar}>
                 {sidebarOpen ? 'Hide sidebar' : 'Show sidebar'}
               </button>
@@ -3049,6 +3061,114 @@
           </div>
         {/if}
 
+          {#if viewMode === 'wiki'}
+            <section class="panel wiki-workspace-panel wiki-tab-panel">
+              <div class="panel-head">
+                <div>
+                  <div class="section-title">Shared Wiki</div>
+                  <div class="muted small">Browse, edit, and save shared markdown pages in a dedicated workspace tab.</div>
+                </div>
+                <div class="panel-head-meta">
+                  <span class="pill neutral">{resolvedSharedWikiId}</span>
+                  <button class="secondary" on:click={() => refreshWikiContext()} disabled={wikiBusy || wikiSaving}>
+                    Refresh
+                  </button>
+                  <button class="secondary" on:click={createWikiPage} disabled={wikiBusy || wikiSaving}>
+                    New
+                  </button>
+                  <button class="primary" on:click={saveWikiEditor} disabled={wikiBusy || wikiSaving || !wikiDirty}>
+                    {wikiSaving ? 'Saving…' : 'Save'}
+                  </button>
+                </div>
+              </div>
+
+              <div class="wiki-toolbar">
+                <label class="field wiki-search-field">
+                  <span>Search</span>
+                  <input
+                    bind:value={wikiQuery}
+                    placeholder="Search page title, path, or content"
+                    on:keydown={handleWikiSearchKeydown}
+                  />
+                </label>
+                <button class="secondary" on:click={runWikiSearch} disabled={wikiBusy || wikiSaving}>
+                  {wikiBusy ? 'Loading…' : 'Search'}
+                </button>
+                <button class="secondary" on:click={() => { wikiQuery = ''; void refreshWikiContext(wikiSelectedPath); }} disabled={wikiBusy || wikiSaving}>
+                  Browse
+                </button>
+              </div>
+
+              {#if wikiErrorMessage}
+                <div class="error-box">{wikiErrorMessage}</div>
+              {/if}
+              {#if wikiStatusMessage}
+                <div class="status-copy">{wikiStatusMessage}</div>
+              {/if}
+
+              <div class="wiki-workspace-grid">
+                <div class="wiki-results-pane">
+                  <div class="section-title">Pages</div>
+                  {#if wikiResults.length > 0}
+                    <div class="wiki-result-list">
+                      {#each wikiResults as page}
+                        <button
+                          class={`wiki-result-item ${wikiSelectedPath === page.path ? 'selected' : ''}`}
+                          on:click={() => openWikiPage(page.path)}
+                          title={page.path}
+                        >
+                          <div class="wiki-result-title">{page.title || getPathTail(page.path, 2)}</div>
+                          <div class="wiki-result-path">{page.path}</div>
+                          <div class="wiki-result-meta">
+                            <span class="pill neutral">{page.kind || 'page'}</span>
+                            {#if page.updated_at}
+                              <span class="muted small">{formatDateTime(page.updated_at)}</span>
+                            {/if}
+                          </div>
+                        </button>
+                      {/each}
+                    </div>
+                  {:else}
+                    <div class="empty-state compact-empty">No wiki pages available.</div>
+                  {/if}
+                </div>
+
+                <div class="wiki-editor-pane">
+                  <div class="wiki-meta-grid">
+                    <label class="field">
+                      <span>Path</span>
+                      <input bind:value={wikiSelectedPath} placeholder="pages/topics/new-note.md" />
+                    </label>
+                    <label class="field">
+                      <span>Title</span>
+                      <input bind:value={wikiPageTitle} placeholder="Page title" />
+                    </label>
+                    <label class="field">
+                      <span>Kind</span>
+                      <input bind:value={wikiPageKind} placeholder="topic" />
+                    </label>
+                    <div class="wiki-meta-readout">
+                      <span>Updated</span>
+                      <strong>{wikiPageUpdatedAt ? formatDateTime(wikiPageUpdatedAt) : 'Unsaved page'}</strong>
+                    </div>
+                  </div>
+
+                  {#if wikiPageSummary}
+                    <div class="wiki-summary">{wikiPageSummary}</div>
+                  {/if}
+
+                  <label class="field wiki-editor-field">
+                    <span>Content</span>
+                    <textarea
+                      bind:value={wikiPageContent}
+                      rows="18"
+                      placeholder="Write markdown here"
+                    ></textarea>
+                  </label>
+                </div>
+              </div>
+            </section>
+          {:else}
           <div class="studio-grid">
             <section class="conversation-shell panel conversation-panel">
               <div class="panel-head">
@@ -3318,114 +3438,6 @@
               </section>
             </aside>
           </div>
-
-          <section class="panel wiki-workspace-panel">
-            <div class="panel-head">
-              <div>
-                <div class="section-title">Shared Wiki</div>
-                <div class="muted small">Browse, edit, and save shared markdown pages from the desktop app.</div>
-              </div>
-              <div class="panel-head-meta">
-                <span class="pill neutral">{resolvedSharedWikiId}</span>
-                <button class="secondary" on:click={() => refreshWikiContext()} disabled={wikiBusy || wikiSaving}>
-                  Refresh
-                </button>
-                <button class="secondary" on:click={createWikiPage} disabled={wikiBusy || wikiSaving}>
-                  New
-                </button>
-                <button class="primary" on:click={saveWikiEditor} disabled={wikiBusy || wikiSaving || !wikiDirty}>
-                  {wikiSaving ? 'Saving…' : 'Save'}
-                </button>
-              </div>
-            </div>
-
-            <div class="wiki-toolbar">
-              <label class="field wiki-search-field">
-                <span>Search</span>
-                <input
-                  bind:value={wikiQuery}
-                  placeholder="Search page title, path, or content"
-                  on:keydown={handleWikiSearchKeydown}
-                />
-              </label>
-              <button class="secondary" on:click={runWikiSearch} disabled={wikiBusy || wikiSaving}>
-                {wikiBusy ? 'Loading…' : 'Search'}
-              </button>
-              <button class="secondary" on:click={() => { wikiQuery = ''; void refreshWikiContext(wikiSelectedPath); }} disabled={wikiBusy || wikiSaving}>
-                Browse
-              </button>
-            </div>
-
-            {#if wikiErrorMessage}
-              <div class="error-box">{wikiErrorMessage}</div>
-            {/if}
-            {#if wikiStatusMessage}
-              <div class="status-copy">{wikiStatusMessage}</div>
-            {/if}
-
-            <div class="wiki-workspace-grid">
-              <div class="wiki-results-pane">
-                <div class="section-title">Pages</div>
-                {#if wikiResults.length > 0}
-                  <div class="wiki-result-list">
-                    {#each wikiResults as page}
-                      <button
-                        class={`wiki-result-item ${wikiSelectedPath === page.path ? 'selected' : ''}`}
-                        on:click={() => openWikiPage(page.path)}
-                        title={page.path}
-                      >
-                        <div class="wiki-result-title">{page.title || getPathTail(page.path, 2)}</div>
-                        <div class="wiki-result-path">{page.path}</div>
-                        <div class="wiki-result-meta">
-                          <span class="pill neutral">{page.kind || 'page'}</span>
-                          {#if page.updated_at}
-                            <span class="muted small">{formatDateTime(page.updated_at)}</span>
-                          {/if}
-                        </div>
-                      </button>
-                    {/each}
-                  </div>
-                {:else}
-                  <div class="empty-state compact-empty">No wiki pages available.</div>
-                {/if}
-              </div>
-
-              <div class="wiki-editor-pane">
-                <div class="wiki-meta-grid">
-                  <label class="field">
-                    <span>Path</span>
-                    <input bind:value={wikiSelectedPath} placeholder="pages/topics/new-note.md" />
-                  </label>
-                  <label class="field">
-                    <span>Title</span>
-                    <input bind:value={wikiPageTitle} placeholder="Page title" />
-                  </label>
-                  <label class="field">
-                    <span>Kind</span>
-                    <input bind:value={wikiPageKind} placeholder="topic" />
-                  </label>
-                  <div class="wiki-meta-readout">
-                    <span>Updated</span>
-                    <strong>{wikiPageUpdatedAt ? formatDateTime(wikiPageUpdatedAt) : 'Unsaved page'}</strong>
-                  </div>
-                </div>
-
-                {#if wikiPageSummary}
-                  <div class="wiki-summary">{wikiPageSummary}</div>
-                {/if}
-
-                <label class="field wiki-editor-field">
-                  <span>Content</span>
-                  <textarea
-                    bind:value={wikiPageContent}
-                    rows="18"
-                    placeholder="Write markdown here"
-                  ></textarea>
-                </label>
-              </div>
-            </div>
-          </section>
-
           <section class="composer-dock panel composer-panel">
             <div class="panel-head composer-head">
               <div>
@@ -3472,6 +3484,7 @@
             </button>
           </div>
           </section>
+          {/if}
         </section>
       </div>
     </main>
@@ -3804,6 +3817,10 @@
   .detail-tabs {
     width: 100%;
     grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .view-tabs {
+    flex: 0 0 auto;
   }
 
   .segmented button {
@@ -5169,6 +5186,10 @@
     flex-direction: column;
     gap: 14px;
     min-height: 0;
+  }
+
+  .wiki-tab-panel {
+    min-height: clamp(560px, 68vh, 860px);
   }
 
   .wiki-toolbar {

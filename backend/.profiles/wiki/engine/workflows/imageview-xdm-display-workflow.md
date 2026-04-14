@@ -186,3 +186,11 @@ public sealed class MainForm : Form
 - If the file is grayscale, a single `SetBand` call is enough. If the file has three or more channels, fill indices `0`, `1`, and `2`.
 - These workflow notes are reference guidance, not a requirement to pass a standalone compile gate before answering.
 - If some signatures remain uncertain, prefer calling out the uncertainty from verified source excerpts instead of blocking on compile-oriented verification.
+
+# Common Pitfalls
+- Do not use `XRasterIO.LoadFile(path)` with a made-up short overload. The verified workflow here is `LoadFile(path, out error, false, eIOCreateXLDMode.All_NoMsg)`.
+- Do not replace `out error` with `ref error` unless the verified signature explicitly says `ref`.
+- Do not use `GetXDMCompManager` like a property. In this workflow it is a method call: `GetXDMCompManager()`.
+- Do not pass `NXImageLayerComposites` directly to `AddImageLayer(ref ...)` without the verified base-layer pattern. Use `NXImageLayer layer = compositeLayer; imageView.AddImageLayer(ref layer);`.
+- Do not leave a fake path like `C:\\path\\to\\your\\file.xdm` in an auto-executed code path. Either parameterize the path, open a file dialog, or leave the example path in a commented usage snippet instead of calling it automatically.
+- If you define WinForms handlers such as `Form_Load` or `FormClosing`, wire them in `InitializeComponent()` or remove the dead handlers. Unwired handlers are treated as an incomplete interaction path.
