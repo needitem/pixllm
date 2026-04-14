@@ -857,6 +857,10 @@ function buildSystemPrompt({
     || intent.createLikely
     || requestContext?.artifactPlan?.requiresWorkspaceArtifact,
   );
+  const prefersDirectChatGuidance = Boolean(
+    requestContext?.intent?.wantsAnalysis
+    && !prefersWorkspaceArtifact,
+  );
   return [
     'You are the desktop coding engine for a Qwen-based local coding agent.',
     'Decide whether to answer directly or call tools.',
@@ -877,6 +881,9 @@ function buildSystemPrompt({
     prefersWorkspaceArtifact
       ? '- The request expects workspace changes. Prefer producing or editing the needed workspace files instead of only answering in chat.'
       : '- If the user is asking for explanation, guidance, review, or analysis, answer directly in chat. Do not create workspace files unless the user explicitly asks for code, a file, or an edit.',
+    prefersDirectChatGuidance
+      ? '- For explanation-style requests, prefer verified reference/wiki evidence over pre-existing workspace samples. Do not treat an existing workspace example as authoritative unless the user explicitly asked about that file or path.'
+      : '',
     '- Do not use bash or powershell to create or edit files when write/edit tools are enabled.',
     '- Use company_reference_search only for company/internal material outside the workspace and treat it as read-only guidance until verified by code evidence or workspace inspection.',
     '- Paths returned from company_reference_search belong to backend reference sources, not the local workspace. Do not pass those paths to local file tools or shell commands.',

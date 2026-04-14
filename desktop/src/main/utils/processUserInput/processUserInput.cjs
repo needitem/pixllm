@@ -235,14 +235,12 @@ function addTools(target, items) {
 }
 
 function deriveInitialToolNames({
-  prompt = '',
   intent = {},
   focus = {},
-  directives = {},
   explicitPaths = [],
+  selectedFilePath = '',
   hasWorkspacePath = false,
   hasFocusedSymbols = false,
-  requiresWorkspaceArtifact = false,
 } = {}) {
   const names = new Set();
   addTools(names, TOOL_GROUPS.always);
@@ -264,16 +262,34 @@ function deriveInitialToolNames({
     && !intent.wantsChanges
     && !intent.wantsExecution
     && (!Array.isArray(explicitPaths) || explicitPaths.length === 0);
+  const hasDirectWorkspaceTarget = Boolean(
+    (Array.isArray(explicitPaths) && explicitPaths.length > 0)
+    || toStringValue(selectedFilePath),
+  );
+  const shouldEnableDirectWorkspaceRead = hasWorkspacePath && (
+    hasDirectWorkspaceTarget
+    || intent.wantsChanges
+    || intent.createLikely
+    || intent.wantsExecution
+  );
+  const shouldEnableMutation = hasWorkspacePath && (
+    intent.wantsChanges
+    || intent.createLikely
+  );
 
   if (hasWorkspacePath) {
-    addTools(names, TOOL_GROUPS.path_read);
     addTools(
       names,
       prefersFocusedWorkspaceDiscovery
         ? TOOL_GROUPS.focused_workspace_discovery
         : TOOL_GROUPS.workspace_discovery,
     );
-    addTools(names, TOOL_GROUPS.mutation);
+    if (shouldEnableDirectWorkspaceRead) {
+      addTools(names, TOOL_GROUPS.path_read);
+    }
+    if (shouldEnableMutation) {
+      addTools(names, TOOL_GROUPS.mutation);
+    }
   }
   addTools(names, TOOL_GROUPS.reference);
 
@@ -404,14 +420,12 @@ function buildRequestContext(context = {}) {
     ),
   };
   const initialToolNames = uniqStrings(deriveInitialToolNames({
-    prompt,
     intent,
     focus,
-    directives,
     explicitPaths,
+    selectedFilePath: normalizedSelectedFilePath,
     hasWorkspacePath,
     hasFocusedSymbols: promptIdentifierHints.length > 0,
-    requiresWorkspaceArtifact: artifactPlan.requiresWorkspaceArtifact,
   }));
   const narrowingPreferred = Boolean(
     hasWorkspacePath

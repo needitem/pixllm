@@ -12,6 +12,9 @@ test('createRunRequestContext keeps explanation-style prompts out of createLikel
   assert.equal(context.intent.wantsAnalysis, true);
   assert.equal(context.intent.createLikely, false);
   assert.equal(context.artifactPlan.requiresWorkspaceArtifact, false);
+  assert.equal(context.initialToolNames.includes('write'), false);
+  assert.equal(context.initialToolNames.includes('edit'), false);
+  assert.equal(context.initialToolNames.includes('read_file'), false);
 });
 
 test('createRunRequestContext still marks explicit create requests as createLikely', () => {
