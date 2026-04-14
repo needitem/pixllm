@@ -593,6 +593,7 @@ function initialState({ historyMessages = [] } = {}) {
     transcript: [],
     transitions: [],
     compactBoundaries: [],
+    phaseLock: null,
     pendingToolUseSummary: '',
     fileCache: {},
     lastTransition: null,
@@ -720,6 +721,9 @@ class QueryEngine {
       transcript: Array.isArray(restored.transcript) ? restored.transcript : [],
       transitions: Array.isArray(restored.transitions) ? restored.transitions : [],
       compactBoundaries: Array.isArray(restored.compactBoundaries) ? restored.compactBoundaries : [],
+      phaseLock: restored.phaseLock && typeof restored.phaseLock === 'object'
+        ? restored.phaseLock
+        : null,
       pendingToolUseSummary: toStringValue(restored.pendingToolUseSummary),
       fileCache: restored.fileCache && typeof restored.fileCache === 'object' && !Array.isArray(restored.fileCache)
         ? restored.fileCache
@@ -759,6 +763,9 @@ class QueryEngine {
       transcript: Array.isArray(this.state.transcript) ? this.state.transcript : [],
       transitions: Array.isArray(this.state.transitions) ? this.state.transitions : [],
       compactBoundaries: Array.isArray(this.state.compactBoundaries) ? this.state.compactBoundaries : [],
+      phaseLock: this.state.phaseLock && typeof this.state.phaseLock === 'object'
+        ? this.state.phaseLock
+        : null,
       pendingToolUseSummary: toStringValue(this.state.pendingToolUseSummary),
       fileCache: this.state.fileCache && typeof this.state.fileCache === 'object' ? this.state.fileCache : {},
       lastTransition: this.state.lastTransition && typeof this.state.lastTransition === 'object'
@@ -1438,6 +1445,20 @@ class QueryEngine {
     return referenceExcerpts;
   }
 
+  _collectMutationPaths(runTrace = []) {
+    const paths = [];
+    for (const step of Array.isArray(runTrace) ? runTrace : []) {
+      if (!['write', 'write_file', 'edit', 'replace_in_file', 'notebook_edit'].includes(toStringValue(step?.tool))) {
+        continue;
+      }
+      if (step?.observation?.ok === false) continue;
+      const pathValue = toStringValue(step?.observation?.path);
+      if (!pathValue || paths.includes(pathValue)) continue;
+      paths.push(pathValue);
+    }
+    return paths;
+  }
+
   async _enrichRunContextWithContract(runContext, { signal = null } = {}) {
     const requestContext = runContext && typeof runContext === 'object' ? runContext : {};
     const prompt = toStringValue(requestContext?.prompt);
@@ -1891,22 +1912,36 @@ class QueryEngine {
             && draftVerification.needs_changes
             && Number(this.state.createVerificationRetries || 0) < MAX_CREATE_VERIFICATION_RETRIES
           ) {
+            const targetPaths = this._collectMutationPaths(runTrace);
             this.state.createVerificationRetries += 1;
+            this.state.phaseLock = {
+              kind: 'draft_verification',
+              targetPaths,
+              turn,
+            };
             maxTurns = Math.max(maxTurns, MAX_TURNS + MAX_CREATE_VERIFICATION_EXTRA_TURNS);
             this._pushMetaUserMessage(
               toStringValue(draftVerification.reasoning)
-                || 'The draft answer appears incompatible with the verified reference signatures. Fix the code or mark the uncertain detail as unverified before finalizing.',
+                || (
+                  targetPaths.length > 0
+                    ? `The draft answer still disagrees with verified reference signatures. Re-read and patch ${targetPaths[0]} directly before finalizing.`
+                    : 'The draft answer appears incompatible with the verified reference signatures. Fix the generated code or mark the uncertain detail as unverified before finalizing.'
+                ),
               {
                 turn,
                 hook: 'draft_answer_verification_retry',
-                requiredChanges: Array.isArray(draftVerification.required_changes)
-                  ? draftVerification.required_changes.slice(0, 6)
-                  : [],
+                requiredChanges: (
+                  Array.isArray(draftVerification.required_changes) && draftVerification.required_changes.length > 0
+                    ? draftVerification.required_changes
+                    : ['Re-read the generated file and patch the API signatures to match the verified reference excerpts.']
+                ).slice(0, 6),
+                targetPaths: targetPaths.slice(0, 4),
               },
             );
             this._recordTransition('draft_answer_verification_retry', {
               turn,
               retryCount: Number(this.state.createVerificationRetries || 0),
+              targetPaths: targetPaths.slice(0, 4),
             });
             this._persistState();
             continue;
@@ -1968,6 +2003,7 @@ class QueryEngine {
           this.state.repeatedToolBatchSignature = '';
           this.state.repeatedToolBatchCount = 0;
           this.state.createVerificationRetries = 0;
+          this.state.phaseLock = null;
           if (!finalAnswerCheck?.ok && finalAnswerCheck?.type === 'grounding') {
             this._pushMetaUserMessage(
               `Your previous answer referenced ungrounded sources: ${(Array.isArray(finalAnswerCheck?.mentions) ? finalAnswerCheck.mentions : []).join(', ')}. Revise the answer using only paths or sources already shown in tool results, or say the missing detail is unverified.`,
@@ -2130,6 +2166,7 @@ class QueryEngine {
         failedStep: failed,
       });
       this.state.terminalReason = resolvedTerminalReason;
+      this.state.phaseLock = null;
       await onToken(fallbackAnswer);
       this._recordTranscript({
         kind: 'fallback',

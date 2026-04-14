@@ -61,7 +61,9 @@ function summarizeCompanyReferenceEvidence(trace = []) {
   const normalizedEvidenceTypes = Array.from(evidenceTypes);
   const hasCodeEvidence = codeMatchCount > 0 || codeWindowCount > 0;
   const hasDocEvidence = docResultCount > 0 || citationCount > 0;
-  const hasVerifiedCodeEvidence = normalizedEvidenceTypes.some((item) => ['declaration', 'implementation'].includes(item));
+  const hasVerifiedCodeEvidence = hasCodeEvidence
+    || referenceAnchorCount > 0
+    || normalizedEvidenceTypes.some((item) => ['declaration', 'implementation'].includes(item));
 
   return {
     searchCount,

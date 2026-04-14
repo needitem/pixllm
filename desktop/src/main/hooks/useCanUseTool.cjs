@@ -195,6 +195,7 @@ function authorizeToolUse({
   const hasFailures = failedSteps(trace).length > 0;
   const referenceEvidence = summarizeCompanyReferenceEvidence(trace);
   const hasVerifiedReferenceCodeEvidence = referenceEvidence.hasVerifiedCodeEvidence;
+  const hasReferenceCodeEvidence = Boolean(referenceEvidence.hasCodeEvidence || referenceEvidence.referenceAnchorCount > 0);
   const hasWorkspaceInspectionEvidence = readPaths.size > 0;
 
   if (activeToolNames.size > 0 && !activeToolNames.has(normalizedTool)) {
@@ -294,18 +295,14 @@ function authorizeToolUse({
   }
 
   if (['write', 'write_file', 'notebook_edit'].includes(normalizedTool)) {
-    if (!intent.wantsChanges && !requiresWorkspaceArtifact) {
-      return permissionDenied({
-        toolName,
-        reason: 'change_intent_required',
-        message: 'This request looks read-only. Do not write files unless the user asked for a change.',
-      });
-    }
     const creatingNewWorkspacePath = requiresWorkspaceArtifact
       && unknownPaths.length > 0
       && unknownPaths.every((value) => isWorkspaceRelativePath(value));
+    const canCreateWorkspacePath = unknownPaths.length > 0
+      && unknownPaths.every((value) => isWorkspaceRelativePath(value))
+      && (requiresWorkspaceArtifact || hasReferenceCodeEvidence || hasWorkspaceInspectionEvidence);
     const codeArtifactTargets = pathCandidates.filter((value) => isLikelyCodeArtifactPath(value));
-    if (unknownPaths.length > 0 && !creatingNewWorkspacePath) {
+    if (unknownPaths.length > 0 && !creatingNewWorkspacePath && !canCreateWorkspacePath) {
       return permissionDenied({
         toolName,
         reason: 'unknown_path',
@@ -313,7 +310,7 @@ function authorizeToolUse({
         suggestedTools: ['list_files', 'glob', 'grep', 'read_file'],
       });
     }
-    if (normalizedTool === 'write' && unreadPaths.length > 0 && !requiresWorkspaceArtifact) {
+    if (normalizedTool === 'write' && unreadPaths.length > 0 && !requiresWorkspaceArtifact && !canCreateWorkspacePath) {
       return permissionDenied({
         toolName,
         reason: 'read_required_before_write',
@@ -325,6 +322,7 @@ function authorizeToolUse({
       codeArtifactTargets.length > 0
       && Boolean(requiresWorkspaceArtifact || intent.wantsChanges)
       && !hasWorkspaceInspectionEvidence
+      && !hasReferenceCodeEvidence
       && referenceEvidence.hasDocsOnlyEvidence
       && !hasVerifiedReferenceCodeEvidence
     ) {
@@ -352,13 +350,6 @@ function authorizeToolUse({
   }
 
   if (['edit', 'replace_in_file'].includes(normalizedTool)) {
-    if (!intent.wantsChanges && !requiresWorkspaceArtifact) {
-      return permissionDenied({
-        toolName,
-        reason: 'change_intent_required',
-        message: 'This request looks read-only. Do not edit files unless the user asked for a change.',
-      });
-    }
     if (unknownPaths.length > 0) {
       return permissionDenied({
         toolName,

@@ -253,9 +253,7 @@ function deriveInitialToolNames({
         ? TOOL_GROUPS.focused_workspace_discovery
         : TOOL_GROUPS.workspace_discovery,
     );
-    if (intent.wantsChanges || requiresWorkspaceArtifact) {
-      addTools(names, TOOL_GROUPS.mutation);
-    }
+    addTools(names, TOOL_GROUPS.mutation);
   }
   addTools(names, TOOL_GROUPS.reference);
 
@@ -373,6 +371,7 @@ function buildRequestContext(context = {}) {
     ...(Array.isArray(context.allowedDirectPaths) ? context.allowedDirectPaths : []),
     ...explicitPaths,
     normalizedSelectedFilePath,
+    ...(Array.isArray(context?.artifactPlan?.likelyPaths) ? context.artifactPlan.likelyPaths : []),
   ]);
   const hasWorkspacePath = Boolean(toStringValue(workspacePath));
   const artifactPlan = {

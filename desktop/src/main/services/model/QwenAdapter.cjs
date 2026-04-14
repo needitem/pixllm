@@ -865,6 +865,7 @@ function buildSystemPrompt({
     '- Do not wrap tool calls in markdown fences. You may emit multiple independent <tool_call> blocks.',
     '- After the last </tool_call>, write nothing else. Tool results will arrive inside <tool_response> blocks.',
     '- Prefer dedicated tools over shell commands. Use discovery tools for search, read tools for inspection, and write/edit tools for file changes.',
+    '- If the user asks you to create a program, sample, viewer, app, or implementation and workspace write/edit tools are enabled, prefer producing a workspace file instead of only answering in chat.',
     '- Do not use bash or powershell to create or edit files when write/edit tools are enabled.',
     '- Use company_reference_search only for company/internal material outside the workspace and treat it as read-only guidance until verified by code evidence or workspace inspection.',
     '- Paths returned from company_reference_search belong to backend reference sources, not the local workspace. Do not pass those paths to local file tools or shell commands.',

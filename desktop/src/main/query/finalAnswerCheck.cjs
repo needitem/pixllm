@@ -108,7 +108,13 @@ async function verifyDraftAnswerSatisfaction({
       ],
     });
 
-    return parseFinalAnswerVerification(completion?.text || completion?.reasoning_content || '');
+    const result = parseFinalAnswerVerification(completion?.text || completion?.reasoning_content || '');
+    if (result && result.needs_changes && result.required_changes.length === 0) {
+      result.required_changes = [
+        'Re-read the generated file and reconcile method signatures, enum names, and ref/out usage with the verified reference excerpts before finalizing.',
+      ];
+    }
+    return result;
   } catch {
     return null;
   }

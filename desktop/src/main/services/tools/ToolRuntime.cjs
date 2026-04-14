@@ -3,6 +3,7 @@ const {
 } = require('../../utils/processUserInput/processUserInput.cjs');
 const { canUseTool: authorizeLocalToolUse, collectGroundedPaths } = require('../../hooks/useCanUseTool.cjs');
 const { findUngroundedSourceMentions } = require('../../query/sourceGuard.cjs');
+const { summarizeCompanyReferenceEvidence } = require('../../query/referenceEvidence.cjs');
 const { evaluateFinalAnswerPolicy } = require('../../query/finalizationPolicy.cjs');
 const { createToolResultBlock, toStringValue } = require('../../query.cjs');
 const { summarizeObservation, failedSteps } = require('../../queryTrace.cjs');
@@ -497,12 +498,23 @@ class ToolRuntime {
     const hasReadContext = traceHasSuccessfulTool(trace, READ_CONTEXT_TOOL_NAMES);
     const hasMutation = traceHasSuccessfulTool(trace, MUTATION_TOOL_NAMES);
     const workspaceAnswerLoop = getWorkspaceAnswerLoopState({ trace, intent });
+    const referenceEvidence = summarizeCompanyReferenceEvidence(trace);
     const narrowingPreferred = Boolean(this.requestContext?.narrowingPreferred);
+    const referenceEvidenceSufficient = referenceEvidence.hasCodeEvidence && referenceEvidence.searchCount >= 1;
 
     if ((intent.wantsChanges || requiresWorkspaceArtifact) && (turn > 1 || hasReadContext || hasFailures || hasMutation)) {
       for (const name of MUTATION_TOOL_NAMES) {
         if (available.has(name)) active.add(name);
       }
+    }
+    if (requiresWorkspaceArtifact && referenceEvidence.hasCodeEvidence) {
+      active.delete('company_reference_search');
+      for (const name of MUTATION_TOOL_NAMES) {
+        if (available.has(name)) active.add(name);
+      }
+    }
+    if (referenceEvidenceSufficient) {
+      active.delete('company_reference_search');
     }
 
     if ((intent.wantsExecution || hasExecutionFailures || hasMutation) && (turn > 1 || hasReadContext || hasMutation || hasExecutionFailures)) {
@@ -529,6 +541,20 @@ class ToolRuntime {
     if (workspaceAnswerLoop.saturated) {
       for (const name of WORKSPACE_ANSWER_SATURATION_TOOL_NAMES) {
         active.delete(name);
+      }
+    }
+
+    if (this.state?.phaseLock?.kind === 'draft_verification') {
+      const allowedDuringVerification = new Set(['read_file', 'write', 'edit', 'notebook_edit']);
+      for (const name of Array.from(active)) {
+        if (!allowedDuringVerification.has(name)) {
+          active.delete(name);
+        }
+      }
+      for (const name of allowedDuringVerification) {
+        if (available.has(name)) {
+          active.add(name);
+        }
       }
     }
 
@@ -856,6 +882,26 @@ class ToolRuntime {
 
     const allFailed = toolExecutions.length > 0 && toolExecutions.every((item) => item?.observation?.ok === false);
     const interrupted = toolExecutions.some((item) => item?.observation?.interrupted === true);
+    const referenceEvidence = summarizeCompanyReferenceEvidence(this.state.trace);
+    const onlyReferenceSearch = toolUses.length > 0
+      && toolUses.every((toolUse) => toStringValue(toolUse?.name) === 'company_reference_search');
+
+    if (onlyReferenceSearch && referenceEvidence.hasCodeEvidence && referenceEvidence.searchCount >= 1) {
+      this.pushMetaUserMessage(
+        'Verified reference signatures are already collected. Stop calling company_reference_search and move to the next step: create the workspace file, inspect the target workspace path, or answer with the verified API facts.',
+        {
+          turn,
+          hook: 'reference_evidence_sufficient',
+          searchCount: referenceEvidence.searchCount,
+          evidenceTypes: referenceEvidence.evidenceTypes.slice(0, 6),
+        },
+      );
+      this.recordTransition('reference_evidence_sufficient', {
+        turn,
+        searchCount: referenceEvidence.searchCount,
+        evidenceTypes: referenceEvidence.evidenceTypes.slice(0, 6),
+      });
+    }
 
     await onToolBatchEnd({
       turn,

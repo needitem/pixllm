@@ -225,8 +225,34 @@ function validateWorkspaceRelativePaths(input, keys) {
   return { ok: true };
 }
 
+function normalizeWorkspaceRelativePathInputs(input, keys, workspacePath = '') {
+  const normalizedInput = isPlainObject(input) ? { ...input } : {};
+  const root = toStringValue(workspacePath);
+  if (!root) {
+    return normalizedInput;
+  }
+  for (const key of Array.isArray(keys) ? keys : []) {
+    const value = normalizedInput[key];
+    if (typeof value !== 'string' || !isAbsoluteOrRemotePath(value)) continue;
+    try {
+      const relative = path.relative(path.resolve(root), path.resolve(value));
+      if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) {
+        continue;
+      }
+      normalizedInput[key] = relative.replace(/\\/g, '/');
+    } catch {
+      // keep the original value so the normal validator can reject it
+    }
+  }
+  return normalizedInput;
+}
+
 async function normalizeToolInvocation(tool, input, context) {
-  const rawInput = isPlainObject(input) ? { ...input } : {};
+  const rawInput = normalizeWorkspaceRelativePathInputs(
+    isPlainObject(input) ? { ...input } : {},
+    tool?.workspaceRelativePaths,
+    context?.workspacePath,
+  );
   if (typeof tool?.backfillObservableInput === 'function') {
     await tool.backfillObservableInput(rawInput, context);
   }
