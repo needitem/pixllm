@@ -106,6 +106,7 @@
       tasks: RunTask[];
       approvals: RunApproval[];
       artifacts: RunArtifact[];
+      metadata?: Record<string, unknown>;
       editSummaries: DiffFileView[];
     };
     reasoningSummary?: Record<string, unknown>;
@@ -262,26 +263,20 @@
     : hasConversation
       ? 'Conversation ready'
       : 'Awaiting your first prompt';
-  $: executionMessage =
-    resolveExecutionMessage(conversation, selectedExecutionMessageId);
-  $: executionItems = executionMessage ? buildExecutionInspectorItems(executionMessage) : [];
-  $: visibleExecutionItems = executionItems;
-  $: activeExecutionMessageId = executionMessage?.id || '';
-  $: if (visibleExecutionItems.length > 0) {
+  $: selectedExecutionMessage =
+    conversation.find((message) => message.id === selectedExecutionMessageId) ?? null;
+  $: selectedExecutionItems = selectedExecutionMessage
+    ? buildExecutionInspectorItems(selectedExecutionMessage)
+    : [];
+  $: activeExecutionMessageId = getActiveExecutionMessage(conversation)?.id || '';
+  $: if (selectedExecutionItemId) {
     const hasSelectedExecutionItem =
-      Boolean(selectedExecutionItemId)
-      && visibleExecutionItems.some((item) => item.id === selectedExecutionItemId);
-    const userCollapsedActiveExecutionItem =
-      selectedExecutionMessageId === activeExecutionMessageId
-      && selectedExecutionItemId === '';
-    if (!hasSelectedExecutionItem && !userCollapsedActiveExecutionItem) {
-      selectedExecutionItemId = defaultExecutionItemId(visibleExecutionItems);
+      selectedExecutionItems.length > 0
+      && selectedExecutionItems.some((item) => item.id === selectedExecutionItemId);
+    if (!hasSelectedExecutionItem) {
+      selectedExecutionItemId = defaultExecutionItemId(selectedExecutionItems);
     }
-  } else if (selectedExecutionItemId) {
-    selectedExecutionItemId = '';
   }
-  $: selectedExecutionItem =
-    executionItems.find((item) => item.id === selectedExecutionItemId) ?? null;
   $: isCompactLayout = windowWidth > 0 && windowWidth < SIDEBAR_OVERLAY_BREAKPOINT;
   $: if (windowWidth > 0) {
     const nextCompactLayout = windowWidth < SIDEBAR_OVERLAY_BREAKPOINT;
@@ -560,6 +555,60 @@
     return null;
   }
 
+  function transcriptItemTitle(kind: string): string | null {
+    switch (String(kind || '').trim()) {
+      case 'model_request':
+        return 'Model request payload';
+      case 'model_response':
+        return 'Model response';
+      case 'model_error':
+        return 'Model error';
+      case 'model_budget':
+        return 'Model budget';
+      case 'model_transport':
+        return 'Model transport';
+      case 'model_tool_calls':
+        return 'Model tool calls';
+      case 'model_retry':
+        return 'Model retry';
+      case 'model_reasoning':
+        return 'Model reasoning';
+      case 'prompt_token_count':
+        return 'Prompt token count';
+      case 'prompt_token_cache_hit':
+        return 'Prompt token cache';
+      case 'prompt_token_fallback':
+        return 'Prompt token fallback';
+      default:
+        return null;
+    }
+  }
+
+  function transcriptItemDetailTitle(kind: string): string {
+    switch (String(kind || '').trim()) {
+      case 'model_request':
+        return 'Raw model request';
+      case 'model_response':
+        return 'Raw model response';
+      case 'model_error':
+        return 'Model request error';
+      default:
+        return transcriptItemTitle(kind) || 'Transcript detail';
+    }
+  }
+
+  function transcriptItemTone(kind: string): string {
+    switch (String(kind || '').trim()) {
+      case 'model_error':
+      case 'prompt_token_fallback':
+        return 'danger';
+      case 'model_retry':
+        return 'accent';
+      default:
+        return 'neutral';
+    }
+  }
+
   function modelDetailLabel(item: ExecutionInspectorItem): string {
     if (item.title === 'Model request payload') return 'Request payload';
     if (item.title === 'Model response') return 'Model response';
@@ -579,6 +628,13 @@
 
   function showRawPayloadFallback(item: ExecutionInspectorItem): boolean {
     return !['Model request payload', 'Model response', 'Model error'].includes(item.title);
+  }
+
+  function runTranscriptEntries(message: ConversationMessage): Array<Record<string, unknown>> {
+    if (Array.isArray(message.localTranscript) && message.localTranscript.length > 0) {
+      return message.localTranscript;
+    }
+    return [];
   }
 
   function executionDetailMessage(detail: unknown): string {
@@ -1017,6 +1073,7 @@
     return Boolean(
       (message.statusEvents?.length ?? 0) > 0 ||
         (message.localTrace?.length ?? 0) > 0 ||
+        (message.localTranscript?.length ?? 0) > 0 ||
         message.localSummary ||
         message.localError ||
         message.runSnapshot
@@ -1034,35 +1091,11 @@
     return null;
   }
 
-  function getLatestExecutionMessage(messages: ConversationMessage[]): ConversationMessage | null {
-    for (let index = messages.length - 1; index >= 0; index -= 1) {
-      if (hasExecutionData(messages[index])) {
-        return messages[index];
-      }
-    }
-    return null;
-  }
-
-  function resolveExecutionMessage(
-    messages: ConversationMessage[],
-    selectedMessageId: string
-  ): ConversationMessage | null {
-    const active = getActiveExecutionMessage(messages);
-    if (active) {
-      return active;
-    }
-    const selected = messages.find((message) => message.id === selectedMessageId);
-    if (hasExecutionData(selected)) {
-      return selected ?? null;
-    }
-    return getLatestExecutionMessage(messages);
-  }
-
   function selectExecutionMessage(messageId: string) {
     selectedExecutionMessageId = messageId;
     const message = conversation.find((entry) => entry.id === messageId);
     const items = message ? buildExecutionInspectorItems(message) : [];
-    selectedExecutionItemId = items[items.length - 1]?.id || '';
+    selectedExecutionItemId = defaultExecutionItemId(items);
     if (messageId && !expandedExecutionMessageIds.includes(messageId)) {
       expandedExecutionMessageIds = [...expandedExecutionMessageIds, messageId];
     }
@@ -1093,10 +1126,8 @@
   }
 
   function toggleExecutionItem(messageId: string, itemId: string) {
-    const sameMessage = selectedExecutionMessageId === messageId;
-    const sameItem = sameMessage && selectedExecutionItemId === itemId;
     selectedExecutionMessageId = messageId;
-    selectedExecutionItemId = sameItem ? '' : itemId;
+    selectedExecutionItemId = itemId;
   }
 
   function toggleSidebar() {
@@ -1222,12 +1253,13 @@
       });
     }
 
-    for (const [index, entry] of (message.localTranscript ?? []).entries()) {
+    for (const [index, entry] of runTranscriptEntries(message).entries()) {
       const kind = String(entry?.kind || '');
-      if (!['model_response', 'model_error'].includes(kind)) {
+      const title = transcriptItemTitle(kind);
+      if (!title) {
         continue;
       }
-      const payload = entry?.payload && typeof entry.payload === 'object' ? entry.payload : entry;
+      const payload = entry?.payload !== undefined ? entry.payload : entry;
       const attempt = Number(entry?.attempt || 0);
       const subtitleParts = [
         kind.replace(/_/g, ' '),
@@ -1236,19 +1268,13 @@
       ].filter(Boolean);
       items.push({
         id: `${message.id}-transcript-${kind}-${index + 1}`,
-        title:
-          kind === 'model_response'
-            ? 'Model response'
-            : 'Model error',
+        title,
         subtitle: subtitleParts.join(' / '),
         badge: 'model',
-        tone: kind === 'model_error' ? 'danger' : 'neutral',
-        detailTitle:
-          kind === 'model_response'
-            ? 'Raw model response'
-            : 'Model request error',
+        tone: transcriptItemTone(kind),
+        detailTitle: transcriptItemDetailTitle(kind),
         detail: payload,
-        note: ''
+        note: toNonEmptyString(entry?.preview) || toNonEmptyString(entry?.message)
       });
     }
 
@@ -1374,6 +1400,10 @@
             tasks: Array.isArray((item.runSnapshot as any).tasks) ? (item.runSnapshot as any).tasks : [],
             approvals: Array.isArray((item.runSnapshot as any).approvals) ? (item.runSnapshot as any).approvals : [],
             artifacts: Array.isArray((item.runSnapshot as any).artifacts) ? (item.runSnapshot as any).artifacts : [],
+            metadata:
+              (item.runSnapshot as any).metadata && typeof (item.runSnapshot as any).metadata === 'object'
+                ? (item.runSnapshot as any).metadata
+                : undefined,
             editSummaries: Array.isArray((item.runSnapshot as any).editSummaries)
               ? (item.runSnapshot as any).editSummaries
               : []
@@ -1450,7 +1480,32 @@
     expandedExecutionMessageIds = [];
     lastAutoExpandedExecutionMessageId = '';
     conversation = deserializeConversation(session.messages || []);
+    void hydrateConversationRunSnapshots(conversation);
     closeSidebar();
+  }
+
+  async function hydrateConversationRunSnapshots(messages: ConversationMessage[]) {
+    const baseUrl = settings.serverBaseUrl.trim();
+    if (!baseUrl || messages.length === 0) return;
+    const messagesByRunId = new Map<string, string[]>();
+    for (const message of [...messages].reverse()) {
+      if (message.role !== 'assistant' || !message.runId) continue;
+      if (!messagesByRunId.has(message.runId)) {
+        messagesByRunId.set(message.runId, []);
+      }
+      messagesByRunId.get(message.runId)?.push(message.id);
+      if (messagesByRunId.size >= 8) break;
+    }
+    for (const [runId, messageIds] of messagesByRunId.entries()) {
+      try {
+        const detail = await fetchRun(baseUrl, settings.apiToken, runId);
+        for (const messageId of messageIds) {
+          updateRunSnapshotMessage(messageId, detail);
+        }
+      } catch {
+        // Preserve the locally cached snapshot when the server copy is unavailable.
+      }
+    }
   }
 
   async function persistCurrentSession(options?: { titleHint?: string }) {
@@ -1616,6 +1671,7 @@
         tasks: Array.isArray(detail.tasks) ? detail.tasks : [],
         approvals: Array.isArray(detail.approvals) ? detail.approvals : [],
         artifacts: Array.isArray(detail.artifacts) ? detail.artifacts : [],
+        metadata: detail.metadata && typeof detail.metadata === 'object' ? detail.metadata : undefined,
         editSummaries: extractEditSummaries(detail)
       }
     }));
@@ -2014,11 +2070,27 @@
           },
           onCancelled: (payload?: StreamCancelledPayload) => {
             const cancelledMessage = payload?.message || 'Cancelled';
+            const cancelledTrace = Array.isArray(payload?.local_trace)
+              ? payload.local_trace.map((step, index) => ({
+                  round: Number((step as Record<string, unknown>)?.round || index + 1),
+                  thought: String((step as Record<string, unknown>)?.thought || ''),
+                  tool: String((step as Record<string, unknown>)?.tool || ''),
+                  input:
+                    (step as Record<string, unknown>)?.input &&
+                    typeof (step as Record<string, unknown>).input === 'object'
+                      ? ((step as Record<string, unknown>).input as Record<string, unknown>)
+                      : {},
+                  observation: (step as Record<string, unknown>)?.observation ?? null
+                }))
+              : [];
             updateConversationMessage(assistantMessageId, (message) => ({
               ...message,
               content: message.content || `${cancelledMessage}.`,
               status: cancelledMessage,
-              state: 'cancelled'
+              state: 'cancelled',
+              localTranscript: Array.isArray(payload?.local_transcript) ? payload.local_transcript : message.localTranscript,
+              localTrace: cancelledTrace.length > 0 ? cancelledTrace : message.localTrace,
+              localSummary: typeof payload?.local_summary === 'string' ? payload.local_summary : message.localSummary,
             }));
             appendStatusEvent(assistantMessageId, { message: cancelledMessage });
             stopRunDetailPolling();
@@ -2026,12 +2098,41 @@
             busy = false;
             void persistCurrentSession({ titleHint: prompt });
           },
-          onError: (message) => {
+          onError: (payload) => {
+            const errorPayload =
+              payload && typeof payload === 'object'
+                ? payload as StreamCancelledPayload
+                : null;
+            const message = typeof payload === 'string'
+              ? payload
+              : String(errorPayload?.message || 'Unknown stream error');
+            const errorTrace = Array.isArray(errorPayload?.local_trace)
+              ? errorPayload.local_trace.map((step, index) => ({
+                  round: Number((step as Record<string, unknown>)?.round || index + 1),
+                  thought: String((step as Record<string, unknown>)?.thought || ''),
+                  tool: String((step as Record<string, unknown>)?.tool || ''),
+                  input:
+                    (step as Record<string, unknown>)?.input &&
+                    typeof (step as Record<string, unknown>).input === 'object'
+                      ? ((step as Record<string, unknown>).input as Record<string, unknown>)
+                      : {},
+                  observation: (step as Record<string, unknown>)?.observation ?? null
+                }))
+              : [];
             updateConversationMessage(assistantMessageId, (entry) => ({
               ...entry,
               content: entry.content || message,
               status: undefined,
-              state: 'error'
+              state: 'error',
+              localTranscript:
+                Array.isArray(errorPayload?.local_transcript)
+                    ? errorPayload.local_transcript
+                    : entry.localTranscript,
+              localTrace: errorTrace.length > 0 ? errorTrace : entry.localTrace,
+              localSummary:
+                typeof errorPayload?.local_summary === 'string'
+                    ? errorPayload.local_summary
+                    : entry.localSummary,
             }));
             appendStatusEvent(assistantMessageId, { message });
             stopRunDetailPolling();

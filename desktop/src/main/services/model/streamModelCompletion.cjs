@@ -66,6 +66,7 @@ function buildDebugSnapshot({
   responseStatus = 0,
   responsePayload = null,
   responseText = '',
+  meta = null,
 } = {}) {
   return {
     request: {
@@ -81,6 +82,7 @@ function buildDebugSnapshot({
         ? clipDebugText(responseText)
         : '',
     },
+    meta: meta && typeof meta === 'object' ? sanitizeDebugValue(meta) : {},
   };
 }
 
@@ -463,6 +465,7 @@ async function callModelCompletion({
     throw new Error('serverBaseUrl is required');
   }
   let lastError = null;
+  const debugAttempts = [];
   const defaultExtraBody = buildExtraBody({ model });
   const resolvedExtraBody = extraBody && typeof extraBody === 'object'
     ? extraBody
@@ -477,6 +480,7 @@ async function callModelCompletion({
         const requestPath = candidate.mode === 'proxy'
           ? '/v1/llm/chat_completions'
           : '/v1/chat/completions';
+        const endpoint = buildRequestTarget(candidate.baseUrl, requestPath);
         const requestBody = buildCompletionRequestBody({
           mode: candidate.mode,
           model,
@@ -501,18 +505,59 @@ async function callModelCompletion({
         try {
           payload = JSON.parse(text);
         } catch {
+          debugAttempts.push({
+            kind: 'response_parse_error',
+            label: candidate.label,
+            mode: candidate.mode,
+            endpoint,
+            maxTokens: requestedMaxTokens,
+            status: response.status,
+          });
           if (hasFallback && shouldRetryWithFallback(response.status, null, text)) {
+            debugAttempts.push({
+              kind: 'fallback',
+              label: candidate.label,
+              mode: candidate.mode,
+              endpoint,
+              reason: 'response_parse_error',
+              status: response.status,
+            });
             break;
           }
           throw new Error(text || `HTTP ${response.status}`);
         }
         if (candidate.mode === 'proxy') {
           if (!response.ok || !payload?.ok) {
+            debugAttempts.push({
+              kind: 'response_error',
+              label: candidate.label,
+              mode: candidate.mode,
+              endpoint,
+              maxTokens: requestedMaxTokens,
+              status: response.status,
+              message: extractErrorMessage(payload, text),
+            });
             if (hasFallback && shouldRetryWithFallback(response.status, payload, text)) {
+              debugAttempts.push({
+                kind: 'fallback',
+                label: candidate.label,
+                mode: candidate.mode,
+                endpoint,
+                reason: 'proxy_error',
+                status: response.status,
+              });
               break;
             }
             throw new Error(extractErrorMessage(payload, text) || `HTTP ${response.status}`);
           }
+          debugAttempts.push({
+            kind: 'success',
+            label: candidate.label,
+            mode: candidate.mode,
+            endpoint,
+            maxTokens: requestedMaxTokens,
+            status: response.status,
+          });
           return {
             ...(payload.data || {}),
             debug: buildDebugSnapshot({
@@ -522,11 +567,29 @@ async function callModelCompletion({
               responseStatus: response.status,
               responsePayload: payload,
               responseText: text,
+              meta: { attempts: debugAttempts },
             }),
           };
         }
         if (!response.ok) {
+          debugAttempts.push({
+            kind: 'response_error',
+            label: candidate.label,
+            mode: candidate.mode,
+            endpoint,
+            maxTokens: requestedMaxTokens,
+            status: response.status,
+            message: extractErrorMessage(payload, text),
+          });
           if (hasFallback && shouldRetryWithFallback(response.status, payload, text)) {
+            debugAttempts.push({
+              kind: 'fallback',
+              label: candidate.label,
+              mode: candidate.mode,
+              endpoint,
+              reason: 'openai_error',
+              status: response.status,
+            });
             break;
           }
           throw new Error(extractErrorMessage(payload, text) || `HTTP ${response.status}`);
@@ -536,6 +599,15 @@ async function callModelCompletion({
         const reasoningContent = coerceOpenAiText(
           choice?.message?.reasoning_content || choice?.message?.reasoning,
         );
+        debugAttempts.push({
+          kind: 'success',
+          label: candidate.label,
+          mode: candidate.mode,
+          endpoint,
+          maxTokens: requestedMaxTokens,
+          status: response.status,
+          finishReason: toStringValue(choice?.finish_reason),
+        });
         return {
           text: content,
           reasoning_content: reasoningContent,
@@ -549,6 +621,7 @@ async function callModelCompletion({
             responseStatus: response.status,
             responsePayload: payload,
             responseText: text,
+            meta: { attempts: debugAttempts },
           }),
         };
       } catch (error) {
@@ -558,9 +631,27 @@ async function callModelCompletion({
           retryMaxTokens != null
           && contextOverflowRetries < MAX_CONTEXT_OVERFLOW_RETRIES
         ) {
+          debugAttempts.push({
+            kind: 'context_retry',
+            label: candidate.label,
+            mode: candidate.mode,
+            maxTokens: requestedMaxTokens,
+            nextMaxTokens: retryMaxTokens,
+            message: error instanceof Error ? error.message : String(error || ''),
+          });
           requestedMaxTokens = retryMaxTokens;
           contextOverflowRetries += 1;
           continue;
+        }
+        debugAttempts.push({
+          kind: 'request_error',
+          label: candidate.label,
+          mode: candidate.mode,
+          maxTokens: requestedMaxTokens,
+          message: error instanceof Error ? error.message : String(error || ''),
+        });
+        if (error && typeof error === 'object') {
+          error.debugMeta = sanitizeDebugValue({ attempts: debugAttempts });
         }
         if (!hasFallback) {
           throw error;
@@ -599,6 +690,7 @@ async function streamModelCompletion({
     throw new Error('serverBaseUrl is required');
   }
   let lastError = null;
+  const debugAttempts = [];
   const defaultExtraBody = buildExtraBody({ model });
   const resolvedExtraBody = extraBody && typeof extraBody === 'object'
     ? extraBody
@@ -613,6 +705,7 @@ async function streamModelCompletion({
         const requestPath = candidate.mode === 'proxy'
           ? '/v1/llm/chat_completions/stream'
           : '/v1/chat/completions';
+        const endpoint = buildRequestTarget(candidate.baseUrl, requestPath);
         const requestBody = buildCompletionRequestBody({
           mode: candidate.mode,
           model,
@@ -641,7 +734,24 @@ async function streamModelCompletion({
           } catch {
             payload = null;
           }
+          debugAttempts.push({
+            kind: 'response_error',
+            label: candidate.label,
+            mode: candidate.mode,
+            endpoint,
+            maxTokens: requestedMaxTokens,
+            status: response.status,
+            message: extractErrorMessage(payload, text),
+          });
           if (hasFallback && shouldRetryWithFallback(response.status, payload, text)) {
+            debugAttempts.push({
+              kind: 'fallback',
+              label: candidate.label,
+              mode: candidate.mode,
+              endpoint,
+              reason: 'stream_response_error',
+              status: response.status,
+            });
             break;
           }
           throw new Error(extractErrorMessage(payload, text) || `HTTP ${response.status}`);
@@ -741,6 +851,15 @@ async function streamModelCompletion({
         }
 
         if (donePayload && typeof donePayload === 'object') {
+          debugAttempts.push({
+            kind: 'success',
+            label: candidate.label,
+            mode: candidate.mode,
+            endpoint,
+            maxTokens: requestedMaxTokens,
+            status: response.status,
+            finishReason: toStringValue(donePayload.finish_reason),
+          });
           return {
             text: typeof donePayload.text === 'string' ? donePayload.text : aggregated,
             reasoning_content: typeof donePayload.reasoning_content === 'string' ? donePayload.reasoning_content : aggregatedReasoning,
@@ -754,10 +873,20 @@ async function streamModelCompletion({
               responseStatus: response.status,
               responsePayload: donePayload,
               responseText: aggregated,
+              meta: { attempts: debugAttempts },
             }),
           };
         }
 
+        debugAttempts.push({
+          kind: 'success',
+          label: candidate.label,
+          mode: candidate.mode,
+          endpoint,
+          maxTokens: requestedMaxTokens,
+          status: response.status,
+          finishReason: '',
+        });
         return {
           text: aggregated,
           reasoning_content: aggregatedReasoning,
@@ -777,6 +906,7 @@ async function streamModelCompletion({
               usage: {},
             },
             responseText: aggregated,
+            meta: { attempts: debugAttempts },
           }),
         };
       } catch (error) {
@@ -786,9 +916,27 @@ async function streamModelCompletion({
           retryMaxTokens != null
           && contextOverflowRetries < MAX_CONTEXT_OVERFLOW_RETRIES
         ) {
+          debugAttempts.push({
+            kind: 'context_retry',
+            label: candidate.label,
+            mode: candidate.mode,
+            maxTokens: requestedMaxTokens,
+            nextMaxTokens: retryMaxTokens,
+            message: error instanceof Error ? error.message : String(error || ''),
+          });
           requestedMaxTokens = retryMaxTokens;
           contextOverflowRetries += 1;
           continue;
+        }
+        debugAttempts.push({
+          kind: 'request_error',
+          label: candidate.label,
+          mode: candidate.mode,
+          maxTokens: requestedMaxTokens,
+          message: error instanceof Error ? error.message : String(error || ''),
+        });
+        if (error && typeof error === 'object') {
+          error.debugMeta = sanitizeDebugValue({ attempts: debugAttempts });
         }
         if (!hasFallback) {
           throw error;

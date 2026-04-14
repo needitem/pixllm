@@ -103,7 +103,12 @@ async function startLocalAgentStream(eventSender, streamControllers, payload = {
       const message = controller.signal.aborted
         ? 'Cancelled'
         : (error instanceof Error ? error.message : String(error));
-      emit(controller.signal.aborted ? 'cancelled' : 'error', { message });
+      emit(controller.signal.aborted ? 'cancelled' : 'error', {
+        message,
+        local_trace: Array.isArray(engine?.state?.trace) ? engine.state.trace : [],
+        local_transcript: Array.isArray(engine?.state?.transcript) ? engine.state.transcript : [],
+        local_summary: typeof engine?.state?.terminalReason === 'string' ? engine.state.terminalReason : '',
+      });
     } finally {
       for (const key of Array.from(QUESTION_REGISTRY.keys())) {
         if (!key.startsWith(`${requestId}::`)) continue;

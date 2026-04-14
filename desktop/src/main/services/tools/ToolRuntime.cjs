@@ -365,6 +365,7 @@ class ToolRuntime {
       toolUseId: toolUse?.id,
       ok: observation?.ok !== false,
       synthetic: countUsage !== true,
+      payload: observation,
     });
     return buildToolExecutionResult(toolUse, observation);
   }
@@ -405,6 +406,16 @@ class ToolRuntime {
       });
     }
 
+    this.recordTranscript({
+      kind: 'tool_use',
+      turn,
+      tool: toolUse?.name,
+      toolUseId: toolUse?.id,
+      payload: {
+        input: toolUse?.input || {},
+        activeToolNames: Array.isArray(activeToolNames) ? activeToolNames.slice(0, 24) : [],
+      },
+    });
     await onToolUse({
       turn,
       id: toolUse?.id,

@@ -91,6 +91,9 @@ export type StreamDonePayload = {
 
 export type StreamCancelledPayload = {
   message?: string;
+  local_trace?: Array<Record<string, unknown>>;
+  local_transcript?: Array<Record<string, unknown>>;
+  local_summary?: string;
 };
 
 export type StreamModelPayload = {
@@ -246,7 +249,7 @@ export async function streamLocalAgentChat(
     onStatus?: (payload?: StreamStatusPayload) => void;
     onDone?: (payload?: StreamDonePayload) => void;
     onCancelled?: (payload?: StreamCancelledPayload) => void;
-    onError?: (message: string) => void;
+    onError?: (payload?: StreamCancelledPayload | { message?: string } | string) => void;
   }
 ) {
   let activeRequestId = '';
@@ -364,14 +367,9 @@ export async function streamLocalAgentChat(
       }
 
       if (event.event === 'error') {
-        const payload = event.payload as { message?: string } | string;
-        const messageText =
-          typeof payload === 'string'
-            ? payload
-            : typeof payload?.message === 'string'
-              ? payload.message
-              : 'Unknown stream error';
-        if (handlers.onError) handlers.onError(messageText);
+        if (handlers.onError) {
+          handlers.onError((event.payload || undefined) as StreamCancelledPayload | { message?: string } | string);
+        }
         unsubscribe();
       }
     }

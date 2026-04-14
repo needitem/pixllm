@@ -79,6 +79,9 @@ function normalizeRunSnapshot(snapshot) {
     tasks: Array.isArray(snapshot.tasks) ? snapshot.tasks : [],
     approvals: Array.isArray(snapshot.approvals) ? snapshot.approvals : [],
     artifacts: Array.isArray(snapshot.artifacts) ? snapshot.artifacts : [],
+    metadata: snapshot.metadata && typeof snapshot.metadata === 'object' && !Array.isArray(snapshot.metadata)
+      ? snapshot.metadata
+      : undefined,
     editSummaries: Array.isArray(snapshot.editSummaries) ? snapshot.editSummaries : []
   };
 }
@@ -101,6 +104,9 @@ function normalizeMessage(message, index) {
       : [],
     localTrace: Array.isArray(message?.localTrace)
       ? message.localTrace.map((step, stepIndex) => normalizeLocalTraceStep(step, stepIndex))
+      : [],
+    localTranscript: Array.isArray(message?.localTranscript)
+      ? message.localTranscript.filter((entry) => entry && typeof entry === 'object')
       : [],
     localSummary: typeof message?.localSummary === 'string' ? message.localSummary : '',
     localError: typeof message?.localError === 'string' ? message.localError : '',

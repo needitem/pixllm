@@ -982,6 +982,17 @@ class QueryEngine {
       try {
         const budgetState = await this._requestBudgetStateForMessages(messages, { signal });
         const maxTokens = this._resolveMaxTokensForRequest(messages, budgetState);
+        this._recordTranscript({
+          kind: 'model_budget',
+          turn,
+          attempt: attempt + 1,
+          promptTokens: Number(budgetState?.promptTokens || 0),
+          exactPromptTokens: Number(budgetState?.exactPromptTokens || 0),
+          approxTokens: Number(budgetState?.approxTokens || 0),
+          exact: Boolean(budgetState?.exact),
+          contextWindow: Number(budgetState?.contextWindow || 0),
+          maxTokens,
+        });
         const result = await streamModelCompletion({
           baseUrl: this.llmBaseUrl || this.baseUrl || this.serverBaseUrl,
           apiToken: this.llmApiToken || this.apiToken || this.serverApiToken,
@@ -1001,6 +1012,18 @@ class QueryEngine {
             });
           },
           onToolCalls: async (toolCalls) => {
+            this._recordTranscript({
+              kind: 'model_tool_calls',
+              turn,
+              attempt: attempt + 1,
+              payload: Array.isArray(toolCalls)
+                ? toolCalls.map((item) => ({
+                    id: toStringValue(item?.id),
+                    name: toStringValue(item?.name),
+                    arguments: toStringValue(item?.arguments),
+                  }))
+                : [],
+            });
             await onToolCalls(Array.isArray(toolCalls) ? toolCalls : []);
           },
         });
@@ -1023,6 +1046,23 @@ class QueryEngine {
             payload: result.debug.response,
           });
         }
+        if (result?.debug?.meta) {
+          this._recordTranscript({
+            kind: 'model_transport',
+            turn,
+            attempt: attempt + 1,
+            payload: result.debug.meta,
+          });
+        }
+        if (toStringValue(result?.reasoning_content)) {
+          this._recordTranscript({
+            kind: 'model_reasoning',
+            turn,
+            attempt: attempt + 1,
+            preview: previewText(result.reasoning_content),
+            chars: String(result.reasoning_content || '').length,
+          });
+        }
         return result;
       } catch (error) {
         lastError = error;
@@ -1032,6 +1072,7 @@ class QueryEngine {
           attempt: attempt + 1,
           payload: {
             message: error instanceof Error ? error.message : String(error),
+            debugMeta: error && typeof error === 'object' ? error.debugMeta || null : null,
           },
         });
         if (signal?.aborted) throw error;
@@ -1039,6 +1080,15 @@ class QueryEngine {
           throw error;
         }
         this.state.totalUsage.model_retries += 1;
+        this._recordTranscript({
+          kind: 'model_retry',
+          turn,
+          attempt: attempt + 1,
+          payload: {
+            message: error instanceof Error ? error.message : String(error),
+            debugMeta: error && typeof error === 'object' ? error.debugMeta || null : null,
+          },
+        });
         this._recordTransition('model_retry', {
           attempt: attempt + 1,
           message: error instanceof Error ? error.message : String(error),
@@ -1200,9 +1250,18 @@ class QueryEngine {
     const approxState = this._messageBudgetStateForMessages(messages);
     const cacheKey = this._promptTokenCacheKey(messages);
     if (this.promptTokenCountCache.has(cacheKey)) {
+      const cached = this.promptTokenCountCache.get(cacheKey);
+      this._recordTranscript({
+        kind: 'prompt_token_cache_hit',
+        promptTokens: Number(cached?.promptTokens || 0),
+        exactPromptTokens: Number(cached?.exactPromptTokens || 0),
+        exact: Boolean(cached?.exact),
+        contextWindow: Number(cached?.contextWindow || 0),
+        approxTokens: Number(approxState?.approxTokens || 0),
+      });
       return {
         ...approxState,
-        ...this.promptTokenCountCache.get(cacheKey),
+        ...cached,
       };
     }
 
@@ -1242,7 +1301,22 @@ class QueryEngine {
         ...approxState,
         ...resolvedState,
       };
-    } catch {
+      this._recordTranscript({
+        kind: 'prompt_token_count',
+        promptTokens: Number(resolvedState?.promptTokens || 0),
+        exactPromptTokens: Number(resolvedState?.exactPromptTokens || 0),
+        exact: Boolean(resolvedState?.exact),
+        contextWindow: Number(resolvedState?.contextWindow || 0),
+        approxTokens: Number(approxState?.approxTokens || 0),
+      });
+    } catch (error) {
+      this._recordTranscript({
+        kind: 'prompt_token_fallback',
+        message: error instanceof Error ? error.message : String(error),
+        promptTokens: Number(fallbackState?.promptTokens || 0),
+        approxTokens: Number(approxState?.approxTokens || 0),
+        contextWindow: Number(fallbackState?.contextWindow || 0),
+      });
       return fallbackState;
     }
   }
