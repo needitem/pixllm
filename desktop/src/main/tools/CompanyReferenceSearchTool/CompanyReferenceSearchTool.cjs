@@ -198,6 +198,21 @@ function normalizeCitationItem(item) {
   };
 }
 
+function normalizeApiFactItem(item) {
+  return {
+    kind: toStringValue(item?.kind),
+    namespace: toStringValue(item?.namespace),
+    typeName: toStringValue(item?.typeName),
+    qualifiedType: toStringValue(item?.qualifiedType),
+    memberName: toStringValue(item?.memberName),
+    signature: toStringValue(item?.signature),
+    stubSignature: toStringValue(item?.stubSignature),
+    path: normalizeReferencePath(item?.path),
+    lineRange: toStringValue(item?.lineRange || item?.line_range),
+    evidenceType: toStringValue(item?.evidenceType || item?.evidence_type),
+  };
+}
+
 function CompanyReferenceSearchTool() {
   return defineLocalTool({
     name: 'company_reference_search',
@@ -365,13 +380,15 @@ function CompanyReferenceSearchTool() {
           windows: mergedWindows,
           sources,
         });
+        const apiFacts = (Array.isArray(factBundle.apiFacts) ? factBundle.apiFacts : [])
+          .map((item) => normalizeApiFactItem(item));
         const messageParts = [];
         if (mergedWindows.length > 0) messageParts.push(`${mergedWindows.length} code windows`);
         if (sources.length > 0) messageParts.push(`${sources.length} sources`);
         if (referenceAnchors.length > 0) messageParts.push(`${referenceAnchors.length} source anchors`);
         if (examples.length > 0) messageParts.push(`${examples.length} code examples`);
-        if (Array.isArray(factBundle.apiFacts) && factBundle.apiFacts.length > 0) {
-          messageParts.push(`${factBundle.apiFacts.length} api facts`);
+        if (apiFacts.length > 0) {
+          messageParts.push(`${apiFacts.length} api facts`);
         }
 
         return {
@@ -382,7 +399,7 @@ function CompanyReferenceSearchTool() {
           citations,
           reference_anchors: referenceAnchors,
           examples,
-          api_facts: factBundle.apiFacts,
+          api_facts: apiFacts,
           fact_sheet: factBundle.factSheet,
           known_types: factBundle.knownTypes,
           message: messageParts.length > 0

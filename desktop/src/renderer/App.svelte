@@ -266,7 +266,7 @@
   $: selectedExecutionMessage =
     conversation.find((message) => message.id === selectedExecutionMessageId) ?? null;
   $: selectedExecutionItems = selectedExecutionMessage
-    ? buildExecutionInspectorItems(selectedExecutionMessage)
+    ? getVisibleExecutionItems(selectedExecutionMessage)
     : [];
   $: activeExecutionMessageId = getActiveExecutionMessage(conversation)?.id || '';
   $: if (selectedExecutionItemId) {
@@ -540,6 +540,12 @@
   }
 
   function modelDetailPayload(item: ExecutionInspectorItem): unknown {
+    if (item.title === 'Raw assistant output') {
+      const record = isRecord(item.detail) ? item.detail : null;
+      if (!record) return item.detail;
+      const rawText = toNonEmptyString(record.text);
+      return rawText || record;
+    }
     if (item.title === 'Model request payload') {
       return item.detail;
     }
@@ -557,6 +563,8 @@
 
   function transcriptItemTitle(kind: string): string | null {
     switch (String(kind || '').trim()) {
+      case 'raw_assistant_output':
+        return 'Raw assistant output';
       case 'model_request':
         return 'Model request payload';
       case 'model_response':
@@ -586,6 +594,8 @@
 
   function transcriptItemDetailTitle(kind: string): string {
     switch (String(kind || '').trim()) {
+      case 'raw_assistant_output':
+        return 'Raw assistant output';
       case 'model_request':
         return 'Raw model request';
       case 'model_response':
@@ -609,7 +619,17 @@
     }
   }
 
+  function upsertTranscriptEntry(
+    items: Array<Record<string, unknown>> = [],
+    nextEntry: Record<string, unknown>,
+    matcher: (entry: Record<string, unknown>) => boolean
+  ): Array<Record<string, unknown>> {
+    const filtered = (Array.isArray(items) ? items : []).filter((entry) => !matcher(entry));
+    return [...filtered, nextEntry];
+  }
+
   function modelDetailLabel(item: ExecutionInspectorItem): string {
+    if (item.title === 'Raw assistant output') return 'Raw assistant output';
     if (item.title === 'Model request payload') return 'Request payload';
     if (item.title === 'Model response') return 'Model response';
     if (item.title === 'Model error') return 'Model error';
@@ -626,8 +646,31 @@
     return 'Execution detail';
   }
 
+  function outputPreviewDetail(detail: unknown): string {
+    return executionDetailValue(detail, 'output_preview');
+  }
+
+  function executionItemHasOutput(item: ExecutionInspectorItem): boolean {
+    if (item.title !== 'Model request payload' && modelDetailPayload(item) != null) {
+      return true;
+    }
+    if (executionResultDetail(item.detail) !== null) {
+      return true;
+    }
+    if (toNonEmptyString(outputPreviewDetail(item.detail))) {
+      return true;
+    }
+    if (Array.isArray(item.diffs) && item.diffs.length > 0) {
+      return true;
+    }
+    if (toNonEmptyString(item.note) && item.note !== item.title && item.note !== item.subtitle) {
+      return true;
+    }
+    return false;
+  }
+
   function showRawPayloadFallback(item: ExecutionInspectorItem): boolean {
-    return !['Model request payload', 'Model response', 'Model error'].includes(item.title);
+    return !['Raw assistant output', 'Model request payload', 'Model response', 'Model error'].includes(item.title);
   }
 
   function runTranscriptEntries(message: ConversationMessage): Array<Record<string, unknown>> {
@@ -1102,7 +1145,7 @@
   }
 
   function getVisibleExecutionItems(message: ConversationMessage): ExecutionInspectorItem[] {
-    return buildExecutionInspectorItems(message);
+    return buildExecutionInspectorItems(message).filter((item) => executionItemHasOutput(item));
   }
 
   function hasVisibleExecutionItems(message: ConversationMessage): boolean {
@@ -1126,8 +1169,10 @@
   }
 
   function toggleExecutionItem(messageId: string, itemId: string) {
+    const sameMessage = selectedExecutionMessageId === messageId;
+    const sameItem = sameMessage && selectedExecutionItemId === itemId;
     selectedExecutionMessageId = messageId;
-    selectedExecutionItemId = itemId;
+    selectedExecutionItemId = sameItem ? '' : itemId;
   }
 
   function toggleSidebar() {
@@ -1170,7 +1215,8 @@
 
   function defaultExecutionItemId(items: ExecutionInspectorItem[]): string {
     const preferred =
-      items.find((item) => item.title === 'Model response')
+      items.find((item) => item.title === 'Raw assistant output')
+      || items.find((item) => item.title === 'Model response')
       || items.find((item) => item.title === 'Model error')
       || items[items.length - 1];
     return preferred?.id || '';
@@ -1904,6 +1950,27 @@
           },
           onAssistantMessage: (payload?: StreamAssistantMessagePayload) => {
             const toolUses = Number(payload?.toolUses || 0);
+            const rawText = String(payload?.rawText || '').trim();
+            const turn = Number(payload?.turn || 0);
+            if (rawText) {
+              updateConversationMessage(assistantMessageId, (message) => ({
+                ...message,
+                localTranscript: upsertTranscriptEntry(
+                  Array.isArray(message.localTranscript) ? message.localTranscript : [],
+                  {
+                    kind: 'raw_assistant_output',
+                    turn,
+                    payload: {
+                      text: rawText,
+                    },
+                  },
+                  (entry) =>
+                    String(entry?.kind || '') === 'raw_assistant_output'
+                    && Number(entry?.turn || 0) === turn,
+                ),
+              }));
+              void persistCurrentSession({ titleHint: prompt });
+            }
             appendStatusEvent(assistantMessageId, {
               message:
                 toolUses > 0
@@ -2904,6 +2971,12 @@
                                           <details class="activity-raw" open>
                                             <summary>{executionResultLabel(item)}</summary>
                                             <pre>{stringifyDetail(executionResultDetail(item.detail))}</pre>
+                                          </details>
+                                        {/if}
+                                        {#if outputPreviewDetail(item.detail)}
+                                          <details class="activity-raw" open>
+                                            <summary>Output preview</summary>
+                                            <pre>{outputPreviewDetail(item.detail)}</pre>
                                           </details>
                                         {/if}
                                         {#if item.diffs && item.diffs.length > 0}

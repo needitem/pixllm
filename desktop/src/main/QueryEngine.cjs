@@ -22,7 +22,6 @@ const { verifyCreateRequestSatisfaction } = require('./query/createRequestCheck.
 const { verifyDraftAnswerSatisfaction } = require('./query/finalAnswerCheck.cjs');
 const { evaluateFinalAnswerPolicy } = require('./query/finalizationPolicy.cjs');
 const { findUngroundedSourceMentions } = require('./query/sourceGuard.cjs');
-const { verifyStandaloneCSharpArtifacts } = require('./query/compileArtifactCheck.cjs');
 const { buildRequestContext } = require('./utils/processUserInput/processUserInput.cjs');
 const { analyzePromptSemantics } = require('./services/model/QwenQueryRewrite.cjs');
 const { loadAgentState, saveAgentState } = require('./state/agentStateStore.cjs');
@@ -89,14 +88,12 @@ function evaluateFinalAnswerState({
   finalAnswer = '',
   groundedPaths = [],
   describeTool = () => null,
-  deterministicChecks = [],
 } = {}) {
   const policyResult = evaluateFinalAnswerPolicy({
     requestContext,
     trace,
     finalAnswer,
     describeTool,
-    deterministicChecks,
   });
   if (!policyResult?.ok) {
     return {
@@ -1578,29 +1575,7 @@ class QueryEngine {
     };
   }
 
-  async _runDeterministicArtifactCheck(runTrace = [], runContext = {}) {
-    const files = await this._collectGeneratedFiles(runTrace, runContext);
-    if (files.length === 0) {
-      return null;
-    }
-    const referenceEvidence = this._collectReferenceEvidence(runTrace);
-    const compileCheck = await verifyStandaloneCSharpArtifacts({
-      files,
-      referenceExcerpts: referenceEvidence.referenceExcerpts,
-      apiFacts: referenceEvidence.apiFacts,
-      knownTypes: referenceEvidence.knownTypes,
-    });
-    if (!compileCheck) {
-      return null;
-    }
-    return {
-      ...compileCheck,
-      files,
-      referenceEvidence,
-    };
-  }
-
-  async _verifyCreateRequestCompletion(runContext, runTrace, { signal = null, files = null, referenceEvidence = null, deterministicChecks = [] } = {}) {
+  async _verifyCreateRequestCompletion(runContext, runTrace, { signal = null, files = null, referenceEvidence = null } = {}) {
     const intent = runContext?.intent && typeof runContext.intent === 'object' ? runContext.intent : {};
     const requiresWorkspaceArtifact = Boolean(
       runContext?.artifactPlan?.requiresWorkspaceArtifact || intent.createLikely,
@@ -1629,7 +1604,6 @@ class QueryEngine {
       files: generatedFiles,
       referenceExcerpts: references.referenceExcerpts,
       apiFacts: references.apiFacts,
-      deterministicChecks,
     });
   }
 
@@ -1655,14 +1629,13 @@ class QueryEngine {
     });
   }
 
-  _evaluateFinalAnswer(finalAnswer, { trace = [], turn = 0, deterministicChecks = [] } = {}) {
+  _evaluateFinalAnswer(finalAnswer, { trace = [], turn = 0 } = {}) {
     const finalAnswerCheck = evaluateFinalAnswerState({
       requestContext: this.runtime?.requestContext || {},
       trace,
       finalAnswer,
       groundedPaths: this._groundedSourcePaths(trace),
       describeTool: (toolName) => (this.tools?.describe ? this.tools.describe(toolName) : null),
-      deterministicChecks,
     });
 
     if (!finalAnswerCheck?.ok && finalAnswerCheck?.type === 'policy') {
@@ -1856,7 +1829,6 @@ class QueryEngine {
   } = {}) {
     const finalAnswer = joinAnswerFragments(this.state.pendingAssistantContinuation, assistantText);
     const runTrace = this.state.trace.slice(traceStartIndex);
-    const deterministicArtifactCheck = await this._runDeterministicArtifactCheck(runTrace, runContext);
     const finalAnswerCheck = this._evaluateFinalAnswer(finalAnswer, {
       trace: runTrace,
       turn,
@@ -1867,30 +1839,6 @@ class QueryEngine {
     }
 
     const referenceEvidence = this._collectReferenceEvidence(runTrace);
-    if (
-      deterministicArtifactCheck
-      && deterministicArtifactCheck.supported
-      && !deterministicArtifactCheck.ok
-      && Number(this.state.createVerificationRetries || 0) < MAX_CREATE_VERIFICATION_RETRIES
-    ) {
-      return {
-        status: 'continue',
-        maxTurns: this._queueRepairLoop({
-          turn,
-          maxTurns,
-          runTrace,
-          runContext,
-          hook: 'deterministic_compile_retry',
-          reasoning: deterministicArtifactCheck.reasoning,
-          requiredChanges: Array.isArray(deterministicArtifactCheck.required_changes)
-            ? deterministicArtifactCheck.required_changes
-            : [],
-          fallbackWithTarget: 'The generated file does not compile against the verified engine API facts. Re-read and patch the target file directly before finalizing.',
-          fallbackWithoutTarget: 'The generated file does not compile against the verified engine API facts. Re-read the relevant source and patch the generated file before finalizing.',
-        }),
-      };
-    }
-
     const draftVerification = await verifyDraftAnswerSatisfaction({
       baseUrl: this.llmBaseUrl || this.baseUrl || this.serverBaseUrl,
       apiToken: this.llmApiToken || this.apiToken || this.serverApiToken,
@@ -1902,7 +1850,6 @@ class QueryEngine {
       finalAnswer,
       referenceExcerpts: referenceEvidence.referenceExcerpts,
       apiFacts: referenceEvidence.apiFacts,
-      deterministicChecks: deterministicArtifactCheck ? [deterministicArtifactCheck] : [],
     });
     if (
       draftVerification
@@ -1929,9 +1876,8 @@ class QueryEngine {
 
     const createVerification = await this._verifyCreateRequestCompletion(runContext, runTrace, {
       signal,
-      files: deterministicArtifactCheck?.files,
-      referenceEvidence: deterministicArtifactCheck?.referenceEvidence || referenceEvidence,
-      deterministicChecks: deterministicArtifactCheck ? [deterministicArtifactCheck] : [],
+      files: null,
+      referenceEvidence,
     });
     if (
       createVerification
@@ -2311,6 +2257,17 @@ class QueryEngine {
             symbol_hints: Array.isArray(runContext?.symbolHints) ? runContext.symbolHints : [],
           },
         });
+        if (rawText) {
+          this._recordTranscript({
+            kind: 'raw_assistant_output',
+            turn,
+            finishReason,
+            payload: {
+              text: rawText,
+              reasoning: toStringValue(completion?.reasoning_content || ''),
+            },
+          });
+        }
         if (!parsed.ok) {
           if (hitOutputLimit && this.state.maxOutputTokensRecoveryCount < MAX_OUTPUT_TOKENS_RECOVERY_LIMIT) {
             this.state.maxOutputTokensRecoveryCount += 1;
@@ -2385,6 +2342,7 @@ class QueryEngine {
         await onAssistantMessage({
           turn,
           text: assistantText,
+          rawText,
           toolUses: toolUses.length,
           finishReason,
         });

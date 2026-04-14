@@ -39,12 +39,19 @@ function normalizeWikiId(value = '') {
   return raw.replace(/[^a-z0-9._-]+/g, '-').replace(/^[._-]+|[._-]+$/g, '').slice(0, 80);
 }
 
+function resolveSharedWikiAlias(value = '') {
+  const normalized = normalizeWikiId(value);
+  if (!normalized) return '';
+  if (['company_reference', 'company-reference', 'reference', 'shared_reference'].includes(normalized)) {
+    return 'engine';
+  }
+  return normalized;
+}
+
 function deriveWikiId({ wikiId = '', workspacePath = '' } = {}) {
-  const explicit = normalizeWikiId(wikiId);
+  const explicit = resolveSharedWikiAlias(wikiId);
   if (explicit) return explicit;
-  const normalizedPath = toStringValue(workspacePath).replace(/\\/g, '/').replace(/\/+$/, '');
-  const tail = normalizedPath.split('/').filter(Boolean).pop() || 'engine';
-  return normalizeWikiId(tail) || 'engine';
+  return 'engine';
 }
 
 async function lookupBackendReferenceContext({

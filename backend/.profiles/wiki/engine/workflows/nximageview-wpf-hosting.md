@@ -29,6 +29,16 @@ tags:
 - Create `NXImageLayerComposites`.
 - Add the layer to the view through `NXImageView.AddImageLayer` -> `Source/NXImage/NXImageView.h:836`, `Source/NXImage/NXImageView.cpp:162`
 
+# WPF Output Rule
+- Treat WPF as a XAML-first delivery target.
+- When generating a new WPF sample or app, include the visual shell and its code-behind together rather than returning only a single `.cs` file.
+- Minimum expected file set:
+  - `MainWindow.xaml`
+  - `MainWindow.xaml.cs`
+  - `App.xaml`
+  - `App.xaml.cs`
+- Include the `.csproj` too when the request is for a runnable sample/app from scratch.
+
 # Minimal WPF Host Snippet
 ```xml
 <Project Sdk="Microsoft.NET.Sdk">
@@ -73,3 +83,5 @@ public partial class MainWindow : Window
 - Keep `UseWindowsForms=true` because the hosted child is still `NXImageView`.
 - Once hosted, the actual XDM loading flow is still the same as the WinForms workflow. See `workflows/imageview-xdm-display-workflow.md`.
 - If the user asks only for the shortest possible interop sample, WinForms remains the most direct path. If the user asks for the default desktop shell, prefer WPF.
+- If the request says WPF, a response that omits XAML should be treated as incomplete unless the user explicitly asks for code-behind only.
+- This page is intended as verified API guidance. It should not imply that the desktop agent must run standalone compile checks before producing an answer.

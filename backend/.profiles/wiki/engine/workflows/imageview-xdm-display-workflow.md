@@ -64,6 +64,16 @@ tags:
 11. Register the composite with `AddXDMComposite(ref composite)`.
 12. Call `ZoomFit()` and `Invalidate()`, then release `UnLock` -> `Source/NXImage/NXImageLayerComposites.h:157`, `Source/NXImage/NXImageLayerComposites.cpp:76`
 
+# WPF Delivery Rule
+- If the user asks for a WPF solution, the default deliverable is a XAML-based window, not a single C# file.
+- Prefer at least these files together:
+  - `MainWindow.xaml`
+  - `MainWindow.xaml.cs`
+  - `App.xaml`
+  - `App.xaml.cs`
+  - the matching `.csproj` when a fresh sample/app is being created
+- A single `.cs` file is acceptable only for pure WinForms examples or when the user explicitly says they do not want XAML.
+
 # Preferred WPF Program Shape
 ```xml
 <Project Sdk="Microsoft.NET.Sdk">
@@ -171,5 +181,8 @@ public sealed class MainForm : Form
 - Do not invent an `NXImage.LoadImage(...)` path for this workflow. The verified load entry point here is `XRasterIO.LoadFile`.
 - Keep `UseWindowsForms=true` even in the preferred WPF shape because `NXImageView` is still a WinForms control under `WindowsFormsHost`.
 - Prefer the WPF shell above when the user asks for a generic C# desktop program. Use the WinForms variant only when WinForms is explicitly requested.
+- For WPF answers, do not stop at a single code-behind class. Include the XAML shell that hosts `WindowsFormsHost`.
 - For focused hosting details, see `workflows/nximageview-wpf-hosting.md`.
 - If the file is grayscale, a single `SetBand` call is enough. If the file has three or more channels, fill indices `0`, `1`, and `2`.
+- These workflow notes are reference guidance, not a requirement to pass a standalone compile gate before answering.
+- If some signatures remain uncertain, prefer calling out the uncertainty from verified source excerpts instead of blocking on compile-oriented verification.

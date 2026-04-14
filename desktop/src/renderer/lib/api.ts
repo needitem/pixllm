@@ -123,6 +123,7 @@ export type StreamToolResultPayload = {
 
 export type StreamAssistantMessagePayload = {
   text?: string;
+  rawText?: string;
   turn?: number;
   toolUses?: number;
   finishReason?: string;
