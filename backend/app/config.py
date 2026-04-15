@@ -1,5 +1,4 @@
 import os
-import json
 import secrets
 from pathlib import PurePosixPath
 
@@ -26,32 +25,12 @@ def env_int(name: str, default: int) -> int:
         return default
 
 
-def env_float(name: str, default: float) -> float:
-    value = os.getenv(name)
-    if value in (None, ""):
-        return default
-    try:
-        return float(str(value).strip())
-    except (TypeError, ValueError):
-        return default
-
-
-def env_json(name: str, default):
-    value = os.getenv(name)
-    if value in (None, ""):
-        return default
-    try:
-        return json.loads(value)
-    except Exception:
-        return default
-
-
 def env_list(name: str, default_csv: str) -> list[str]:
     value = os.getenv(name, default_csv)
     return [item.strip() for item in str(value).split(",") if item.strip()]
 
 
-APP_NAME = "PIXLLM RAG API"
+APP_NAME = "PIXLLM Wiki API"
 API_PREFIX = "/api/v1"
 
 # External services.
@@ -69,7 +48,7 @@ EMBEDDING_MODEL = env("EMBEDDING_MODEL", "BAAI/bge-m3")
 EMBEDDING_DEVICE = env("EMBEDDING_DEVICE", "cuda")
 EMBEDDING_USE_FP16 = env_bool("EMBEDDING_USE_FP16", True)
 EMBEDDING_BATCH_SIZE = env_int("EMBEDDING_BATCH_SIZE", 64)
-RAG_DEFAULT_COLLECTION = env("RAG_DEFAULT_COLLECTION", "documents")
+EVIDENCE_DEFAULT_COLLECTION = env("EVIDENCE_DEFAULT_COLLECTION", "documents")
 
 # Code retrieval tools.
 CODE_TOOL_ENABLED = env_bool("CODE_TOOL_ENABLED", True)
@@ -127,16 +106,12 @@ def effective_code_search_roots() -> list[str]:
         roots.append(value)
     return roots
 
-# Orchestration/runtime.
-ORCHESTRATION_CONFIG_DIR = env("ORCHESTRATION_CONFIG_DIR", ".profiles")
-CHAT_CODE_DEFAULT_REPO = env("CHAT_CODE_DEFAULT_REPO", "")
+# Wiki/chat runtime.
+WIKI_PROFILE_DIR = env("WIKI_PROFILE_DIR", ".profiles")
 CHAT_TOOL_MAX_CHARS = env_int("CHAT_TOOL_MAX_CHARS", 5000)
 CHAT_TOOL_MAX_LINE_SPAN = env_int("CHAT_TOOL_MAX_LINE_SPAN", 220)
 CHAT_TOOL_DOC_OPEN_LIMIT = env_int("CHAT_TOOL_DOC_OPEN_LIMIT", 10)
 CHAT_TOOL_CODE_MAX_WINDOWS = env_int("CHAT_TOOL_CODE_MAX_WINDOWS", 12)
-INTENT_LLM_MAX_TOKENS = env_int("INTENT_LLM_MAX_TOKENS", 96)
-INTENT_LLM_TEMPERATURE = env_float("INTENT_LLM_TEMPERATURE", 0.0)
-INTENT_LLM_CONFIDENCE_THRESHOLD = env_float("INTENT_LLM_CONFIDENCE_THRESHOLD", 0.15)
 
 
 # Usage-code expansion controls.
@@ -145,15 +120,6 @@ CODE_USAGE_EXPANSION_MAX_QUERIES = env_int("CODE_USAGE_EXPANSION_MAX_QUERIES", 0
 
 # Conversations.
 MAX_CONVERSATION_MESSAGES = int(env("MAX_CONVERSATION_MESSAGES", "20"))
-CHAT_CONTROL_MESSAGE_PREFIXES = env_json(
-    "CHAT_CONTROL_MESSAGE_PREFIXES",
-    ["[analyze-mode]", "[search-mode]"],
-)
-CHAT_CONTROL_MESSAGE_CONTAINS = env_json(
-    "CHAT_CONTROL_MESSAGE_CONTAINS",
-    ["analysis mode.", "maximize search effort"],
-)
-
 # Imports / uploads.
 FILE_UPLOAD_MAX_BYTES = env_int("FILE_UPLOAD_MAX_BYTES", 50 * 1024 * 1024)
 FILE_UPLOAD_READ_CHUNK_BYTES = env_int("FILE_UPLOAD_READ_CHUNK_BYTES", 1024 * 1024)

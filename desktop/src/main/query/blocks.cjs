@@ -2,25 +2,59 @@ function toStringValue(value) {
   return String(value || '').trim();
 }
 
+function tryParseJsonCandidate(candidate = '') {
+  try {
+    return JSON.parse(candidate);
+  } catch {
+    return null;
+  }
+}
+
+function repairJsonLikeText(candidate = '') {
+  let repaired = String(candidate || '');
+  if (!repaired) return repaired;
+  repaired = repaired.replace(/([{,]\s*)([A-Za-z_][A-Za-z0-9_-]*)(\s*:)/g, '$1"$2"$3');
+  repaired = repaired.replace(/'([^'\\]*(?:\\.[^'\\]*)*)'/g, (_, value) => `"${String(value).replace(/"/g, '\\"')}"`);
+  repaired = repaired.replace(/,\s*([}\]])/g, '$1');
+  return repaired;
+}
+
 function safeJsonParse(text) {
   const raw = toStringValue(text);
   if (!raw) return null;
   const fenceMatch = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
   const candidate = fenceMatch ? toStringValue(fenceMatch[1]) : raw;
-  try {
-    return JSON.parse(candidate);
-  } catch {
-    const start = candidate.indexOf('{');
-    const end = candidate.lastIndexOf('}');
-    if (start >= 0 && end > start) {
-      try {
-        return JSON.parse(candidate.slice(start, end + 1));
-      } catch {
-        return null;
-      }
-    }
-    return null;
+  const direct = tryParseJsonCandidate(candidate);
+  if (direct !== null) {
+    return direct;
   }
+  const objectStart = candidate.indexOf('{');
+  const objectEnd = candidate.lastIndexOf('}');
+  if (objectStart >= 0 && objectEnd > objectStart) {
+    const objectSlice = candidate.slice(objectStart, objectEnd + 1);
+    const parsedObject = tryParseJsonCandidate(objectSlice);
+    if (parsedObject !== null) {
+      return parsedObject;
+    }
+    const repairedObject = tryParseJsonCandidate(repairJsonLikeText(objectSlice));
+    if (repairedObject !== null) {
+      return repairedObject;
+    }
+  }
+  const arrayStart = candidate.indexOf('[');
+  const arrayEnd = candidate.lastIndexOf(']');
+  if (arrayStart >= 0 && arrayEnd > arrayStart) {
+    const arraySlice = candidate.slice(arrayStart, arrayEnd + 1);
+    const parsedArray = tryParseJsonCandidate(arraySlice);
+    if (parsedArray !== null) {
+      return parsedArray;
+    }
+    const repairedArray = tryParseJsonCandidate(repairJsonLikeText(arraySlice));
+    if (repairedArray !== null) {
+      return repairedArray;
+    }
+  }
+  return null;
 }
 
 function createTextBlock(text) {

@@ -1,4 +1,4 @@
-"""Centralized RAG configuration loader."""
+"""Centralized wiki/runtime configuration loader."""
 
 import os
 from pathlib import Path
@@ -13,9 +13,17 @@ except ImportError:  # pragma: no cover
 _CONFIG_CACHE: Dict[str, Any] = {}
 
 
-def _find_config_path() -> Path:
+def _profile_root() -> Path:
     base = Path(__file__).resolve().parents[1]  # backend/
-    return base / ".profiles" / "rag_config.yaml"
+    raw = str(os.getenv("WIKI_PROFILE_DIR") or ".profiles").strip() or ".profiles"
+    root = Path(raw)
+    if root.is_absolute():
+        return root
+    return base / root
+
+
+def _find_config_path() -> Path:
+    return _profile_root() / "wiki_config.yaml"
 
 
 def _load_yaml(path: Path) -> Dict[str, Any]:
@@ -172,7 +180,7 @@ def react_max_tool_calls() -> int:
 def react_timeout_sec() -> int:
     """Max seconds for the entire ReAct loop. 0 = no timeout.
 
-    Set CHAT_REACT_TIMEOUT_SEC=0 to disable, or rag_config.yaml react.timeout_sec: 0.
+    Set CHAT_REACT_TIMEOUT_SEC=0 to disable, or wiki_config.yaml react.timeout_sec: 0.
     Defaults to 60 seconds.
     """
     v = os.getenv("CHAT_REACT_TIMEOUT_SEC")
@@ -221,7 +229,7 @@ def evidence_threshold() -> float:
     """Minimum evidence score [0..1] to produce a direct answer.
 
     Below this threshold, the evidence_policy() determines the response style.
-    Set CHAT_EVIDENCE_THRESHOLD or rag_config.yaml evidence.threshold.
+    Set CHAT_EVIDENCE_THRESHOLD or wiki_config.yaml evidence.threshold.
     """
     v = os.getenv("CHAT_EVIDENCE_THRESHOLD")
     if v:
@@ -235,7 +243,7 @@ def evidence_threshold() -> float:
 def evidence_policy() -> str:
     """Policy when evidence is below threshold: 'ask' | 'constrained' | 'reject'.
 
-    Set CHAT_EVIDENCE_POLICY or rag_config.yaml evidence.policy.
+    Set CHAT_EVIDENCE_POLICY or wiki_config.yaml evidence.policy.
     """
     v = os.getenv("CHAT_EVIDENCE_POLICY")
     if v and str(v).strip() in {"ask", "constrained", "reject"}:
@@ -247,7 +255,7 @@ def evidence_policy() -> str:
 def react_native_tool_calling() -> bool:
     """Whether to use OpenAI-compatible native function calling in the ReAct loop.
 
-    Set CHAT_REACT_NATIVE_TOOL_CALLING=1 or rag_config.yaml react.native_tool_calling: true.
+    Set CHAT_REACT_NATIVE_TOOL_CALLING=1 or wiki_config.yaml react.native_tool_calling: true.
     Defaults to True (enabled) — falls back to text JSON if model doesn't support it.
     """
     v = os.getenv("CHAT_REACT_NATIVE_TOOL_CALLING")

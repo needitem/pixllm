@@ -158,8 +158,34 @@ function summarizeObservationForModel(toolName, observation = {}) {
     return lines.join('\n').trim();
   }
 
-  if (name === 'company_reference_search') {
+  if (name === 'wiki_evidence_search') {
     lines.push('reference_origin: backend_server');
+    const searchStatus = toStringValue(payload.search_status || payload.searchStatus);
+    const negativeEvidence = toStringValue(payload.negative_evidence || payload.negativeEvidence);
+    const matchedApi = payload.matched_api && typeof payload.matched_api === 'object'
+      ? payload.matched_api
+      : (payload.matchedApi && typeof payload.matchedApi === 'object' ? payload.matchedApi : null);
+    const relatedApis = Array.isArray(payload.related_apis || payload.relatedApis)
+      ? (payload.related_apis || payload.relatedApis)
+      : [];
+    if (searchStatus) {
+      lines.push(`search_status: ${searchStatus}`);
+    }
+    if (matchedApi && toStringValue(matchedApi.qualifiedSymbol || matchedApi.qualified_symbol)) {
+      lines.push(`matched_api: ${toStringValue(matchedApi.qualifiedSymbol || matchedApi.qualified_symbol)}`);
+    }
+    if (negativeEvidence) {
+      lines.push(`negative_evidence: ${negativeEvidence}`);
+    }
+    const relatedApiLines = summarizePathItems(relatedApis, (item) => {
+      const qualifiedSymbol = toStringValue(item?.qualifiedSymbol || item?.qualified_symbol);
+      const headingPath = toStringValue(item?.headingPath || item?.heading_path);
+      return [qualifiedSymbol, headingPath ? `@ ${headingPath}` : ''].filter(Boolean).join(' ');
+    }, 5);
+    if (relatedApiLines.length > 0) {
+      lines.push('related_apis:');
+      lines.push(...relatedApiLines.map((item) => `- ${item}`));
+    }
     const matches = summarizePathItems(payload.matches, (item) => {
       const pathValue = toStringValue(item?.path);
       const lineRange = toStringValue(item?.lineRange);

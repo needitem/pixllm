@@ -39,28 +39,20 @@ function normalizeWikiId(value = '') {
   return raw.replace(/[^a-z0-9._-]+/g, '-').replace(/^[._-]+|[._-]+$/g, '').slice(0, 80);
 }
 
-function resolveSharedWikiAlias(value = '') {
-  const normalized = normalizeWikiId(value);
-  if (!normalized) return '';
-  if (['company_reference', 'company-reference', 'reference', 'shared_reference'].includes(normalized)) {
-    return 'engine';
-  }
-  return normalized;
-}
-
-function deriveWikiId({ wikiId = '', workspacePath = '' } = {}) {
-  const explicit = resolveSharedWikiAlias(wikiId);
+function resolveWikiId(wikiId = '') {
+  const explicit = normalizeWikiId(wikiId);
   if (explicit) return explicit;
   return 'engine';
 }
 
-async function lookupBackendReferenceContext({
+async function lookupBackendWikiEvidence({
   baseUrl = '',
   apiToken = '',
   sessionId = '',
   userId = 'desktop-local',
   query = '',
   responseType = 'api_lookup',
+  workflowFirst = false,
   topK = 8,
   limit = 8,
   maxChars = 12000,
@@ -81,6 +73,7 @@ async function lookupBackendReferenceContext({
         user_id: toStringValue(userId) || 'desktop-local',
         query: toStringValue(query),
         response_type: toStringValue(responseType || 'api_lookup') || 'api_lookup',
+        workflow_first: Boolean(workflowFirst),
         top_k: clampInt(topK, 1, 50, 8),
         limit: clampInt(limit, 1, 50, 8),
         max_chars: clampInt(maxChars, 200, 12000, 12000),
@@ -211,36 +204,10 @@ async function backendRequest({
   return payload.data && typeof payload.data === 'object' ? payload.data : {};
 }
 
-async function bootstrapBackendWiki({
-  baseUrl = '',
-  apiToken = '',
-  wikiId = '',
-  workspacePath = '',
-  name = '',
-  description = '',
-  overwrite = false,
-  userId = 'desktop-local',
-} = {}) {
-  return backendRequest({
-    baseUrl,
-    apiToken,
-    requestPath: '/v1/wiki/bootstrap',
-    method: 'POST',
-    body: {
-      wiki_id: deriveWikiId({ wikiId, workspacePath }),
-      name: toStringValue(name),
-      description: toStringValue(description),
-      overwrite: Boolean(overwrite),
-      user_id: toStringValue(userId),
-    },
-  });
-}
-
 async function searchBackendWiki({
   baseUrl = '',
   apiToken = '',
   wikiId = '',
-  workspacePath = '',
   query = '',
   limit = 12,
   includeContent = false,
@@ -252,7 +219,7 @@ async function searchBackendWiki({
     requestPath: '/v1/wiki/search',
     method: 'POST',
     body: {
-      wiki_id: deriveWikiId({ wikiId, workspacePath }),
+      wiki_id: resolveWikiId(wikiId),
       query: toStringValue(query),
       limit: clampInt(limit, 1, 50, 12),
       include_content: Boolean(includeContent),
@@ -265,7 +232,6 @@ async function getBackendWikiContext({
   baseUrl = '',
   apiToken = '',
   wikiId = '',
-  workspacePath = '',
 } = {}) {
   return backendRequest({
     baseUrl,
@@ -273,7 +239,7 @@ async function getBackendWikiContext({
     requestPath: '/v1/wiki/context',
     method: 'POST',
     body: {
-      wiki_id: deriveWikiId({ wikiId, workspacePath }),
+      wiki_id: resolveWikiId(wikiId),
     },
   });
 }
@@ -282,7 +248,6 @@ async function readBackendWikiPage({
   baseUrl = '',
   apiToken = '',
   wikiId = '',
-  workspacePath = '',
   path = '',
 } = {}) {
   return backendRequest({
@@ -291,7 +256,7 @@ async function readBackendWikiPage({
     requestPath: '/v1/wiki/page/read',
     method: 'POST',
     body: {
-      wiki_id: deriveWikiId({ wikiId, workspacePath }),
+      wiki_id: resolveWikiId(wikiId),
       path: toStringValue(path),
     },
   });
@@ -301,7 +266,6 @@ async function writeBackendWikiPage({
   baseUrl = '',
   apiToken = '',
   wikiId = '',
-  workspacePath = '',
   path = '',
   content = '',
   title = '',
@@ -314,7 +278,7 @@ async function writeBackendWikiPage({
     requestPath: '/v1/wiki/page',
     method: 'PUT',
     body: {
-      wiki_id: deriveWikiId({ wikiId, workspacePath }),
+      wiki_id: resolveWikiId(wikiId),
       path: toStringValue(path),
       content: String(content || ''),
       title: toStringValue(title),
@@ -324,41 +288,79 @@ async function writeBackendWikiPage({
   });
 }
 
-async function appendBackendWikiLog({
+async function rebuildBackendWikiIndex({
   baseUrl = '',
   apiToken = '',
   wikiId = '',
-  workspacePath = '',
-  title = '',
-  bodyLines = [],
-  kind = 'update',
-  userId = 'desktop-local',
 } = {}) {
   return backendRequest({
     baseUrl,
     apiToken,
-    requestPath: '/v1/wiki/log/append',
+    requestPath: '/v1/wiki/index/rebuild',
     method: 'POST',
     body: {
-      wiki_id: deriveWikiId({ wikiId, workspacePath }),
+      wiki_id: resolveWikiId(wikiId),
+    },
+  });
+}
+
+async function lintBackendWiki({
+  baseUrl = '',
+  apiToken = '',
+  wikiId = '',
+  repair = false,
+} = {}) {
+  return backendRequest({
+    baseUrl,
+    apiToken,
+    requestPath: '/v1/wiki/lint',
+    method: 'POST',
+    body: {
+      wiki_id: resolveWikiId(wikiId),
+      repair: Boolean(repair),
+    },
+  });
+}
+
+async function writebackBackendWikiPage({
+  baseUrl = '',
+  apiToken = '',
+  wikiId = '',
+  query = '',
+  answer = '',
+  title = '',
+  category = 'analysis',
+  path = '',
+  sourcePaths = [],
+} = {}) {
+  return backendRequest({
+    baseUrl,
+    apiToken,
+    requestPath: '/v1/wiki/writeback',
+    method: 'POST',
+    body: {
+      wiki_id: resolveWikiId(wikiId),
+      query: toStringValue(query),
+      answer: String(answer || ''),
       title: toStringValue(title),
-      body_lines: Array.isArray(bodyLines) ? bodyLines.map((item) => toStringValue(item)).filter(Boolean) : [],
-      kind: toStringValue(kind || 'update'),
-      user_id: toStringValue(userId),
+      category: toStringValue(category || 'analysis'),
+      path: toStringValue(path),
+      source_paths: Array.isArray(sourcePaths) ? sourcePaths.map((item) => toStringValue(item)).filter(Boolean) : [],
     },
   });
 }
 
 module.exports = {
-  appendBackendWikiLog,
-  bootstrapBackendWiki,
-  deriveWikiId,
   getBackendWikiContext,
   getBackendToolUserContext,
+  lintBackendWiki,
   listBackendRepoFiles,
-  lookupBackendReferenceContext,
+  lookupBackendWikiEvidence,
   readBackendCode,
   readBackendWikiPage,
+  rebuildBackendWikiIndex,
+  resolveWikiId,
   searchBackendWiki,
+  writebackBackendWikiPage,
   writeBackendWikiPage,
 };

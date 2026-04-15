@@ -10,7 +10,7 @@ from ..core.policy import SecurityPolicy
 from ..envelopes import ApiError, ok
 from ..schemas.pipelines import (
     StartEmbedDocsRequest,
-    StartResetRagRequest,
+    StartResetEvidenceRequest,
     StartVerifyEmbeddingsRequest,
 )
 from ..services.pipelines.pipeline_jobs import get_job, list_jobs, start_job
@@ -32,7 +32,7 @@ def _load_pipeline_action(action_name: str) -> Callable:
     actions = {
         "embed_docs": pipeline_tasks.run_embed_docs_task,
         "verify_embeddings": pipeline_tasks.run_verify_embeddings_task,
-        "reset_rag_data": pipeline_tasks.run_reset_rag_task,
+        "reset_evidence_data": pipeline_tasks.run_reset_evidence_task,
     }
     return actions[action_name]
 
@@ -102,16 +102,16 @@ async def pipeline_verify_docs(
     return ok(job)
 
 
-@router.post("/rag/reset/start")
-async def pipeline_reset_rag(
-    request: StartResetRagRequest,
+@router.post("/evidence/reset/start")
+async def pipeline_reset_evidence(
+    request: StartResetEvidenceRequest,
     x_pipeline_token: Optional[str] = Header(default=None),
 ):
     _require_pipeline_access(x_pipeline_token)
     job = await asyncio.to_thread(
         start_job,
-        name="reset_rag_data",
-        action=_load_pipeline_action("reset_rag_data"),
+        name="reset_evidence_data",
+        action=_load_pipeline_action("reset_evidence_data"),
         payload={
             "skip_minio": request.skip_minio,
             "keep_documents_only": request.keep_documents_only,

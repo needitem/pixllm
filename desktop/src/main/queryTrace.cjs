@@ -187,7 +187,7 @@ function symbolOutlinesFromTrace(trace) {
 
 function referencePathsFromTrace(trace) {
   const paths = [];
-  for (const step of successfulSteps(trace, 'company_reference_search')) {
+  for (const step of successfulSteps(trace, 'wiki_evidence_search')) {
     const observation = step?.observation && typeof step.observation === 'object' ? step.observation : {};
     for (const item of Array.isArray(observation.matches) ? observation.matches : []) {
       paths.push(item?.path);
@@ -339,7 +339,7 @@ function summarizeObservation(toolName, observation, maxChars = 16000) {
       message: payload.message || '',
     };
   }
-  if (toolName === 'company_reference_search') {
+  if (toolName === 'wiki_evidence_search') {
     return {
       ok: Boolean(payload.ok),
       query: payload.query || '',

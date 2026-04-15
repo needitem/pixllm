@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends
 from fastapi.responses import Response
 
-from ..deps import get_redis, get_minio, get_search_svc, get_embed_model, get_vllm_client, get_orchestrator
+from ..deps import get_redis, get_minio, get_search_svc, get_embed_model, get_vllm_client
 from ..envelopes import ok
 from ..metrics import metrics_registry, render_health_metrics
 from ..services.health.service import (
@@ -26,7 +26,6 @@ async def health(
     search_svc=Depends(get_search_svc),
     embed_model=Depends(get_embed_model),
     vllm_client=Depends(get_vllm_client),
-    orchestrator=Depends(get_orchestrator),
 ):
     return ok(await build_health_response(
         redis=redis,
@@ -34,7 +33,6 @@ async def health(
         search_svc=search_svc,
         embed_model=embed_model,
         vllm_client=vllm_client,
-        orchestration_policy=orchestrator,
     ))
 
 
@@ -45,7 +43,6 @@ async def ready(
     search_svc=Depends(get_search_svc),
     embed_model=Depends(get_embed_model),
     vllm_client=Depends(get_vllm_client),
-    orchestrator=Depends(get_orchestrator),
 ):
     return ok(await build_readiness_response(
         redis=redis,
@@ -53,7 +50,6 @@ async def ready(
         search_svc=search_svc,
         embed_model=embed_model,
         vllm_client=vllm_client,
-        orchestration_policy=orchestrator,
     ))
 
 
@@ -64,7 +60,6 @@ async def metrics(
     search_svc=Depends(get_search_svc),
     embed_model=Depends(get_embed_model),
     vllm_client=Depends(get_vllm_client),
-    orchestrator=Depends(get_orchestrator),
 ):
     readiness = await build_readiness_response(
         redis=redis,
@@ -72,7 +67,6 @@ async def metrics(
         search_svc=search_svc,
         embed_model=embed_model,
         vllm_client=vllm_client,
-        orchestration_policy=orchestrator,
     )
     metrics_registry.record_scrape()
     payload = metrics_registry.render_prometheus(

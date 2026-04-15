@@ -19,7 +19,6 @@ class StartVerifyEmbeddingsRequest(BaseModel):
     top_k: int = Field(default=3, ge=1, le=20)
 
 
-class StartResetRagRequest(BaseModel):
+class StartResetEvidenceRequest(BaseModel):
     skip_minio: bool = False
     keep_documents_only: bool = True
-

@@ -12,6 +12,10 @@ test('createRunRequestContext keeps explanation-style prompts out of createLikel
   assert.equal(context.intent.wantsAnalysis, true);
   assert.equal(context.intent.createLikely, false);
   assert.equal(context.artifactPlan.requiresWorkspaceArtifact, false);
+  assert.equal(context.workflowPlan.preferWikiFirst, true);
+  assert.equal(context.initialToolNames.includes('wiki_evidence_search'), true);
+  assert.equal(context.initialToolNames.includes('wiki_search'), true);
+  assert.equal(context.initialToolNames.includes('wiki_read'), true);
   assert.equal(context.initialToolNames.includes('write'), false);
   assert.equal(context.initialToolNames.includes('edit'), false);
   assert.equal(context.initialToolNames.includes('read_file'), false);

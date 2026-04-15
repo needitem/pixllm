@@ -1,6 +1,7 @@
 import unittest
 
 from backend.app.services.tools.doc_runtime import (
+    _build_workflow_slot_bundle,
     build_exact_api_lookup_summary,
     extract_doc_symbol_candidates,
     prioritize_wiki_source_anchors,
@@ -98,6 +99,71 @@ class DocRuntimeSelectionTests(unittest.TestCase):
         related_symbols = [item["qualified_symbol"] for item in summary["related_apis"]]
         self.assertIn("Pixoneer.NXDL.NIO.XRasterIO.LoadFile", related_symbols)
         self.assertIn("No exact verified API match found", summary["negative_evidence"])
+
+    def test_workflow_slot_bundle_marks_missing_member_slot(self):
+        bundle = _build_workflow_slot_bundle(
+            query="NXImageView AddImageLayer usage",
+            workflow_rows=[
+                {
+                    "file_path": "workflows/imageview-xdm-display-workflow.md",
+                    "source_url": "engine/workflows/imageview-xdm-display-workflow.md",
+                    "symbols": ["NXImageView"],
+                    "text": "Use NXImageView in the workflow.",
+                }
+            ],
+            method_records=[],
+        )
+        self.assertFalse(bundle["slots_complete"])
+        self.assertIn("workflow", bundle["filled_slots"])
+        self.assertIn("member:AddImageLayer", bundle["missing_slots"])
+
+    def test_workflow_slot_bundle_marks_complete_when_required_slots_are_filled(self):
+        bundle = _build_workflow_slot_bundle(
+            query="NXImageView AddImageLayer usage",
+            workflow_rows=[
+                {
+                    "file_path": "workflows/imageview-xdm-display-workflow.md",
+                    "source_url": "engine/workflows/imageview-xdm-display-workflow.md",
+                    "symbols": ["NXImageView"],
+                    "text": "Use NXImageView in the workflow.",
+                }
+            ],
+            method_records=[
+                {
+                    "type_name": "NXImageView",
+                    "member_name": "AddImageLayer",
+                    "doc_path": "methods/Methods_T_Pixoneer_NXDL_NXImage_NXImageView.md",
+                }
+            ],
+        )
+        self.assertTrue(bundle["slots_complete"])
+        self.assertEqual(bundle["missing_slots"], [])
+        self.assertIn("member:AddImageLayer", bundle["filled_slots"])
+
+    def test_workflow_slot_bundle_uses_selected_method_records_for_generic_guidance(self):
+        bundle = _build_workflow_slot_bundle(
+            query="how to display XDM in ImageView",
+            workflow_rows=[
+                {
+                    "file_path": "workflows/imageview-xdm-display-workflow.md",
+                    "source_url": "engine/workflows/imageview-xdm-display-workflow.md",
+                    "symbols": ["NXImageView", "AddImageLayer"],
+                    "text": "Use NXImageView and AddImageLayer in the workflow.",
+                }
+            ],
+            method_records=[
+                {
+                    "type_name": "NXImageView",
+                    "member_name": "AddImageLayer",
+                    "doc_path": "methods/Methods_T_Pixoneer_NXDL_NXImage_NXImageView.md",
+                    "qualified_symbol": "Pixoneer.NXDL.NXImage.NXImageView.AddImageLayer",
+                }
+            ],
+        )
+        self.assertTrue(bundle["slots_complete"])
+        self.assertIn("type:NXImageView", bundle["required_slots"])
+        self.assertIn("member:AddImageLayer", bundle["required_slots"])
+        self.assertNotIn("method_or_anchor", bundle["required_slots"])
 
 
 if __name__ == "__main__":

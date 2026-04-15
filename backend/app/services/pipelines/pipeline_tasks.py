@@ -217,13 +217,13 @@ def run_verify_embeddings_task(payload: Dict[str, Any], log: Callable[[str], Non
     return {"stats": stats, "samples": samples}
 
 
-def run_reset_rag_task(payload: Dict[str, Any], log: Callable[[str], None]) -> Dict[str, Any]:
+def run_reset_evidence_task(payload: Dict[str, Any], log: Callable[[str], None]) -> Dict[str, Any]:
     skip_minio = bool(payload.get("skip_minio", False))
     keep_documents_only = bool(payload.get("keep_documents_only", True))
 
     qdrant = QdrantClient(url=config.QDRANT_URL)
     deleted = []
-    managed_collections = {config.RAG_DEFAULT_COLLECTION, "metadata_only"}
+    managed_collections = {config.EVIDENCE_DEFAULT_COLLECTION, "metadata_only"}
     for collection_name in sorted(name for name in managed_collections if str(name or "").strip()):
         try:
             qdrant.get_collection(collection_name)
@@ -237,11 +237,11 @@ def run_reset_rag_task(payload: Dict[str, Any], log: Callable[[str], None]) -> D
         model = _load_embedding_model(config.EMBEDDING_MODEL)
         vector_size = _resolve_dense_vector_size(model)
         qdrant.create_collection(
-            collection_name=config.RAG_DEFAULT_COLLECTION,
+            collection_name=config.EVIDENCE_DEFAULT_COLLECTION,
             vectors_config={"dense": VectorParams(size=vector_size, distance=Distance.COSINE)},
             sparse_vectors_config={"sparse": SparseVectorParams(index=SparseIndexParams())},
         )
-        log(f"[reset] qdrant create {config.RAG_DEFAULT_COLLECTION}")
+        log(f"[reset] qdrant create {config.EVIDENCE_DEFAULT_COLLECTION}")
 
     r = redis.Redis.from_url(config.REDIS_URL)
     removed_docs = 0
@@ -299,7 +299,7 @@ def run_reset_rag_task(payload: Dict[str, Any], log: Callable[[str], None]) -> D
 
     return {
         "deleted_collections": deleted,
-        "recreated_collection": config.RAG_DEFAULT_COLLECTION if keep_documents_only else None,
+        "recreated_collection": config.EVIDENCE_DEFAULT_COLLECTION if keep_documents_only else None,
         "redis_cleared": {
             "documents": removed_docs,
             "revisions": removed_revisions,

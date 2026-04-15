@@ -289,6 +289,7 @@ async def lookup_sources_and_code(
     max_chars: int,
     max_line_span: int,
     response_type: str = "general",
+    workflow_first: bool = False,
     search_only: bool = False,
     collection: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -306,6 +307,7 @@ async def lookup_sources_and_code(
         max_chars=max_chars,
         max_line_span=max_line_span,
         response_type=response_type,
+        workflow_first=workflow_first,
         search_only=search_only,
         collection=collection,
         collect_code_evidence_async=_collect_code_evidence_async,

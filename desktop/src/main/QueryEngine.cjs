@@ -19,7 +19,6 @@ const {
   toStringValue,
 } = require('./query.cjs');
 const { verifyCreateRequestSatisfaction } = require('./query/createRequestCheck.cjs');
-const { verifyDraftAnswerSatisfaction } = require('./query/finalAnswerCheck.cjs');
 const { evaluateFinalAnswerPolicy } = require('./query/finalizationPolicy.cjs');
 const { findUngroundedSourceMentions } = require('./query/sourceGuard.cjs');
 const { buildRequestContext } = require('./utils/processUserInput/processUserInput.cjs');
@@ -60,12 +59,13 @@ const NO_WORKSPACE_TOOL_NAMES = Object.freeze([
   'sleep',
   'tool_search',
   'config',
-  'company_reference_search',
-  'wiki_bootstrap',
+  'wiki_evidence_search',
   'wiki_search',
   'wiki_read',
   'wiki_write',
-  'wiki_append_log',
+  'wiki_rebuild_index',
+  'wiki_lint',
+  'wiki_writeback',
 ]);
 
 function deriveLoopControlState({
@@ -671,7 +671,7 @@ class QueryEngine {
     serverApiToken = '',
     llmBaseUrl = '',
     llmApiToken = '',
-    sharedWikiId = '',
+    wikiId = '',
     model = '',
     selectedFilePath = '',
     sessionId = '',
@@ -682,7 +682,7 @@ class QueryEngine {
     this.serverApiToken = toStringValue(serverApiToken || apiToken);
     this.llmBaseUrl = toStringValue(llmBaseUrl);
     this.llmApiToken = toStringValue(llmApiToken);
-    this.sharedWikiId = toStringValue(sharedWikiId);
+    this.wikiId = toStringValue(wikiId);
     this.baseUrl = this.llmBaseUrl || this.serverBaseUrl;
     this.apiToken = this.llmApiToken || this.serverApiToken;
     this.model = toStringValue(model);
@@ -709,7 +709,7 @@ class QueryEngine {
       getBackendConfig: () => ({
         baseUrl: this.serverBaseUrl,
         apiToken: this.serverApiToken,
-        sharedWikiId: this.sharedWikiId,
+        wikiId: this.wikiId,
       }),
       allowedToolNames: this.workspacePath ? null : NO_WORKSPACE_TOOL_NAMES,
     });
@@ -729,7 +729,7 @@ class QueryEngine {
     serverApiToken = '',
     llmBaseUrl = '',
     llmApiToken = '',
-    sharedWikiId = '',
+    wikiId = '',
     model = '',
     selectedFilePath = '',
   } = {}) {
@@ -737,7 +737,7 @@ class QueryEngine {
     this.serverApiToken = toStringValue(serverApiToken) || this.serverApiToken || toStringValue(apiToken) || this.apiToken;
     this.llmBaseUrl = toStringValue(llmBaseUrl) || this.llmBaseUrl;
     this.llmApiToken = toStringValue(llmApiToken) || this.llmApiToken;
-    this.sharedWikiId = toStringValue(sharedWikiId) || this.sharedWikiId;
+    this.wikiId = toStringValue(wikiId) || this.wikiId;
     this.baseUrl = this.llmBaseUrl || toStringValue(baseUrl) || this.baseUrl || this.serverBaseUrl;
     this.apiToken = this.llmApiToken || toStringValue(apiToken) || this.apiToken || this.serverApiToken;
     this.model = toStringValue(model) || this.model;
@@ -1456,7 +1456,7 @@ class QueryEngine {
       const requiredChanges = Array.isArray(this.state.phaseLock.requiredChanges) ? this.state.phaseLock.requiredChanges : [];
       const reasoning = toStringValue(this.state.phaseLock.reasoning);
       const referenceFactSheet = toStringValue(this.state.phaseLock.referenceFactSheet);
-      lines.push('Verification phase lock: do not summarize or explain yet. Use only read_file/write/edit on the generated workspace file until the verifier passes. Do not call wiki_read, wiki_search, or company_reference_search during repair.');
+      lines.push('Verification phase lock: do not summarize or explain yet. Use only read_file/write/edit on the generated workspace file until the verifier passes. Do not call wiki_read, wiki_search, or wiki_evidence_search during repair.');
       if (targets.length > 0) {
         lines.push(`Verification target files: ${targets.slice(0, 4).join(', ')}`);
       }
@@ -1550,7 +1550,7 @@ class QueryEngine {
         }
         continue;
       }
-      if (toStringValue(step?.tool) !== 'company_reference_search' || step?.observation?.ok === false) {
+      if (toStringValue(step?.tool) !== 'wiki_evidence_search' || step?.observation?.ok === false) {
         continue;
       }
       for (const item of Array.isArray(step?.observation?.windows) ? step.observation.windows : []) {
@@ -1885,41 +1885,6 @@ class QueryEngine {
     }
 
     const referenceEvidence = this._collectReferenceEvidence(runTrace);
-    const draftVerification = await verifyDraftAnswerSatisfaction({
-      baseUrl: this.llmBaseUrl || this.baseUrl || this.serverBaseUrl,
-      apiToken: this.llmApiToken || this.apiToken || this.serverApiToken,
-      fallbackBaseUrl: this.serverBaseUrl,
-      fallbackApiToken: this.serverApiToken,
-      model: this.model,
-      signal,
-      userPrompt: toStringValue(runContext?.prompt || prompt),
-      finalAnswer,
-      referenceExcerpts: referenceEvidence.referenceExcerpts,
-      apiFacts: referenceEvidence.apiFacts,
-    });
-    if (
-      draftVerification
-      && draftVerification.needs_changes
-      && Number(this.state.createVerificationRetries || 0) < MAX_CREATE_VERIFICATION_RETRIES
-    ) {
-      return {
-        status: 'continue',
-        maxTurns: this._queueRepairLoop({
-          turn,
-          maxTurns,
-          runTrace,
-          runContext,
-          hook: 'draft_answer_verification_retry',
-          reasoning: draftVerification.reasoning,
-          requiredChanges: Array.isArray(draftVerification.required_changes)
-            ? draftVerification.required_changes
-            : [],
-          fallbackWithTarget: 'The draft answer still disagrees with verified reference signatures. Re-read and patch the target file directly before finalizing.',
-          fallbackWithoutTarget: 'The draft answer appears incompatible with the verified reference signatures. Revise the answer using only verified signatures, or mark the uncertain detail as unverified before finalizing.',
-        }),
-      };
-    }
-
     const createVerification = await this._verifyCreateRequestCompletion(runContext, runTrace, {
       signal,
       files: null,

@@ -13,19 +13,20 @@ const { FileReadTool } = require('./tools/FileReadTool/FileReadTool.cjs');
 const { FileWriteTool } = require('./tools/FileWriteTool/FileWriteTool.cjs');
 const { FileEditTool } = require('./tools/FileEditTool/FileEditTool.cjs');
 const { BashTool } = require('./tools/BashTool/BashTool.cjs');
-const { CompanyReferenceSearchTool } = require('./tools/CompanyReferenceSearchTool/CompanyReferenceSearchTool.cjs');
+const { WikiEvidenceSearchTool } = require('./tools/WikiEvidenceSearchTool/WikiEvidenceSearchTool.cjs');
 const { LspTool } = require('./tools/LspTool/LspTool.cjs');
 const { NotebookEditTool } = require('./tools/NotebookEditTool/NotebookEditTool.cjs');
 const { RunBuildTool } = require('./tools/RunBuildTool/RunBuildTool.cjs');
 const { PowerShellTool } = require('./tools/PowerShellTool/PowerShellTool.cjs');
 const { createTaskTools } = require('./tools/TaskTools/TaskTools.cjs');
 const {
-  WikiAppendLogTool,
-  WikiBootstrapTool,
+  WikiLintTool,
   WikiReadTool,
+  WikiRebuildIndexTool,
   WikiSearchTool,
+  WikiWritebackTool,
   WikiWriteTool,
-} = require('./tools/SharedWikiTools/SharedWikiTools.cjs');
+} = require('./tools/WikiTools/WikiTools.cjs');
 const {
   toPositiveInt,
   toStringValue,
@@ -129,7 +130,7 @@ async function projectContextSearchCall(input, context) {
 
 async function configCall(input) {
   const action = toStringValue(input.action || 'get').toLowerCase();
-  const allowedKeys = new Set(['serverBaseUrl', 'llmBaseUrl', 'workspacePath', 'selectedModel', 'sharedWikiId']);
+  const allowedKeys = new Set(['serverBaseUrl', 'llmBaseUrl', 'workspacePath', 'selectedModel', 'wikiId']);
   if (action === 'get') {
     const settings = loadSettings();
     const key = toStringValue(input.key);
@@ -317,11 +318,12 @@ function getAllLocalBaseTools(limits = {}) {
         return projectContextSearchCall(input, context);
       },
     }),
-    WikiBootstrapTool(),
     WikiSearchTool(),
     WikiReadTool(),
     WikiWriteTool(),
-    WikiAppendLogTool(),
+    WikiRebuildIndexTool(),
+    WikiLintTool(),
+    WikiWritebackTool(),
     defineLocalTool({
       name: 'config',
       aliases: ['Config'],
@@ -352,7 +354,7 @@ function getAllLocalBaseTools(limits = {}) {
         return configCall(input);
       },
     }),
-    CompanyReferenceSearchTool(),
+    WikiEvidenceSearchTool(),
     LspTool({ limits: resolved }),
     NotebookEditTool(),
     ...createTaskTools(),

@@ -1,7 +1,7 @@
 const {
   getBackendToolUserContext,
   listBackendRepoFiles,
-  lookupBackendReferenceContext,
+  lookupBackendWikiEvidence,
   readBackendCode,
 } = require('../../services/tools/BackendToolClient.cjs');
 const { defineLocalTool } = require('../../Tool.cjs');
@@ -223,13 +223,13 @@ function normalizeLookupSummaryItem(item) {
   };
 }
 
-function CompanyReferenceSearchTool() {
+function WikiEvidenceSearchTool() {
   return defineLocalTool({
-    name: 'company_reference_search',
-    aliases: ['backend_reference_search', 'CompanyReferenceSearch'],
+    name: 'wiki_evidence_search',
+    aliases: ['backend_wiki_evidence_search', 'WikiEvidenceSearch'],
     kind: 'read',
     inputSchema: objectSchema({
-      query: stringSchema('Search query for company engine source or internal reference docs'),
+      query: stringSchema('Search query for backend wiki evidence or reference docs'),
       response_type: stringSchema('Backend response type hint such as api_lookup or general'),
       top_k: integerSchema('Maximum number of document search results to consider', { minimum: 1 }),
       limit: integerSchema('Maximum number of code matches to consider', { minimum: 1 }),
@@ -322,12 +322,20 @@ function CompanyReferenceSearchTool() {
           sourceUrl: stringSchema('Suggested related source URL'),
           headingPath: stringSchema('Suggested related source heading path'),
         }), 'Related verified APIs'),
+        workflow_bundle: objectSchema({
+          required_slots: arraySchema(stringSchema('Workflow-first required slot'), 'Required slots'),
+          filled_slots: arraySchema(stringSchema('Workflow-first filled slot'), 'Filled slots'),
+          missing_slots: arraySchema(stringSchema('Workflow-first missing slot'), 'Missing slots'),
+          slots_complete: booleanSchema('Whether workflow-first slots are fully satisfied'),
+          workflow_paths: arraySchema(stringSchema('Workflow paths used'), 'Workflow paths'),
+          method_paths: arraySchema(stringSchema('Method paths used'), 'Method paths'),
+        }),
         negative_evidence: stringSchema('Explicit negative result when no exact API was found'),
         error: stringSchema('Error code'),
         message: stringSchema('Human-readable status'),
       },
     },
-    searchHint: 'search company engine source and internal reference docs through the backend evidence service',
+    searchHint: 'search backend wiki evidence and internal reference docs through the backend evidence service',
     laneAffinity: ['read', 'flow', 'compare', 'review', 'failure'],
     isReadOnly: () => true,
     isConcurrencySafe: () => true,
@@ -344,10 +352,10 @@ function CompanyReferenceSearchTool() {
       }
       return ['reference'];
     },
-    userFacingName: () => 'Company reference search',
-    getToolUseSummary: (input) => `Search company reference: ${toStringValue(input?.query).slice(0, 80)}`,
+    userFacingName: () => 'Wiki evidence search',
+    getToolUseSummary: (input) => `Search wiki evidence: ${toStringValue(input?.query).slice(0, 80)}`,
     async description() {
-      return 'Search backend-hosted company reference source code or internal docs and return read-only evidence windows';
+      return 'Search backend-hosted wiki evidence or internal docs and return read-only evidence windows';
     },
     async call(input, context) {
       const backendConfig = typeof context.getBackendConfig === 'function'
@@ -363,18 +371,19 @@ function CompanyReferenceSearchTool() {
         return {
           ok: false,
           error: 'backend_reference_unavailable',
-          message: 'Backend API base URL is not configured. Set serverBaseUrl before using company_reference_search.',
+          message: 'Backend API base URL is not configured. Set serverBaseUrl before using wiki_evidence_search.',
         };
       }
 
       try {
-        const result = await lookupBackendReferenceContext({
+        const result = await lookupBackendWikiEvidence({
           baseUrl,
           apiToken,
           sessionId: toStringValue(context.sessionId),
           userId: 'desktop-local',
           query,
           responseType: toStringValue(input.response_type || input.responseType || 'api_lookup') || 'api_lookup',
+          workflowFirst: Boolean(context?.requestContext?.workflowPlan?.preferWikiFirst),
           topK: clampInt(input.top_k || input.topK, 1, 50, 8),
           limit: clampInt(input.limit, 1, 50, 8),
           maxChars: clampInt(input.max_chars || input.maxChars, 200, 12000, 12000),
@@ -398,6 +407,9 @@ function CompanyReferenceSearchTool() {
             .filter((item) => item.qualifiedSymbol)
           : [];
         const negativeEvidence = toStringValue(lookupSummary?.negative_evidence || lookupSummary?.negativeEvidence);
+        const workflowBundle = result?.workflow_bundle && typeof result.workflow_bundle === 'object'
+          ? result.workflow_bundle
+          : {};
         const referenceAnchors = extractReferenceAnchors(sources);
         const examples = extractCodeExamples(sources, clampInt(input.max_chars || input.maxChars, 400, 8000, 4000));
         const shouldHydrateAnchors = !searchStatus && windows.length === 0 && referenceAnchors.length > 0;
@@ -469,6 +481,7 @@ function CompanyReferenceSearchTool() {
           search_status: searchStatus || 'broad_match',
           matched_api: matchedApi,
           related_apis: relatedApis,
+          workflow_bundle: workflowBundle,
           negative_evidence: negativeEvidence,
           message: statusMessage,
         };
@@ -485,5 +498,5 @@ function CompanyReferenceSearchTool() {
 }
 
 module.exports = {
-  CompanyReferenceSearchTool,
+  WikiEvidenceSearchTool,
 };

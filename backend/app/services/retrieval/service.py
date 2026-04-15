@@ -2,7 +2,7 @@ import re
 import time
 from typing import Dict, List
 
-from ... import config, rag_config
+from ... import config, wiki_config
 from ..search.filters import apply_module_filter
 from .query_rewrite import build_query_rewrite
 
@@ -38,8 +38,8 @@ def run_retrieval(search_svc, request, embed_model):
     t0 = time.perf_counter()
     raw_query = getattr(request, "message", None) or getattr(request, "query", None) or ""
     query_text = str(raw_query or "").strip()
-    query_rewrite_enabled = rag_config.retrieval_query_rewrite_enabled()
-    query_rewrite_max_candidates = rag_config.retrieval_query_rewrite_max_candidates()
+    query_rewrite_enabled = wiki_config.retrieval_query_rewrite_enabled()
+    query_rewrite_max_candidates = wiki_config.retrieval_query_rewrite_max_candidates()
     rewrite_plan = build_query_rewrite(
         query_text,
         max_candidates=query_rewrite_max_candidates if query_rewrite_enabled else 1,
@@ -56,7 +56,7 @@ def run_retrieval(search_svc, request, embed_model):
             if k not in ("must", "should", "must_not"):
                 filters[k] = v
     use_reranker = getattr(request, "use_reranker", False)
-    collection = getattr(request, "collection", None) or config.RAG_DEFAULT_COLLECTION
+    collection = getattr(request, "collection", None) or config.EVIDENCE_DEFAULT_COLLECTION
 
     def _search(candidate_query: str, candidate_dense, candidate_sparse, active_filters):
         qdrant_filters = active_filters if active_filters else None

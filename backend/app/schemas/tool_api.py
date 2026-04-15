@@ -96,6 +96,7 @@ class LookupSourcesAndCodeRequest(BaseModel):
     query: str
     filters: Optional[Dict[str, Any]] = None
     response_type: str = "general"
+    workflow_first: bool = False
     top_k: int = Field(default=50, ge=1, le=50)
     limit: int = Field(default=50, ge=1, le=50)
     max_chars: int = Field(default=4000, ge=200, le=12000)

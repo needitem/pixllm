@@ -55,7 +55,6 @@ async def build_health_response(
     embed_model=None,
     vllm_client=None,
     code_tools=None,
-    orchestration_policy=None,
 ) -> dict:
     if state_obj is not None:
         redis = redis if redis is not None else getattr(state_obj, "redis", None)
@@ -64,11 +63,6 @@ async def build_health_response(
         embed_model = embed_model if embed_model is not None else getattr(state_obj, "embed_model", None)
         vllm_client = vllm_client if vllm_client is not None else getattr(state_obj, "vllm_client", None)
         code_tools = code_tools if code_tools is not None else getattr(state_obj, "code_tools", None)
-        orchestration_policy = (
-            orchestration_policy
-            if orchestration_policy is not None
-            else getattr(state_obj, "orchestration_policy", None)
-        )
 
     components = {}
 

@@ -136,7 +136,7 @@ npm run dist:portable
 - `desktop/src/renderer/App.svelte`
 - `desktop/src/main/`
 - `backend/app/`
-- `backend/.profiles/rag_config.yaml`
+- `backend/.profiles/wiki_config.yaml`
 
 ## 검증 명령
 

@@ -1,5 +1,5 @@
-# PIXLLM RAG Configuration
-# This file consolidates routing, retrieval, context, and react settings.
+# PIXLLM Wiki Runtime Configuration
+# This file consolidates wiki-first routing, raw-retrieval fallback, context, and react settings.
 # Environment variables override these values when set.
 
 routing:

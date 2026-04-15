@@ -1,4 +1,4 @@
-const { summarizeCompanyReferenceEvidence } = require('./referenceEvidence.cjs');
+const { summarizeWikiEvidence } = require('./referenceEvidence.cjs');
 
 function toStringValue(value) {
   return String(value || '').trim();
@@ -164,7 +164,7 @@ function evaluateFinalAnswerPolicy({
   turn = 0,
 } = {}) {
   const summary = summarizeTraceEvidence({ trace, describeTool });
-  const referenceEvidence = summarizeCompanyReferenceEvidence(trace);
+  const referenceEvidence = summarizeWikiEvidence(trace);
   const acknowledgesMissingVerification = answerAcknowledgesMissingVerification(finalAnswer);
   const hasWorkspaceGrounding =
     summary.hasDiscoveryEvidence
@@ -174,6 +174,70 @@ function evaluateFinalAnswerPolicy({
     hasWorkspaceGrounding
     || referenceEvidence.hasVerifiedCodeEvidence;
   const usedTools = Array.isArray(trace) && trace.length > 0;
+  const prefersWorkflowFirst = Boolean(requestContext?.workflowPlan?.preferWikiFirst);
+
+  if (
+    prefersWorkflowFirst
+    && !requestRequiresWorkspaceMutation(requestContext)
+    && !acknowledgesMissingVerification
+    && referenceEvidence.workflowBundleSeen
+    && !referenceEvidence.workflowSlotsComplete
+  ) {
+    return {
+      ok: false,
+      reason: 'workflow_slots_incomplete',
+      blockingMessage: `Do not finalize a workflow-first guidance answer until the required workflow slots are satisfied. Missing: ${(referenceEvidence.workflowMissingSlots || []).join(', ') || 'unknown slots'}.`,
+      details: {
+        turn,
+        finalAnswerPreview: toStringValue(finalAnswer).slice(0, 240),
+        acknowledgesMissingVerification,
+        referenceEvidence,
+        ...summary,
+      },
+    };
+  }
+
+  if (
+    prefersWorkflowFirst
+    && !requestRequiresWorkspaceMutation(requestContext)
+    && !acknowledgesMissingVerification
+    && !referenceEvidence.hasWorkflowEvidence
+  ) {
+    return {
+      ok: false,
+      reason: 'workflow_evidence_required',
+      blockingMessage: 'Do not finalize a workflow-first guidance answer without grounding it in at least one workflow wiki page first.',
+      details: {
+        turn,
+        finalAnswerPreview: toStringValue(finalAnswer).slice(0, 240),
+        acknowledgesMissingVerification,
+        referenceEvidence,
+        ...summary,
+      },
+    };
+  }
+
+  if (
+    prefersWorkflowFirst
+    && !requestRequiresWorkspaceMutation(requestContext)
+    && !acknowledgesMissingVerification
+    && referenceEvidence.hasWorkflowEvidence
+    && !referenceEvidence.hasMethodEvidence
+    && !referenceEvidence.hasVerifiedCodeEvidence
+  ) {
+    return {
+      ok: false,
+      reason: 'workflow_slots_incomplete',
+      blockingMessage: 'Do not finalize a workflow-first guidance answer until the workflow references are expanded into methods or verified code evidence.',
+      details: {
+        turn,
+        finalAnswerPreview: toStringValue(finalAnswer).slice(0, 240),
+        acknowledgesMissingVerification,
+        referenceEvidence,
+        ...summary,
+      },
+    };
+  }
 
   if (
     requestNeedsGroundedChangeEvidence(requestContext)

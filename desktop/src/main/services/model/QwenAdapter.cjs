@@ -861,6 +861,7 @@ function buildSystemPrompt({
     requestContext?.intent?.wantsAnalysis
     && !prefersWorkspaceArtifact,
   );
+  const prefersWorkflowFirst = Boolean(requestContext?.workflowPlan?.preferWikiFirst);
   return [
     'You are the desktop coding engine for a Qwen-based local coding agent.',
     'Decide whether to answer directly or call tools.',
@@ -884,10 +885,15 @@ function buildSystemPrompt({
     prefersDirectChatGuidance
       ? '- For explanation-style requests, prefer verified reference/wiki evidence over pre-existing workspace samples. Do not treat an existing workspace example as authoritative unless the user explicitly asked about that file or path.'
       : '',
+    prefersWorkflowFirst
+      ? '- Workflow-first guidance requests must follow this order: (1) search wiki workflow pages, (2) read the best matching workflow page, (3) inspect the implementation or methods pages referenced by that workflow, and only then (4) use broader reference search if necessary.'
+      : '',
+    '- If a wiki_evidence_search result says `search_status: no_exact_match`, do not claim that the queried API exists. Use the reported `negative_evidence`, and mention `related_apis` only as possible alternatives.',
+    '- For technical guidance, methods pages and verified API facts are more authoritative than sample snippets or inferred usage patterns. If signatures disagree, follow the verified signatures or say the detail is unverified.',
     '- Do not use bash or powershell to create or edit files when write/edit tools are enabled.',
-    '- Use company_reference_search only for company/internal material outside the workspace and treat it as read-only guidance until verified by code evidence or workspace inspection.',
-    '- Paths returned from company_reference_search belong to backend reference sources, not the local workspace. Do not pass those paths to local file tools or shell commands.',
-    '- For shared wiki work, use wiki_bootstrap first when setup is requested and use wiki_search/wiki_read before wiki_write/wiki_append_log.',
+    '- Use wiki_evidence_search only for backend-hosted reference material outside the workspace and treat it as read-only guidance until verified by code evidence or workspace inspection.',
+    '- Paths returned from wiki_evidence_search belong to backend reference sources, not the local workspace. Do not pass those paths to local file tools or shell commands.',
+    '- For wiki maintenance work, use wiki_search/wiki_read before wiki_write/wiki_rebuild_index/wiki_lint/wiki_writeback.',
     '- Ground claims in tool responses already shown in the transcript. If a tool fails, report the exact blocker from that response.',
     workspacePath ? `Workspace: ${workspacePath}` : '',
     selectedFilePath ? `Selected file: ${selectedFilePath}` : '',

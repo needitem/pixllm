@@ -13,11 +13,12 @@ from ... import config
 from ...core.document_store import DocumentStoreService
 from ...deps import state
 from ...services.imports.service import FilesService
+from ...services.wiki.service import WikiService
 from ...utils.file_indexing import language_from_name
 from ...utils.ids import new_id
 from ...utils.time import now_iso
 from ..tools.workspace_sync import resolve_import_code_target_path
-from .documents import extract_document_sections
+from .documents import extract_document_sections, extract_document_text
 from .errors import classify_upload_error
 from .jobs import is_cancel_requested, read_job_payload, update_job
 from .paths import (
@@ -71,7 +72,7 @@ def job_collection_name(job: Optional[dict]) -> str:
         raw = str(job.get("collection") or "").strip()
         if raw:
             return raw
-    return config.RAG_DEFAULT_COLLECTION
+    return config.EVIDENCE_DEFAULT_COLLECTION
 
 
 def import_job_collection_for_mode(mode: str) -> str:
@@ -79,7 +80,7 @@ def import_job_collection_for_mode(mode: str) -> str:
 
 
 def remove_document_points(document_id: str, collection_name: Optional[str] = None, *, state_obj=state):
-    kwargs = {"collection_name": collection_name or config.RAG_DEFAULT_COLLECTION}
+    kwargs = {"collection_name": collection_name or config.EVIDENCE_DEFAULT_COLLECTION}
     try:
         kwargs["points_selector"] = Filter(must=[FieldCondition(key="document_id", match=MatchValue(value=document_id))])
     except Exception:
@@ -88,7 +89,7 @@ def remove_document_points(document_id: str, collection_name: Optional[str] = No
 
 
 def remove_points_by_field(field: str, value: str, collection_name: Optional[str] = None, *, state_obj=state):
-    kwargs = {"collection_name": collection_name or config.RAG_DEFAULT_COLLECTION}
+    kwargs = {"collection_name": collection_name or config.EVIDENCE_DEFAULT_COLLECTION}
     try:
         kwargs["points_selector"] = Filter(must=[FieldCondition(key=field, match=MatchValue(value=value))])
     except Exception:
@@ -227,6 +228,7 @@ async def run_import_path_task(
     state_obj=state,
     document_store_cls=DocumentStoreService,
     extract_document_sections_fn: Callable[[str, bytes], list[dict]] = extract_document_sections,
+    extract_document_text_fn: Callable[[str, bytes], str] = extract_document_text,
     encode_chunks_fn: Callable[[list[str]], Any] = encode_chunks,
     update_job_fn=update_job,
     is_cancel_requested_fn=is_cancel_requested,
@@ -273,6 +275,7 @@ async def run_import_path_task(
         embedded_chunks = 0
         collection = job_collection_name(job)
         doc_store = document_store_cls(state_obj.redis)
+        wiki_svc = WikiService(state_obj.redis)
 
         for file_path in files:
             if await is_cancel_requested_fn(job_id):
@@ -300,7 +303,12 @@ async def run_import_path_task(
 
                 sections = []
                 chunks = []
+                normalized_text = ""
                 if not is_code_mode:
+                    normalized_text = await asyncio.wait_for(
+                        asyncio.to_thread(extract_document_text_fn, file_path.name, raw_bytes),
+                        timeout=IMPORT_SECTION_EXTRACT_TIMEOUT_SECONDS,
+                    )
                     sections = await asyncio.wait_for(
                         asyncio.to_thread(extract_document_sections_fn, file_path.name, raw_bytes),
                         timeout=IMPORT_SECTION_EXTRACT_TIMEOUT_SECONDS,
@@ -320,6 +328,20 @@ async def run_import_path_task(
                 doc_id = doc["document_id"]
                 current_rev = await doc_store.get_current_revision(doc_id)
                 if current_rev and current_rev.get("content_hash") == content_hash:
+                    if not is_code_mode:
+                        await wiki_svc.ingest_source_document(
+                            project,
+                            source_path=rel,
+                            raw_text=normalized_text,
+                            title=rel,
+                            project=project,
+                            source_kind="imported_doc",
+                            document_id=doc_id,
+                            revision_id=current_rev.get("revision_id"),
+                            content_hash=content_hash,
+                            object_name=obj_name,
+                            imported_at=now_iso(),
+                        )
                     processed += 1
                     if processed % 5 == 0 or processed == len(files):
                         await update_job_fn(job_id, processed_files=processed, total_chunks=total_chunks, embedded_chunks=embedded_chunks)
@@ -396,6 +418,21 @@ async def run_import_path_task(
                     await doc_store.update_revision_status(revision_id, "indexed", chunk_count=0)
                     await doc_store.activate_revision(doc_id, revision_id, status="indexed")
 
+                if not is_code_mode:
+                    await wiki_svc.ingest_source_document(
+                        project,
+                        source_path=rel,
+                        raw_text=normalized_text,
+                        title=rel,
+                        project=project,
+                        source_kind="imported_doc",
+                        document_id=doc_id,
+                        revision_id=revision_id,
+                        content_hash=content_hash,
+                        object_name=obj_name,
+                        imported_at=now_iso(),
+                    )
+
             except Exception as exc:
                 error_code, _user_msg = classify_upload_error_fn(exc)
                 await update_job_fn(job_id, error_code=error_code, error_message=str(exc))
@@ -430,6 +467,7 @@ async def run_index_file_task(
     files_service_cls=FilesService,
     document_store_cls=DocumentStoreService,
     extract_document_sections_fn: Callable[[str, bytes], list[dict]] = extract_document_sections,
+    extract_document_text_fn: Callable[[str, bytes], str] = extract_document_text,
     encode_chunks_fn: Callable[[list[str]], Any] = encode_chunks,
     remove_document_points_fn=remove_document_points,
     point_struct_cls: type = PointStruct,
@@ -437,6 +475,7 @@ async def run_index_file_task(
     svc = files_service_cls(state_obj.redis, state_obj.minio, config.MINIO_BUCKET)
     await svc.update_status(file_id, "indexing")
     doc_store = document_store_cls(state_obj.redis)
+    wiki_svc = WikiService(state_obj.redis)
     response = None
     try:
         meta = await svc.get(file_id)
@@ -455,6 +494,7 @@ async def run_index_file_task(
 
         filename = meta.get("filename", "")
         sections = await asyncio.to_thread(extract_document_sections_fn, filename, raw)
+        normalized_text = await asyncio.to_thread(extract_document_text_fn, filename, raw)
         await svc.touch_heartbeat(file_id)
 
         normalized_project = sanitize_project(meta.get("project")) or "uploads"
@@ -469,6 +509,19 @@ async def run_index_file_task(
         doc_id = doc["document_id"]
         current_rev = await doc_store.get_current_revision(doc_id)
         if current_rev and current_rev.get("content_hash") == content_hash:
+            await wiki_svc.ingest_source_document(
+                normalized_project,
+                source_path=filename or file_id,
+                raw_text=normalized_text,
+                title=filename or file_id,
+                project=normalized_project,
+                source_kind="uploaded_doc",
+                document_id=doc_id,
+                revision_id=current_rev.get("revision_id"),
+                content_hash=content_hash,
+                object_name=obj_name,
+                imported_at=now_iso(),
+            )
             await svc.update_status(file_id, "indexed", chunk_count=int(current_rev.get("chunk_count") or 0))
             return
 
@@ -492,7 +545,7 @@ async def run_index_file_task(
 
         language = language_from_name(filename)
         collection_raw = meta.get("collection") if isinstance(meta, dict) else None
-        collection = str(collection_raw or config.RAG_DEFAULT_COLLECTION).strip() or config.RAG_DEFAULT_COLLECTION
+        collection = str(collection_raw or config.EVIDENCE_DEFAULT_COLLECTION).strip() or config.EVIDENCE_DEFAULT_COLLECTION
         project = normalized_project
         batch_size = embedding_batch_size(len(chunks))
         for start_idx in range(0, len(chunks), batch_size):
@@ -540,6 +593,19 @@ async def run_index_file_task(
             await asyncio.to_thread(state_obj.search_svc.qdrant.upsert, collection_name=collection, points=points)
         await doc_store.update_revision_status(revision_id, "indexed", chunk_count=len(chunks))
         await doc_store.activate_revision(doc_id, revision_id, status="indexed")
+        await wiki_svc.ingest_source_document(
+            normalized_project,
+            source_path=filename or file_id,
+            raw_text=normalized_text,
+            title=filename or file_id,
+            project=normalized_project,
+            source_kind="uploaded_doc",
+            document_id=doc_id,
+            revision_id=revision_id,
+            content_hash=content_hash,
+            object_name=obj_name,
+            imported_at=now_iso(),
+        )
         await svc.update_status(file_id, "indexed", chunk_count=len(chunks))
     except Exception as exc:
         if "revision_id" in locals():

@@ -3,7 +3,7 @@ const path = require('node:path');
 const { safeStorage } = require('electron');
 const { ensureDesktopDataRoot } = require('./storage_paths.cjs');
 
-const SETTINGS_KEYS = ['serverBaseUrl', 'apiToken', 'llmBaseUrl', 'llmApiToken', 'workspacePath', 'selectedModel', 'sharedWikiId', 'recentWorkspaces'];
+const SETTINGS_KEYS = ['serverBaseUrl', 'apiToken', 'llmBaseUrl', 'llmApiToken', 'workspacePath', 'selectedModel', 'wikiId', 'recentWorkspaces'];
 const ENCRYPTED_TOKEN_PREFIX = 'enc:v1:';
 
 function settingsPath() {
@@ -18,7 +18,7 @@ function defaultSettings() {
     llmApiToken: process.env.PIXLLM_LLM_API_TOKEN || '',
     workspacePath: '',
     selectedModel: 'qwen3.5-27b',
-    sharedWikiId: 'engine',
+    wikiId: 'engine',
     recentWorkspaces: []
   };
 }
@@ -43,7 +43,7 @@ function normalizeWorkspaceList(list) {
 
 function finalizeSettings(source) {
   const workspacePath = typeof source?.workspacePath === 'string' ? source.workspacePath.trim() : '';
-  const sharedWikiId = typeof source?.sharedWikiId === 'string' ? source.sharedWikiId.trim() : '';
+  const wikiId = typeof source?.wikiId === 'string' ? source.wikiId.trim() : '';
   const recentWorkspaces = normalizeWorkspaceList([
     workspacePath,
     ...(Array.isArray(source?.recentWorkspaces) ? source.recentWorkspaces : [])
@@ -52,7 +52,7 @@ function finalizeSettings(source) {
   return {
     ...source,
     workspacePath,
-    sharedWikiId,
+    wikiId,
     recentWorkspaces
   };
 }
@@ -107,6 +107,8 @@ function normalizeSettings(source) {
       normalized[key] = normalizeWorkspaceList(source?.[key]);
     } else if ((key === 'apiToken' || key === 'llmApiToken') && typeof source?.[key] === 'string') {
       normalized[key] = decodeApiToken(source[key]);
+    } else if (key === 'wikiId') {
+      normalized[key] = typeof source?.wikiId === 'string' ? source.wikiId : '';
     } else if (typeof source?.[key] === 'string') {
       normalized[key] = source[key];
     }

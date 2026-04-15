@@ -3,15 +3,11 @@ from typing import List, Optional
 from pydantic import BaseModel
 
 
-class WikiBootstrapRequest(BaseModel):
-    wiki_id: str
-    name: Optional[str] = None
-    description: Optional[str] = None
-    overwrite: bool = False
-    user_id: Optional[str] = None
-
-
 class WikiContextRequest(BaseModel):
+    wiki_id: str
+
+
+class WikiRebuildIndexRequest(BaseModel):
     wiki_id: str
 
 
@@ -34,12 +30,18 @@ class WikiWritePageRequest(BaseModel):
     content: str
     title: Optional[str] = None
     kind: Optional[str] = None
-    user_id: Optional[str] = None
 
 
-class WikiAppendLogRequest(BaseModel):
+class WikiLintRequest(BaseModel):
     wiki_id: str
-    title: str
-    body_lines: List[str] = []
-    kind: str = "update"
-    user_id: Optional[str] = None
+    repair: bool = False
+
+
+class WikiWritebackRequest(BaseModel):
+    wiki_id: str
+    query: str
+    answer: str
+    title: Optional[str] = None
+    category: str = "analysis"
+    path: Optional[str] = None
+    source_paths: List[str] = []

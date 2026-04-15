@@ -1,5 +1,6 @@
 import re
 import time
+from collections import defaultdict
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -9,6 +10,36 @@ from ... import config
 from ...utils.time import now_iso
 
 _BACKEND_ROOT = Path(__file__).resolve().parents[3]
+_CORE_COORDINATION_PATHS = (
+    "README.md",
+    "SCHEMA.md",
+    "index.md",
+    "log.md",
+    "pages/home.md",
+)
+_OPTIONAL_COORDINATION_PATHS = (
+    "01-method-wiki-index.md",
+)
+_STRUCTURE_DIRS = (
+    "raw/inbox",
+    "raw/processed",
+    "pages",
+    "pages/sources",
+    "pages/topics",
+    "pages/entities",
+    "pages/analyses",
+    "pages/decisions",
+    "methods",
+    "workflows",
+)
+_MARKDOWN_LINK_RE = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
+_SOURCE_ANCHOR_RE = re.compile(r"\bSource/[^`\s:]+:\d+(?:-\d+)?\b")
+_CURATED_KINDS = {"home", "topic", "entity", "analysis", "decision", "workflow", "source", "page"}
+_WRITEBACK_CATEGORY_PATHS = {
+    "analysis": "pages/analyses",
+    "decision": "pages/decisions",
+    "topic": "pages/topics",
+}
 
 
 def _slugify(value: str, fallback: str = "engine") -> str:
@@ -20,7 +51,7 @@ def _slugify(value: str, fallback: str = "engine") -> str:
 
 
 def wiki_parent_root() -> Path:
-    return _BACKEND_ROOT / config.ORCHESTRATION_CONFIG_DIR / "wiki"
+    return _BACKEND_ROOT / config.WIKI_PROFILE_DIR / "wiki"
 
 
 def wiki_root(wiki_id: str = "engine") -> Path:
@@ -75,6 +106,106 @@ def _extract_summary(content: str) -> str:
     return " ".join(lines[:4])[:240]
 
 
+def _normalize_multiline_text(value: str) -> str:
+    return str(value or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+
+
+def _yaml_dump(data: Dict[str, Any]) -> str:
+    clean: Dict[str, Any] = {}
+    for key, value in (data or {}).items():
+        if value in (None, "", [], {}):
+            continue
+        clean[str(key)] = value
+    if not clean:
+        return ""
+    return str(
+        yaml.safe_dump(
+            clean,
+            sort_keys=False,
+            allow_unicode=True,
+            default_flow_style=False,
+        )
+    ).strip()
+
+
+def _render_markdown_page(meta: Dict[str, Any], body: str) -> str:
+    normalized_body = _normalize_multiline_text(body)
+    frontmatter = _yaml_dump(meta)
+    if not frontmatter:
+        return f"{normalized_body}\n" if normalized_body else ""
+    if not normalized_body:
+        return f"---\n{frontmatter}\n---\n"
+    return f"---\n{frontmatter}\n---\n\n{normalized_body}\n"
+
+
+def _safe_source_page_stem(source_path: str, title: str = "", fallback: str = "source") -> str:
+    source_value = str(source_path or "").strip().replace("\\", "/")
+    candidate = title or PurePosixPath(source_value).stem or PurePosixPath(source_value).name
+    return _slugify(candidate, fallback)
+
+
+def _heading_candidates(text: str, limit: int = 6) -> List[str]:
+    seen = set()
+    output: List[str] = []
+    for raw_line in _normalize_multiline_text(text).splitlines():
+        stripped = raw_line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("#"):
+            heading = stripped.lstrip("#").strip()
+        else:
+            heading = ""
+        if not heading:
+            continue
+        key = heading.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        output.append(heading)
+        if len(output) >= limit:
+            break
+    return output
+
+
+def _link_targets(content: str) -> List[str]:
+    links: List[str] = []
+    for match in _MARKDOWN_LINK_RE.finditer(str(content or "")):
+        target = str(match.group(1) or "").strip()
+        if not target or target.startswith("#") or "://" in target or target.startswith("mailto:"):
+            continue
+        links.append(target.split("#", 1)[0].strip())
+    return links
+
+
+def _has_source_evidence(meta: Dict[str, Any], content: str) -> bool:
+    sources = meta.get("sources")
+    if isinstance(sources, list) and any(str(item or "").strip() for item in sources):
+        return True
+    lowered = str(content or "").lower()
+    if _SOURCE_ANCHOR_RE.search(str(content or "")):
+        return True
+    return "](raw/" in lowered or "](pages/sources/" in lowered
+
+
+def _resolve_relative_link_path(root: Path, current_path: str, raw_target: str) -> Optional[str]:
+    target = str(raw_target or "").strip()
+    if not target:
+        return None
+    candidate = PurePosixPath(PurePosixPath(current_path).parent, target).as_posix()
+    normalized_candidate = str(PurePosixPath(candidate)).replace("\\", "/").lstrip("/")
+    direct_path = (root / normalized_candidate).resolve()
+    if direct_path.exists():
+        return normalized_candidate
+    try:
+        normalized_page = _normalize_page_path(candidate)
+    except ValueError:
+        return None
+    page_path = (root / normalized_page).resolve()
+    if page_path.exists():
+        return normalized_page
+    return normalized_page
+
+
 def _infer_kind(path: str) -> str:
     lowered = str(path or "").lower()
     if lowered == "schema.md":
@@ -87,16 +218,22 @@ def _infer_kind(path: str) -> str:
         return "readme"
     if lowered == "pages/home.md":
         return "home"
+    if lowered.startswith("pages/sources/"):
+        return "source"
     if lowered.startswith("pages/topics/"):
         return "topic"
     if lowered.startswith("pages/entities/"):
         return "entity"
+    if lowered.startswith("pages/analyses/"):
+        return "analysis"
     if lowered.startswith("pages/decisions/"):
         return "decision"
     if lowered.startswith("raw/inbox/"):
         return "raw_inbox"
     if lowered.startswith("raw/processed/"):
         return "raw_processed"
+    if lowered.startswith("workflows/"):
+        return "workflow"
     if lowered.startswith("methods/"):
         return "method"
     if lowered.startswith("pages/"):
@@ -123,11 +260,18 @@ def _score_page(page: Dict[str, Any], query: str) -> int:
     if not needle:
         priority = {
             "schema": 100,
-            "index": 90,
-            "log": 80,
-            "home": 70,
-            "readme": 60,
-            "method": 20,
+            "home": 96,
+            "index": 92,
+            "workflow": 88,
+            "topic": 84,
+            "analysis": 82,
+            "source": 80,
+            "entity": 78,
+            "decision": 76,
+            "log": 58,
+            "readme": 56,
+            "method": 28,
+            "raw_processed": 8,
         }
         return priority.get(str(page.get("kind") or ""), 10)
 
@@ -148,6 +292,18 @@ def _score_page(page: Dict[str, Any], query: str) -> int:
             score += 4
     if needle in content:
         score += 10
+    kind = str(page.get("kind") or "")
+    if kind in {"workflow", "topic", "analysis", "source", "entity", "decision"}:
+        score += 8
+    if kind in {"raw_processed", "raw_inbox"}:
+        score -= 6
+    if re.search(r"(workflow|steps|guide|how to|example|usage|program|flow|만들|예제|단계|도시|표시|로드)", needle, re.IGNORECASE):
+        if kind == "workflow":
+            score += 24
+        elif kind in {"topic", "analysis"}:
+            score += 10
+        elif kind == "method":
+            score -= 8
     return score
 
 
@@ -183,6 +339,12 @@ class WikiService:
             raise ValueError("page path must stay inside the wiki root")
         return target
 
+    def _write_page_text(self, wiki_id: str, page_path: str, content: str) -> Dict[str, Any]:
+        file_path = self._page_file(wiki_id, page_path)
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_text(str(content or ""), encoding="utf-8")
+        return _page_payload(self._root(wiki_id), file_path)
+
     def _meta(self, wiki_id: str) -> Dict[str, Any]:
         normalized_wiki_id = _slugify(wiki_id, "engine")
         root = self._root(normalized_wiki_id)
@@ -204,6 +366,34 @@ class WikiService:
             "root_path": root.relative_to(_BACKEND_ROOT).as_posix() if root.exists() else root.relative_to(_BACKEND_ROOT).as_posix(),
             "page_count": len(pages),
             "updated_at": updated_at or now_iso(),
+        }
+
+    def _coordination_status_payload(
+        self,
+        *,
+        wiki_id: str,
+        present_paths: Iterable[str],
+        missing_paths_before: Iterable[str],
+        created_paths: Iterable[str],
+        root_created: bool,
+    ) -> Dict[str, Any]:
+        required_paths = list(_CORE_COORDINATION_PATHS)
+        optional_paths = list(_OPTIONAL_COORDINATION_PATHS)
+        present_path_set = {str(path or "") for path in present_paths if str(path or "")}
+        required_present = [path for path in required_paths if path in present_path_set]
+        optional_present = [path for path in optional_paths if path in present_path_set]
+        return {
+            "wiki_id": _slugify(wiki_id, "engine"),
+            "required_paths": required_paths,
+            "optional_paths": optional_paths,
+            "required_present_paths": required_present,
+            "optional_present_paths": optional_present,
+            "present_paths": [*required_present, *optional_present],
+            "missing_paths": [path for path in required_paths if path not in required_present],
+            "missing_paths_before": [str(path or "") for path in missing_paths_before if str(path or "")],
+            "created_paths": [str(path or "") for path in created_paths if str(path or "")],
+            "auto_bootstrapped": bool(root_created or list(created_paths)),
+            "has_coordination_spine": all(path in required_present for path in required_paths),
         }
 
     async def list_wikis(self) -> List[Dict[str, Any]]:
@@ -239,32 +429,52 @@ class WikiService:
                 "path": "README.md",
                 "kind": "readme",
                 "content": "\n".join([
-                    "# Engine Shared Wiki",
+                    "# LLM Wiki",
                     "",
-                    f"This shared wiki uses the existing engine reference wiki at `{wiki_id}` as its source of truth.",
+                    f"This wiki compiles knowledge for `{wiki_id}` into persistent markdown pages.",
                     "",
-                    "- `SCHEMA.md` defines shared editing rules.",
-                    "- `index.md` is the human-oriented navigation page.",
-                    "- `01-method-wiki-index.md` is the generated method reference index.",
-                    "- `log.md` records ingest, query-derived synthesis, and lint passes.",
-                    "- `methods/` contains generated method reference pages.",
+                    "## Layers",
+                    "",
+                    "- `raw/` keeps immutable source manifests and ingestion traces.",
+                    "- `pages/` keeps curated synthesis pages for topics, entities, analyses, and decisions.",
+                    "- `methods/` and `workflows/` keep generated and verified reference material.",
+                    "",
+                    "## Operations",
+                    "",
+                    "- Ingest writes raw manifests, source summaries, curated topic pages, `index.md`, and `log.md`.",
+                    "- Query should prefer the wiki first and fall back to raw retrieval only when coverage is weak.",
+                    "- Lint should detect broken links, orphan pages, and uncited curated claims.",
                 ]),
             },
             {
                 "path": "SCHEMA.md",
                 "kind": "schema",
                 "content": "\n".join([
-                    "# Engine Wiki Schema",
+                    "# LLM Wiki Schema",
                     "",
-                    "- This shared wiki is the same backend engine reference wiki used by `company_reference_search`.",
-                    "- Generated method reference pages live under `methods/`.",
-                    "- Human-curated overview, synthesis, and workflow pages may live at the wiki root or under `pages/`.",
+                    "## Canonical Structure",
+                    "",
+                    "- `README.md`: human-readable overview of the wiki and its operating model.",
+                    "- `SCHEMA.md`: editing rules and directory conventions.",
+                    "- `index.md`: generated content-oriented catalog for navigation.",
+                    "- `log.md`: chronological append-only record of ingest, writeback, and lint events.",
+                    "- `pages/home.md`: curated landing page for high-level orientation.",
+                    "- `raw/inbox/`: source manifests waiting for normalization or follow-up.",
+                    "- `raw/processed/`: immutable source manifests that have been ingested.",
+                    "- `pages/sources/`: source summary pages derived from raw sources.",
+                    "- `pages/topics/`: curated synthesis pages for recurring themes or features.",
+                    "- `pages/entities/`: entity-centric reference pages when named subjects matter.",
+                    "- `pages/analyses/`: saved query answers, comparisons, and deep dives.",
+                    "- `pages/decisions/`: decision records and notable tradeoffs.",
+                    "- `workflows/`: verified task or implementation workflows.",
+                    "- `methods/`: generated reference material; do not treat this as the whole wiki.",
                     "",
                     "## Editing Rules",
                     "",
-                    "- Do not hand-edit generated `methods/*.md` pages unless you are intentionally overriding the generator.",
-                    "- Prefer adding curated context in `pages/` and linking to generated reference pages.",
-                    "- Update `index.md` and `log.md` after substantive shared wiki edits.",
+                    "- Prefer updating curated pages under `pages/` over editing generated `methods/` pages.",
+                    "- Every curated page should carry explicit provenance via `sources` frontmatter or inline source anchors.",
+                    "- `index.md` must be rebuilt after ingest, writeback, or major manual edits.",
+                    "- `log.md` must record ingest, writeback, lint, and repair events.",
                     "- Keep relative markdown links stable.",
                 ]),
             },
@@ -272,45 +482,111 @@ class WikiService:
                 "path": "index.md",
                 "kind": "index",
                 "content": "\n".join([
-                    "# Engine Wiki Index",
+                    "# LLM Wiki Index",
                     "",
                     "- [SCHEMA.md](SCHEMA.md)",
                     "- [log.md](log.md)",
-                    "- [01-method-wiki-index.md](01-method-wiki-index.md)",
+                    "- [pages/home.md](pages/home.md)",
                     "",
-                    "## Curated Pages",
+                    "## Curated Content",
                     "",
-                    "- Add human-oriented overview, topic, and workflow pages here.",
+                    "- This file is generated. Rebuild it after ingest, writeback, or repair.",
                     "",
-                    "## Generated Reference",
+                    "## Reference",
                     "",
-                    "- [01-method-wiki-index.md](01-method-wiki-index.md) - generated method reference catalog",
-                    "- [methods/](methods/) - generated method pages",
+                    "- [01-method-wiki-index.md](01-method-wiki-index.md) - generated method catalog, if present",
+                    "- [methods/](methods/) - generated method reference pages",
+                    "- [workflows/](workflows/) - verified workflow pages",
                 ]),
             },
             {
                 "path": "log.md",
                 "kind": "log",
                 "content": "\n".join([
-                    "# Engine Wiki Log",
+                    "# LLM Wiki Log",
                     "",
-                    f"## [{today}] bootstrap | Enable shared editing on engine wiki",
+                    f"## [{today}] bootstrap | Initialize wiki structure",
                     "",
-                    "- Added shared coordination files on top of the engine reference wiki.",
+                    "- Created the coordination spine and baseline folders for wiki-first operation.",
                 ]),
             },
             {
                 "path": "pages/home.md",
                 "kind": "home",
                 "content": "\n".join([
-                    "# Engine Wiki Home",
+                    "# Wiki Home",
                     "",
-                    "Use this page for curated overview, navigation, and shared context on top of the generated engine method reference.",
+                    "Use this page for a curated overview of the knowledge base.",
+                    "",
+                    "## Start Here",
+                    "",
+                    "- Review [index.md](../index.md) for the current catalog.",
+                    "- Review [SCHEMA.md](../SCHEMA.md) before changing page structure.",
+                    "- Use `pages/topics/`, `pages/entities/`, `pages/analyses/`, and `pages/decisions/` for curated synthesis.",
                 ]),
             },
         ]
 
-    async def upsert_page(
+    async def ensure_coordination_pages(
+        self,
+        wiki_id: str,
+        *,
+        create_if_missing: bool = True,
+    ) -> Dict[str, Any]:
+        normalized_wiki_id = _slugify(wiki_id, "engine")
+        root = self._root(normalized_wiki_id)
+        root_existed = root.exists()
+        if not root_existed and not create_if_missing:
+            return self._coordination_status_payload(
+                wiki_id=normalized_wiki_id,
+                present_paths=[],
+                missing_paths_before=_CORE_COORDINATION_PATHS,
+                created_paths=[],
+                root_created=False,
+            )
+
+        if create_if_missing:
+            root.mkdir(parents=True, exist_ok=True)
+            for rel_dir in _STRUCTURE_DIRS:
+                (root / rel_dir).mkdir(parents=True, exist_ok=True)
+
+        templates = self._bootstrap_templates(normalized_wiki_id)
+        created_paths: List[str] = []
+        present_paths: List[str] = []
+        missing_paths_before: List[str] = []
+
+        for template in templates:
+            path = template["path"]
+            file_path = self._page_file(normalized_wiki_id, path)
+            if file_path.exists():
+                present_paths.append(path)
+                continue
+            missing_paths_before.append(path)
+            if not create_if_missing:
+                continue
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+            file_path.write_text(template["content"], encoding="utf-8")
+            created_paths.append(path)
+            present_paths.append(path)
+
+        existing_paths = set(present_paths)
+        if root.exists():
+            for extra_path in _OPTIONAL_COORDINATION_PATHS:
+                if extra_path in existing_paths:
+                    continue
+                file_path = self._page_file(normalized_wiki_id, extra_path)
+                if file_path.exists():
+                    present_paths.append(extra_path)
+
+        return self._coordination_status_payload(
+            wiki_id=normalized_wiki_id,
+            present_paths=present_paths,
+            missing_paths_before=missing_paths_before,
+            created_paths=created_paths,
+            root_created=bool(create_if_missing and not root_existed),
+        )
+
+    async def write_page(
         self,
         wiki_id: str,
         page_path: str,
@@ -318,48 +594,21 @@ class WikiService:
         *,
         title: Optional[str] = None,
         kind: Optional[str] = None,
-        user_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        del title, kind, user_id
-        file_path = self._page_file(wiki_id, page_path)
-        file_path.parent.mkdir(parents=True, exist_ok=True)
-        file_path.write_text(str(content or ""), encoding="utf-8")
-        root = self._root(wiki_id)
-        return _page_payload(root, file_path)
-
-    async def bootstrap_wiki(
-        self,
-        wiki_id: str,
-        *,
-        name: Optional[str] = None,
-        description: Optional[str] = None,
-        overwrite: bool = False,
-        user_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        del name, description, user_id
-        root = self._root(wiki_id)
-        root.mkdir(parents=True, exist_ok=True)
-        created_paths: List[str] = []
-        updated_paths: List[str] = []
-        skipped_paths: List[str] = []
-        for template in self._bootstrap_templates(_slugify(wiki_id, "engine")):
-            file_path = self._page_file(wiki_id, template["path"])
-            if file_path.exists() and not overwrite:
-                skipped_paths.append(template["path"])
-                continue
-            existed = file_path.exists()
-            file_path.parent.mkdir(parents=True, exist_ok=True)
-            file_path.write_text(template["content"], encoding="utf-8")
-            if existed:
-                updated_paths.append(template["path"])
-            else:
-                created_paths.append(template["path"])
-        return {
-            "wiki": self._meta(wiki_id),
-            "created_paths": created_paths,
-            "updated_paths": updated_paths,
-            "skipped_paths": skipped_paths,
-        }
+        del title, kind
+        normalized_wiki_id = _slugify(wiki_id, "engine")
+        await self.ensure_coordination_pages(normalized_wiki_id, create_if_missing=True)
+        page = self._write_page_text(normalized_wiki_id, page_path, content)
+        page_kind = str(page.get("kind") or "")
+        if page_kind not in {"index", "log", "schema", "readme", "raw_inbox", "raw_processed"}:
+            await self.rebuild_index(normalized_wiki_id)
+            await self.append_log(
+                normalized_wiki_id,
+                title=f"Edit {page.get('title') or page.get('path')}",
+                body_lines=[f"Updated page `{page.get('path')}`."],
+                kind="edit",
+            )
+        return page
 
     async def append_log(
         self,
@@ -368,11 +617,9 @@ class WikiService:
         title: str,
         body_lines: Iterable[str],
         kind: str = "update",
-        user_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        del user_id
         page = await self.get_page(wiki_id, "log.md")
-        content = str(page.get("content") or "# Engine Wiki Log\n") if page else "# Engine Wiki Log\n"
+        content = str(page.get("content") or "# LLM Wiki Log\n") if page else "# LLM Wiki Log\n"
         date = now_iso()[:10]
         lines = [f"## [{date}] {str(kind or 'update').strip()} | {str(title or 'Log entry').strip()}", ""]
         for body_line in body_lines:
@@ -380,29 +627,403 @@ class WikiService:
             if text:
                 lines.append(f"- {text}")
         if len(lines) == 2:
-            lines.append("- Updated shared wiki content.")
+            lines.append("- Updated wiki content.")
         lines.append("")
         next_content = f"{content.rstrip()}\n\n" + "\n".join(lines)
-        return await self.upsert_page(wiki_id, "log.md", next_content)
+        return self._write_page_text(wiki_id, "log.md", next_content)
+
+    async def rebuild_index(self, wiki_id: str) -> Dict[str, Any]:
+        await self.ensure_coordination_pages(wiki_id, create_if_missing=True)
+        pages = await self.list_pages(wiki_id)
+        groups = {
+            "Coordination": {"readme", "schema", "index", "log", "home"},
+            "Sources": {"source"},
+            "Topics": {"topic"},
+            "Entities": {"entity"},
+            "Analyses": {"analysis"},
+            "Decisions": {"decision"},
+            "Workflows": {"workflow"},
+            "Reference": {"method"},
+            "Raw": {"raw_inbox", "raw_processed"},
+            "Other": {"page", "wiki"},
+        }
+
+        page_groups: Dict[str, List[Dict[str, Any]]] = {name: [] for name in groups}
+        for page in pages:
+            kind = str(page.get("kind") or "")
+            matched = False
+            for group_name, group_kinds in groups.items():
+                if kind in group_kinds:
+                    page_groups[group_name].append(page)
+                    matched = True
+                    break
+            if not matched:
+                page_groups["Other"].append(page)
+
+        lines = [
+            "# LLM Wiki Index",
+            "",
+            f"- Total pages: `{len(pages)}`",
+            f"- Last rebuilt: `{now_iso()}`",
+            "",
+            "## Coordination",
+            "",
+            "- [README.md](README.md)",
+            "- [SCHEMA.md](SCHEMA.md)",
+            "- [log.md](log.md)",
+            "- [pages/home.md](pages/home.md)",
+        ]
+
+        if any(str(page.get("path") or "") == "01-method-wiki-index.md" for page in pages):
+            lines.append("- [01-method-wiki-index.md](01-method-wiki-index.md)")
+
+        for group_name in ("Sources", "Topics", "Entities", "Analyses", "Decisions", "Workflows", "Reference", "Raw", "Other"):
+            entries = [
+                page
+                for page in sorted(page_groups[group_name], key=lambda item: (str(item.get("title") or ""), str(item.get("path") or "")))
+                if str(page.get("path") or "") not in {"index.md", "README.md", "SCHEMA.md", "log.md", "pages/home.md"}
+            ]
+            if not entries:
+                continue
+            lines.extend(["", f"## {group_name}", ""])
+            for page in entries:
+                summary = str(page.get("summary") or "").strip()
+                suffix = f" - {summary}" if summary else ""
+                lines.append(f"- [{page.get('title') or page.get('path')}]({page.get('path')}){suffix}")
+
+        index_body = "\n".join(lines)
+        return self._write_page_text(wiki_id, "index.md", index_body)
+
+    async def ingest_source_document(
+        self,
+        wiki_id: str,
+        *,
+        source_path: str,
+        raw_text: str,
+        title: str = "",
+        project: str = "",
+        source_kind: str = "document",
+        document_id: Optional[str] = None,
+        revision_id: Optional[str] = None,
+        content_hash: Optional[str] = None,
+        object_name: Optional[str] = None,
+        imported_at: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        normalized_wiki_id = _slugify(wiki_id, "engine")
+        await self.ensure_coordination_pages(normalized_wiki_id, create_if_missing=True)
+
+        normalized_source_path = str(source_path or "").strip().replace("\\", "/").strip("/")
+        safe_title = str(title or PurePosixPath(normalized_source_path).stem or normalized_source_path or "Untitled Source").strip()
+        body_text = _normalize_multiline_text(raw_text)
+        headings = _heading_candidates(body_text, limit=8)
+        source_stem = _safe_source_page_stem(normalized_source_path, safe_title)
+        imported_stamp = str(imported_at or now_iso()).strip()
+
+        raw_manifest_base = normalized_source_path or source_stem
+        if str(raw_manifest_base).lower().endswith(".md"):
+            raw_page_path = _normalize_page_path(f"raw/processed/{raw_manifest_base}.source.md")
+        else:
+            raw_page_path = _normalize_page_path(f"raw/processed/{raw_manifest_base}.md")
+        source_page_path = _normalize_page_path(f"pages/sources/{source_stem}.md")
+        topic_page_path = _normalize_page_path(f"pages/topics/{source_stem}.md")
+
+        raw_meta = {
+            "title": f"Raw Source | {safe_title}",
+            "description": f"Immutable source manifest for {safe_title}",
+            "tags": ["raw", "source", str(project or "shared").strip() or "shared"],
+            "source_path": normalized_source_path,
+            "source_kind": source_kind,
+            "project": project or None,
+            "document_id": document_id,
+            "revision_id": revision_id,
+            "content_hash": content_hash,
+            "imported_at": imported_stamp,
+        }
+        raw_body_lines = [
+            "# Raw Source",
+            "",
+            f"- Title: `{safe_title}`",
+            f"- Source path: `{normalized_source_path or safe_title}`",
+            f"- Source kind: `{source_kind}`",
+        ]
+        if project:
+            raw_body_lines.append(f"- Project: `{project}`")
+        if document_id:
+            raw_body_lines.append(f"- Document ID: `{document_id}`")
+        if revision_id:
+            raw_body_lines.append(f"- Revision ID: `{revision_id}`")
+        raw_body_lines.extend([
+            f"- Imported at: `{imported_stamp}`",
+            "",
+            "## Extracted Text",
+            "",
+            body_text or "_No extracted text available._",
+        ])
+        raw_page = self._write_page_text(normalized_wiki_id, raw_page_path, _render_markdown_page(raw_meta, "\n".join(raw_body_lines)))
+
+        source_meta = {
+            "title": safe_title,
+            "description": f"Source summary for {safe_title}",
+            "tags": ["source", "ingest", str(project or "shared").strip() or "shared"],
+            "source_path": normalized_source_path,
+            "source_manifest": raw_page_path,
+            "sources": [raw_page_path],
+            "project": project or None,
+            "imported_at": imported_stamp,
+        }
+        source_body_lines = [
+            f"# {safe_title}",
+            "",
+            "## Overview",
+            "",
+            f"- Source manifest: [{raw_page.get('title') or raw_page_path}]({raw_page_path})",
+            f"- Imported at: `{imported_stamp}`",
+        ]
+        if headings:
+            source_body_lines.extend(["", "## Key Headings", ""])
+            for heading in headings:
+                source_body_lines.append(f"- {heading}")
+        if body_text:
+            source_body_lines.extend(["", "## Excerpt", "", body_text[:2400]])
+        source_page = self._write_page_text(normalized_wiki_id, source_page_path, _render_markdown_page(source_meta, "\n".join(source_body_lines)))
+
+        existing_topic = await self.get_page(normalized_wiki_id, topic_page_path)
+        existing_meta, existing_body = _read_frontmatter(str(existing_topic.get("content") or "")) if existing_topic else ({}, "")
+        topic_sources = []
+        if isinstance(existing_meta.get("sources"), list):
+            topic_sources.extend(str(item or "").strip() for item in existing_meta.get("sources") if str(item or "").strip())
+        topic_sources.extend([source_page_path, raw_page_path])
+        topic_sources = list(dict.fromkeys(topic_sources))
+
+        topic_meta = {
+            "title": existing_meta.get("title") or safe_title,
+            "description": existing_meta.get("description") or f"Curated topic page for {safe_title}",
+            "tags": list(dict.fromkeys([
+                *([str(item or "").strip() for item in existing_meta.get("tags") or []] if isinstance(existing_meta.get("tags"), list) else []),
+                "topic",
+                "ingest",
+                str(project or "shared").strip() or "shared",
+            ])),
+            "sources": topic_sources,
+            "last_ingested_at": imported_stamp,
+            "project": project or None,
+        }
+        topic_sections = [
+            f"# {topic_meta['title']}",
+            "",
+            "## Overview",
+            "",
+            existing_body.strip() if existing_body.strip() else f"This topic page is maintained from imported source material for `{safe_title}`.",
+            "",
+            "## Source Material",
+            "",
+            f"- [Source summary]({source_page_path})",
+            f"- [Raw source manifest]({raw_page_path})",
+        ]
+        if headings:
+            topic_sections.extend(["", "## Key Headings", ""])
+            for heading in headings:
+                topic_sections.append(f"- {heading}")
+        topic_page = self._write_page_text(normalized_wiki_id, topic_page_path, _render_markdown_page(topic_meta, "\n".join(topic_sections)))
+
+        index_page = await self.rebuild_index(normalized_wiki_id)
+        await self.append_log(
+            normalized_wiki_id,
+            title=f"Ingest {safe_title}",
+            body_lines=[
+                f"Added raw manifest `{raw_page_path}`.",
+                f"Updated source summary `{source_page_path}`.",
+                f"Updated topic page `{topic_page_path}`.",
+                "Rebuilt `index.md`.",
+            ],
+            kind="ingest",
+        )
+        return {
+            "wiki_id": normalized_wiki_id,
+            "raw_page": raw_page,
+            "source_page": source_page,
+            "topic_page": topic_page,
+            "index_page": index_page,
+        }
+
+    async def write_query_page(
+        self,
+        wiki_id: str,
+        *,
+        query: str,
+        answer: str,
+        title: str = "",
+        category: str = "analysis",
+        page_path: str = "",
+        source_paths: Optional[Iterable[str]] = None,
+    ) -> Dict[str, Any]:
+        normalized_wiki_id = _slugify(wiki_id, "engine")
+        await self.ensure_coordination_pages(normalized_wiki_id, create_if_missing=True)
+
+        normalized_category = str(category or "analysis").strip().lower()
+        base_dir = _WRITEBACK_CATEGORY_PATHS.get(normalized_category, _WRITEBACK_CATEGORY_PATHS["analysis"])
+        resolved_title = str(title or query or "Saved Analysis").strip()
+        resolved_path = str(page_path or "").strip()
+        if not resolved_path:
+            resolved_path = f"{base_dir}/{_slugify(resolved_title, normalized_category)}.md"
+
+        normalized_sources = list(
+            dict.fromkeys(
+                str(item or "").strip()
+                for item in (source_paths or [])
+                if str(item or "").strip()
+            )
+        )
+        meta = {
+            "title": resolved_title,
+            "description": f"Saved {normalized_category} derived from a query.",
+            "tags": [normalized_category, "query", "saved-answer"],
+            "derived_from_query": query,
+            "sources": normalized_sources,
+            "updated_at": now_iso(),
+        }
+        body_lines = [
+            f"# {resolved_title}",
+            "",
+            "## Query",
+            "",
+            query or "_No query recorded._",
+            "",
+            "## Answer",
+            "",
+            _normalize_multiline_text(answer) or "_No answer recorded._",
+        ]
+        if normalized_sources:
+            body_lines.extend(["", "## Sources", ""])
+            for item in normalized_sources:
+                body_lines.append(f"- [{item}]({item})")
+
+        page = self._write_page_text(normalized_wiki_id, resolved_path, _render_markdown_page(meta, "\n".join(body_lines)))
+        index_page = await self.rebuild_index(normalized_wiki_id)
+        await self.append_log(
+            normalized_wiki_id,
+            title=f"Writeback {resolved_title}",
+            body_lines=[
+                f"Saved query-derived page `{page.get('path')}`.",
+                "Rebuilt `index.md`.",
+            ],
+            kind="writeback",
+        )
+        return {"page": page, "index_page": index_page}
+
+    async def lint_wiki(self, wiki_id: str, *, repair: bool = False) -> Dict[str, Any]:
+        normalized_wiki_id = _slugify(wiki_id, "engine")
+        coordination_status = await self.ensure_coordination_pages(normalized_wiki_id, create_if_missing=repair)
+        pages = await self.list_pages(normalized_wiki_id)
+        root = self._root(normalized_wiki_id)
+        by_path = {str(page.get("path") or ""): page for page in pages}
+        inbound_links: Dict[str, set[str]] = defaultdict(set)
+        findings: List[Dict[str, Any]] = []
+
+        for missing in coordination_status.get("missing_paths") or []:
+            findings.append(
+                {
+                    "severity": "error",
+                    "code": "missing_coordination_page",
+                    "path": str(missing),
+                    "message": f"Required coordination page `{missing}` is missing.",
+                }
+            )
+
+        for page in pages:
+            path = str(page.get("path") or "")
+            content = str(page.get("content") or "")
+            for raw_target in _link_targets(content):
+                normalized_target = _resolve_relative_link_path(root, path, raw_target)
+                if normalized_target and (root / normalized_target).exists():
+                    inbound_links[normalized_target].add(path)
+                    continue
+                findings.append(
+                    {
+                        "severity": "warning",
+                        "code": "broken_relative_link",
+                        "path": path,
+                        "target": normalized_target or str(raw_target or "").strip(),
+                        "message": f"Broken relative link from `{path}` to `{normalized_target or str(raw_target or '').strip()}`.",
+                    }
+                )
+
+        for page in pages:
+            path = str(page.get("path") or "")
+            content = str(page.get("content") or "")
+            meta, _body = _read_frontmatter(content)
+            kind = str(page.get("kind") or "")
+            if kind in _CURATED_KINDS and path not in {"pages/home.md"} and not inbound_links.get(path):
+                findings.append(
+                    {
+                        "severity": "warning",
+                        "code": "orphan_page",
+                        "path": path,
+                        "message": f"Curated page `{path}` has no inbound wiki links.",
+                    }
+                )
+
+            if kind in {"topic", "entity", "analysis", "decision", "workflow", "page"} and not _has_source_evidence(meta, content):
+                findings.append(
+                    {
+                        "severity": "warning",
+                        "code": "missing_provenance",
+                        "path": path,
+                        "message": f"Curated page `{path}` lacks explicit source evidence.",
+                    }
+                )
+
+            if kind in {"topic", "analysis", "decision", "workflow", "entity"} and isinstance(meta.get("sources"), list):
+                page_updated = str(page.get("updated_at") or "")
+                for source_path in [str(item or "").strip() for item in meta.get("sources") or [] if str(item or "").strip()]:
+                    source_page = by_path.get(source_path)
+                    if source_page and str(source_page.get("updated_at") or "") > page_updated:
+                        findings.append(
+                            {
+                                "severity": "info",
+                                "code": "stale_source_reference",
+                                "path": path,
+                                "target": source_path,
+                                "message": f"Source `{source_path}` is newer than curated page `{path}`.",
+                            }
+                        )
+
+        repaired = False
+        if repair:
+            await self.rebuild_index(normalized_wiki_id)
+            await self.append_log(
+                normalized_wiki_id,
+                title="Lint repair",
+                body_lines=[
+                    f"Ran wiki lint with repair. Findings: `{len(findings)}`.",
+                    "Rebuilt `index.md`.",
+                ],
+                kind="lint",
+            )
+            repaired = True
+
+        severity_counts: Dict[str, int] = defaultdict(int)
+        for finding in findings:
+            severity_counts[str(finding.get("severity") or "info")] += 1
+        return {
+            "wiki_id": normalized_wiki_id,
+            "repair": repaired,
+            "coordination_status": coordination_status,
+            "finding_count": len(findings),
+            "severity_counts": dict(severity_counts),
+            "findings": findings,
+        }
 
     async def get_context(self, wiki_id: str) -> Dict[str, Any]:
-        root = self._root(wiki_id)
-        if not root.exists():
-            return {"wiki": None, "pages": [], "coordination_pages": []}
+        coordination_status = await self.ensure_coordination_pages(wiki_id, create_if_missing=True)
         pages = await self.list_pages(wiki_id)
-        coordination_paths = {
-            "README.md",
-            "SCHEMA.md",
-            "index.md",
-            "log.md",
-            "pages/home.md",
-            "01-method-wiki-index.md",
-        }
-        coordination_pages = [page for page in pages if page.get("path") in coordination_paths]
+        coordination_paths = set(str(path or "") for path in coordination_status.get("present_paths") or [])
+        coordination_pages = [page for page in pages if str(page.get("path") or "") in coordination_paths]
         return {
             "wiki": self._meta(wiki_id),
             "pages": pages,
             "coordination_pages": coordination_pages,
+            "coordination_status": coordination_status,
         }
 
     async def search_pages(
@@ -414,6 +1035,7 @@ class WikiService:
         include_content: bool = False,
         kind: Optional[str] = None,
     ) -> Dict[str, Any]:
+        await self.ensure_coordination_pages(wiki_id, create_if_missing=True)
         pages = await self.list_pages(wiki_id)
         filtered = [page for page in pages if not kind or str(page.get("kind") or "") == str(kind)]
         scored = []

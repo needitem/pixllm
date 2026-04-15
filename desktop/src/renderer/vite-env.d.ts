@@ -39,7 +39,7 @@ declare global {
         model: string;
         baseUrl: string;
         apiToken: string;
-        sharedWikiId?: string;
+        wikiId?: string;
         selectedFilePath?: string;
         sessionId?: string;
         historyMessages?: Array<{ role: string; content: string }>;
@@ -87,7 +87,7 @@ declare global {
     llmApiToken: string;
     workspacePath: string;
     selectedModel: string;
-    sharedWikiId: string;
+    wikiId: string;
     recentWorkspaces: string[];
   };
 

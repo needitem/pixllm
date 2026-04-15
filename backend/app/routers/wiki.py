@@ -3,11 +3,12 @@ from fastapi import APIRouter, Depends
 from ..deps import get_redis
 from ..envelopes import err, ok
 from ..schemas.wiki import (
-    WikiAppendLogRequest,
-    WikiBootstrapRequest,
     WikiContextRequest,
+    WikiLintRequest,
     WikiReadPageRequest,
+    WikiRebuildIndexRequest,
     WikiSearchRequest,
+    WikiWritebackRequest,
     WikiWritePageRequest,
 )
 from ..services.wiki.service import WikiService
@@ -22,23 +23,16 @@ async def list_wikis(redis=Depends(get_redis)):
     return ok({"items": await svc.list_wikis()})
 
 
-@router.post("/bootstrap")
-async def bootstrap_wiki(payload: WikiBootstrapRequest, redis=Depends(get_redis)):
-    svc = WikiService(redis)
-    data = await svc.bootstrap_wiki(
-        payload.wiki_id,
-        name=payload.name,
-        description=payload.description,
-        overwrite=payload.overwrite,
-        user_id=payload.user_id,
-    )
-    return ok(data)
-
-
 @router.post("/context")
 async def wiki_context(payload: WikiContextRequest, redis=Depends(get_redis)):
     svc = WikiService(redis)
     return ok(await svc.get_context(payload.wiki_id))
+
+
+@router.post("/index/rebuild")
+async def rebuild_wiki_index(payload: WikiRebuildIndexRequest, redis=Depends(get_redis)):
+    svc = WikiService(redis)
+    return ok(await svc.rebuild_index(payload.wiki_id))
 
 
 @router.post("/search")
@@ -67,25 +61,33 @@ async def read_wiki_page(payload: WikiReadPageRequest, redis=Depends(get_redis))
 @router.put("/page")
 async def write_wiki_page(payload: WikiWritePageRequest, redis=Depends(get_redis)):
     svc = WikiService(redis)
-    page = await svc.upsert_page(
+    page = await svc.write_page(
         payload.wiki_id,
         payload.path,
         payload.content,
         title=payload.title,
         kind=payload.kind,
-        user_id=payload.user_id,
     )
     return ok(page)
 
 
-@router.post("/log/append")
-async def append_wiki_log(payload: WikiAppendLogRequest, redis=Depends(get_redis)):
+@router.post("/lint")
+async def lint_wiki(payload: WikiLintRequest, redis=Depends(get_redis)):
     svc = WikiService(redis)
-    page = await svc.append_log(
-        payload.wiki_id,
-        title=payload.title,
-        body_lines=payload.body_lines,
-        kind=payload.kind,
-        user_id=payload.user_id,
+    return ok(await svc.lint_wiki(payload.wiki_id, repair=payload.repair))
+
+
+@router.post("/writeback")
+async def writeback_wiki_page(payload: WikiWritebackRequest, redis=Depends(get_redis)):
+    svc = WikiService(redis)
+    return ok(
+        await svc.write_query_page(
+            payload.wiki_id,
+            query=payload.query,
+            answer=payload.answer,
+            title=payload.title or "",
+            category=payload.category,
+            page_path=payload.path or "",
+            source_paths=payload.source_paths,
+        )
     )
-    return ok(page)

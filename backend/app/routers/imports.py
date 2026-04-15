@@ -135,7 +135,7 @@ async def _encode_chunks(chunks: list[str]):
 
 
 def _remove_points_by_field(field: str, value: str, collection_name: Optional[str] = None):
-    kwargs = {"collection_name": collection_name or config.RAG_DEFAULT_COLLECTION}
+    kwargs = {"collection_name": collection_name or config.EVIDENCE_DEFAULT_COLLECTION}
     try:
         kwargs["points_selector"] = Filter(must=[FieldCondition(key=field, match=MatchValue(value=value))])
     except Exception:

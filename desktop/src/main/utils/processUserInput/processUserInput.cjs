@@ -45,14 +45,15 @@ const TOOL_GROUPS = {
     'task_stop',
   ],
   reference: [
-    'company_reference_search',
+    'wiki_evidence_search',
   ],
   wiki: [
-    'wiki_bootstrap',
     'wiki_search',
     'wiki_read',
     'wiki_write',
-    'wiki_append_log',
+    'wiki_rebuild_index',
+    'wiki_lint',
+    'wiki_writeback',
   ],
   config: [
     'config',
@@ -273,6 +274,12 @@ function deriveInitialToolNames({
     intent.wantsChanges
     || intent.createLikely
   );
+  const shouldPreferWorkflowWiki = Boolean(
+    intent.wantsAnalysis
+    && !intent.wantsChanges
+    && !intent.createLikely
+    && hasFocusedSymbols,
+  );
 
   if (hasWorkspacePath) {
     addTools(
@@ -287,6 +294,9 @@ function deriveInitialToolNames({
     if (shouldEnableMutation) {
       addTools(names, TOOL_GROUPS.mutation);
     }
+  }
+  if (shouldPreferWorkflowWiki || focus.mentionsWiki) {
+    addTools(names, TOOL_GROUPS.wiki);
   }
   addTools(names, TOOL_GROUPS.reference);
 
@@ -361,9 +371,12 @@ function summarizeRequestContext(context = {}) {
   }
 
   if (context.focus?.mentionsWiki) {
-    lines.push('Wiki requests should use the backend engine wiki tools.');
-    lines.push('If the engine wiki is missing shared coordination files, initialize them with `wiki_bootstrap` before creating or editing pages.');
-    lines.push('For engine wiki maintenance, keep `SCHEMA.md`, `index.md`, and `log.md` consistent with page updates.');
+    lines.push('Wiki requests should use the backend wiki tools.');
+    lines.push('For wiki maintenance, prefer `wiki_search` and `wiki_read` before `wiki_write`, `wiki_rebuild_index`, `wiki_lint`, or `wiki_writeback`.');
+    lines.push('Keep `SCHEMA.md`, `index.md`, and `log.md` consistent with page updates.');
+  }
+  if (context.workflowPlan?.preferWikiFirst) {
+    lines.push('Workflow-first guidance: search wiki workflow pages first, read the best matching workflow page next, then inspect the implementation or methods pages referenced by that workflow before using broader evidence search.');
   }
 
   const initialToolNames = Array.isArray(context.initialToolNames) ? context.initialToolNames : [];
@@ -416,6 +429,17 @@ function buildRequestContext(context = {}) {
         : [],
     ),
   };
+  const workflowPlan = {
+    preferWikiFirst: Boolean(
+      context?.workflowPlan?.preferWikiFirst
+      || (
+        intent.wantsAnalysis
+        && !intent.wantsChanges
+        && !intent.createLikely
+        && promptIdentifierHints.length > 0
+      )
+    ),
+  };
   const initialToolNames = uniqStrings(deriveInitialToolNames({
     intent,
     focus,
@@ -452,6 +476,7 @@ function buildRequestContext(context = {}) {
     symbolHints,
     searchTerms,
     artifactPlan,
+    workflowPlan,
     initialToolNames,
     summary: summarizeRequestContext({
       explicitPaths,
@@ -464,6 +489,7 @@ function buildRequestContext(context = {}) {
       symbolHints,
       searchTerms,
       artifactPlan,
+      workflowPlan,
       initialToolNames,
     }),
   };

@@ -81,6 +81,7 @@ export type WikiContextResponse = {
   wiki?: WikiInfo | null;
   pages?: WikiSearchResult[];
   coordination_pages?: WikiSearchResult[];
+  coordination_status?: WikiCoordinationStatus | null;
 };
 
 export type WikiPage = {
@@ -92,6 +93,42 @@ export type WikiPage = {
   summary?: string;
   updated_at?: string;
   version?: number;
+};
+
+export type WikiCoordinationStatus = {
+  wiki_id?: string;
+  required_paths?: string[];
+  optional_paths?: string[];
+  required_present_paths?: string[];
+  optional_present_paths?: string[];
+  present_paths?: string[];
+  missing_paths?: string[];
+  missing_paths_before?: string[];
+  created_paths?: string[];
+  auto_bootstrapped?: boolean;
+  has_coordination_spine?: boolean;
+};
+
+export type WikiLintFinding = {
+  severity?: string;
+  code?: string;
+  path?: string;
+  target?: string;
+  message?: string;
+};
+
+export type WikiLintResponse = {
+  wiki_id?: string;
+  repair?: boolean;
+  coordination_status?: WikiCoordinationStatus | null;
+  finding_count?: number;
+  severity_counts?: Record<string, number>;
+  findings?: WikiLintFinding[];
+};
+
+export type WikiWritebackResponse = {
+  page?: WikiPage | null;
+  index_page?: WikiPage | null;
 };
 
 export type StreamStatusPayload = {
@@ -310,6 +347,11 @@ async function backendRequest<T>(baseUrl: string, apiToken: string, requestPath:
 export const fetchWikiContext = (baseUrl: string, token: string, wikiId: string) =>
   backendRequest<WikiContextResponse>(baseUrl, token, '/v1/wiki/context', 'POST', { wiki_id: toStringValue(wikiId) || 'engine' });
 
+export const rebuildWikiIndex = (baseUrl: string, token: string, wikiId: string) =>
+  backendRequest<WikiPage>(baseUrl, token, '/v1/wiki/index/rebuild', 'POST', {
+    wiki_id: toStringValue(wikiId) || 'engine',
+  });
+
 export const searchWiki = (
   baseUrl: string,
   token: string,
@@ -339,6 +381,12 @@ export const readWikiPage = (baseUrl: string, token: string, wikiId: string, pat
     path: toStringValue(path),
   });
 
+export const lintWiki = (baseUrl: string, token: string, wikiId: string, repair = false) =>
+  backendRequest<WikiLintResponse>(baseUrl, token, '/v1/wiki/lint', 'POST', {
+    wiki_id: toStringValue(wikiId) || 'engine',
+    repair,
+  });
+
 export const writeWikiPage = (
   baseUrl: string,
   token: string,
@@ -356,6 +404,27 @@ export const writeWikiPage = (
     kind: toStringValue(kind),
   });
 
+export const writebackWikiPage = (
+  baseUrl: string,
+  token: string,
+  wikiId: string,
+  query: string,
+  answer: string,
+  title = '',
+  category = 'analysis',
+  path = '',
+  sourcePaths: string[] = [],
+) =>
+  backendRequest<WikiWritebackResponse>(baseUrl, token, '/v1/wiki/writeback', 'POST', {
+    wiki_id: toStringValue(wikiId) || 'engine',
+    query: toStringValue(query),
+    answer: String(answer || ''),
+    title: toStringValue(title),
+    category: toStringValue(category) || 'analysis',
+    path: toStringValue(path),
+    source_paths: Array.isArray(sourcePaths) ? sourcePaths : [],
+  });
+
 export async function streamLocalAgentChat(
   payload: {
     workspacePath: string;
@@ -367,7 +436,7 @@ export async function streamLocalAgentChat(
     serverApiToken?: string;
     llmBaseUrl?: string;
     llmApiToken?: string;
-    sharedWikiId?: string;
+    wikiId?: string;
     selectedFilePath?: string;
     sessionId?: string;
     historyMessages?: Array<{ role: string; content: string }>;

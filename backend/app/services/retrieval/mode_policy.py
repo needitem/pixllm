@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import Optional
 
-from ... import rag_config
+from ... import wiki_config
 
 
 @dataclass
@@ -36,11 +36,11 @@ def normalize_mode(value: str) -> str:
 
 
 def _code_first_types() -> set:
-    return set(rag_config.routing_code_first_response_types())
+    return set(wiki_config.routing_code_first_response_types())
 
 
 def _doc_first_types() -> set:
-    return set(rag_config.routing_doc_first_response_types())
+    return set(wiki_config.routing_doc_first_response_types())
 
 
 def default_mode_for_response_type(response_type: str) -> str:

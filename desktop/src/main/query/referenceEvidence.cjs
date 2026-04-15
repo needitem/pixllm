@@ -4,7 +4,11 @@ function toStringValue(value) {
   return String(value || '').trim();
 }
 
-function summarizeCompanyReferenceEvidence(trace = []) {
+function normalizePath(value) {
+  return toStringValue(value).replace(/\\/g, '/');
+}
+
+function summarizeWikiEvidence(trace = []) {
   const evidenceTypes = new Set();
   let searchCount = 0;
   let codeMatchCount = 0;
@@ -14,9 +18,14 @@ function summarizeCompanyReferenceEvidence(trace = []) {
   let referenceAnchorCount = 0;
   let exampleCount = 0;
   let apiFactCount = 0;
+  let workflowSourceCount = 0;
+  let methodSourceCount = 0;
+  let workflowSlotsComplete = false;
+  let workflowBundleSeen = false;
+  let workflowMissingSlots = [];
 
   for (const step of Array.isArray(trace) ? trace : []) {
-    if (toStringValue(step?.tool) !== 'company_reference_search' || step?.observation?.ok === false) {
+    if (toStringValue(step?.tool) !== 'wiki_evidence_search' || step?.observation?.ok === false) {
       continue;
     }
 
@@ -40,6 +49,9 @@ function summarizeCompanyReferenceEvidence(trace = []) {
     const apiFacts = Array.isArray(observation.api_facts || observation.apiFacts)
       ? (observation.api_facts || observation.apiFacts)
       : [];
+    const workflowBundle = observation?.workflow_bundle && typeof observation.workflow_bundle === 'object'
+      ? observation.workflow_bundle
+      : {};
 
     codeMatchCount += matches.length;
     codeWindowCount += windows.length;
@@ -48,6 +60,23 @@ function summarizeCompanyReferenceEvidence(trace = []) {
     referenceAnchorCount += referenceAnchors.length;
     exampleCount += examples.length;
     apiFactCount += apiFacts.length;
+    for (const item of sources) {
+      const pathValue = normalizePath(item?.file_path || item?.source_url || '');
+      if (!pathValue) continue;
+      if (pathValue.startsWith('workflows/') || pathValue.includes('/workflows/')) {
+        workflowSourceCount += 1;
+      }
+      if (pathValue.startsWith('methods/') || pathValue.includes('/methods/')) {
+        methodSourceCount += 1;
+      }
+    }
+    if (Object.keys(workflowBundle).length > 0) {
+      workflowBundleSeen = true;
+      workflowSlotsComplete = Boolean(workflowBundle.slots_complete);
+      workflowMissingSlots = Array.isArray(workflowBundle.missing_slots)
+        ? workflowBundle.missing_slots.map((item) => toStringValue(item)).filter(Boolean)
+        : [];
+    }
 
     for (const item of [...matches, ...windows]) {
       const evidenceType = toStringValue(item?.evidenceType || item?.evidence_type).toLowerCase();
@@ -86,14 +115,21 @@ function summarizeCompanyReferenceEvidence(trace = []) {
     referenceAnchorCount,
     exampleCount,
     apiFactCount,
+    workflowSourceCount,
+    methodSourceCount,
     evidenceTypes: normalizedEvidenceTypes,
     hasCodeEvidence,
     hasDocEvidence,
     hasDocsOnlyEvidence: hasDocEvidence && !hasCodeEvidence,
     hasVerifiedCodeEvidence,
+    hasWorkflowEvidence: workflowSourceCount > 0,
+    hasMethodEvidence: methodSourceCount > 0,
+    workflowBundleSeen,
+    workflowSlotsComplete,
+    workflowMissingSlots,
   };
 }
 
 module.exports = {
-  summarizeCompanyReferenceEvidence,
+  summarizeWikiEvidence,
 };

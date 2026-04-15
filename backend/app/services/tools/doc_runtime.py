@@ -4,7 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
-from ... import config
+from ... import config, wiki_config
 from ..retrieval.service import run_retrieval
 from ...core.policy import SecurityPolicy
 from .access import register_code_search, register_doc_search, resolve_tool_user_context
@@ -54,7 +54,7 @@ _LOOKUP_HINT_TOKENS = {
 
 
 def _methods_wiki_root() -> Path:
-    return Path(__file__).resolve().parents[3] / ".profiles" / "wiki" / "engine" / "methods"
+    return Path(__file__).resolve().parents[3] / config.WIKI_PROFILE_DIR / "wiki" / "engine" / "methods"
 
 
 def _workflow_wiki_root() -> Path:
@@ -499,7 +499,7 @@ async def search_docs(
         message=query,
         query=query,
         top_k=capped_top_k,
-        collection=collection or config.RAG_DEFAULT_COLLECTION,
+        collection=collection or config.EVIDENCE_DEFAULT_COLLECTION,
         filters=filters or {},
         language_filter=(filters or {}).get("language") if isinstance(filters, dict) else None,
         module_filter=(filters or {}).get("module") if isinstance(filters, dict) else None,
@@ -533,7 +533,7 @@ async def open_doc_chunks(
 
     try:
         points = search_svc.qdrant.retrieve(
-            collection_name=collection or config.RAG_DEFAULT_COLLECTION,
+            collection_name=collection or config.EVIDENCE_DEFAULT_COLLECTION,
             ids=qdrant_ids,
             with_payload=True,
         )
@@ -583,6 +583,249 @@ async def get_doc_metadata(doc_store, doc_id: str) -> Dict[str, Any]:
     return {"doc_id": doc_id, "found": True, "document": document, "current_revision": current_revision, "recent_revisions": revisions}
 
 
+def _source_file_path(row: Dict[str, Any]) -> str:
+    return str(row.get("file_path") or row.get("source_url") or "").strip().replace("\\", "/")
+
+
+def _is_workflow_row(row: Dict[str, Any]) -> bool:
+    path = _source_file_path(row)
+    if path.startswith("workflows/"):
+        return True
+    if "/workflows/" in path:
+        return True
+    return False
+
+
+def _match_method_records_from_candidates(
+    *,
+    query: str,
+    workflow_rows: Sequence[Dict[str, Any]],
+    max_records: int,
+) -> List[Dict[str, Any]]:
+    records = _load_methods_api_index()
+    if not records:
+        return []
+
+    query_targets = _extract_lookup_targets(query, records)
+    workflow_symbols = extract_doc_symbol_candidates(workflow_rows, max_candidates=12)
+    type_candidates = _unique_preserve_order([*query_targets.get("type_candidates", []), *workflow_symbols])[:8]
+    member_candidates = _unique_preserve_order([*query_targets.get("member_candidates", []), *workflow_symbols])[:10]
+
+    related_records = _derive_workflow_related_records(
+        type_candidates=type_candidates,
+        member_candidates=member_candidates,
+    )
+    if related_records:
+        return related_records[:max_records]
+
+    exact_lookup = build_exact_api_lookup_summary(query)
+    if exact_lookup and exact_lookup.get("source_records"):
+        return list(exact_lookup.get("source_records") or [])[:max_records]
+    return []
+
+
+def _select_workflow_slot_records(
+    *,
+    query_targets: Dict[str, Any],
+    method_records: Sequence[Dict[str, Any]],
+    max_records: int = 3,
+) -> List[Dict[str, Any]]:
+    selected: List[Dict[str, Any]] = []
+    seen = set()
+
+    def add_record(record: Dict[str, Any]) -> None:
+        key = str(record.get("qualified_symbol") or "").strip().lower()
+        if not key or key in seen:
+            return
+        seen.add(key)
+        selected.append(record)
+
+    explicit_type_keys = {
+        _normalize_lookup_token(item)
+        for item in query_targets.get("type_candidates") or []
+        if _normalize_lookup_token(item)
+    }
+    explicit_member_keys = {
+        _normalize_lookup_token(item)
+        for item in query_targets.get("member_candidates") or []
+        if _normalize_lookup_token(item)
+    }
+    explicit_lookup = bool(query_targets.get("is_specific_lookup"))
+
+    if explicit_lookup and (explicit_type_keys or explicit_member_keys):
+        for record in method_records or []:
+            type_key = _normalize_lookup_token(record.get("type_name") or record.get("qualified_type"))
+            member_key = _normalize_lookup_token(record.get("member_name"))
+            if explicit_type_keys and type_key not in explicit_type_keys:
+                continue
+            if explicit_member_keys and member_key not in explicit_member_keys:
+                continue
+            add_record(record)
+            if len(selected) >= max_records:
+                return selected
+        return selected
+
+    for record in method_records or []:
+        add_record(record)
+        if len(selected) >= max_records:
+            return selected
+    return selected
+
+
+def _build_workflow_slot_bundle(
+    *,
+    query: str,
+    workflow_rows: Sequence[Dict[str, Any]],
+    method_records: Sequence[Dict[str, Any]],
+) -> Dict[str, Any]:
+    methods_index = _load_methods_api_index()
+    query_targets = _extract_lookup_targets(query, methods_index) if methods_index else {
+        "type_candidates": [],
+        "member_candidates": [],
+        "is_specific_lookup": False,
+    }
+    workflow_symbols = {
+        _normalize_lookup_token(item)
+        for item in extract_doc_symbol_candidates(workflow_rows, max_candidates=16)
+        if _normalize_lookup_token(item)
+    }
+    slot_records = _select_workflow_slot_records(
+        query_targets=query_targets,
+        method_records=method_records,
+        max_records=3,
+    )
+    required_slots: List[str] = ["workflow"]
+    filled_slots = set()
+    if workflow_rows:
+        filled_slots.add("workflow")
+
+    type_candidates = _unique_preserve_order(query_targets.get("type_candidates") or [])
+    member_candidates = _unique_preserve_order(query_targets.get("member_candidates") or [])
+    explicit_slot_targets = bool(query_targets.get("is_specific_lookup")) and bool(type_candidates or member_candidates)
+    if explicit_slot_targets and member_candidates:
+        for item in type_candidates:
+            required_slots.append(f"type:{item}")
+        for item in member_candidates:
+            required_slots.append(f"member:{item}")
+    elif explicit_slot_targets and type_candidates:
+        for item in type_candidates:
+            required_slots.append(f"type:{item}")
+    elif slot_records:
+        for record in slot_records:
+            type_name = str(record.get("type_name") or "").strip()
+            member_name = str(record.get("member_name") or "").strip()
+            if type_name:
+                required_slots.append(f"type:{type_name}")
+            if member_name:
+                required_slots.append(f"member:{member_name}")
+    else:
+        required_slots.append("method_or_anchor")
+
+    method_type_keys = {
+        _normalize_lookup_token(record.get("type_name"))
+        for record in method_records or []
+        if _normalize_lookup_token(record.get("type_name"))
+    }
+    method_member_keys = {
+        _normalize_lookup_token(record.get("member_name"))
+        for record in method_records or []
+        if _normalize_lookup_token(record.get("member_name"))
+    }
+
+    for type_name in type_candidates:
+        type_key = _normalize_lookup_token(type_name)
+        if type_key and (type_key in workflow_symbols or type_key in method_type_keys):
+            filled_slots.add(f"type:{type_name}")
+
+    for member_name in member_candidates:
+        member_key = _normalize_lookup_token(member_name)
+        if member_key and member_key in method_member_keys:
+            filled_slots.add(f"member:{member_name}")
+
+    for record in slot_records:
+        type_name = str(record.get("type_name") or "").strip()
+        member_name = str(record.get("member_name") or "").strip()
+        if type_name:
+            filled_slots.add(f"type:{type_name}")
+        if member_name:
+            filled_slots.add(f"member:{member_name}")
+
+    if "method_or_anchor" in required_slots and (
+        method_records
+        or extract_wiki_source_anchors(workflow_rows)
+    ):
+        filled_slots.add("method_or_anchor")
+
+    required_unique = _unique_preserve_order(required_slots)
+    filled_unique = [slot for slot in required_unique if slot in filled_slots]
+    missing_slots = [slot for slot in required_unique if slot not in filled_slots]
+    return {
+        "required_slots": required_unique,
+        "filled_slots": filled_unique,
+        "missing_slots": missing_slots,
+        "slots_complete": len(missing_slots) == 0,
+        "workflow_paths": _unique_preserve_order([_source_file_path(row) for row in workflow_rows if _source_file_path(row)]),
+        "method_paths": _unique_preserve_order([
+            str(record.get("doc_path") or "").strip()
+            for record in method_records or []
+            if str(record.get("doc_path") or "").strip()
+        ]),
+    }
+
+
+def _build_workflow_first_bundle(
+    *,
+    query: str,
+    top_k: int,
+    doc_open_limit: int,
+    max_chars: int,
+    explicit_wiki_id: str,
+) -> Dict[str, Any]:
+    workflow_search_limit = max(min(top_k, 20), min(max(4, doc_open_limit * 3), 20))
+    wiki_rows = list(
+        search_wiki(
+            query=query,
+            top_k=workflow_search_limit,
+            max_chars=max_chars,
+            wiki_id=explicit_wiki_id,
+        ).get("results", [])
+        or []
+    )
+    workflow_rows = [row for row in wiki_rows if _is_workflow_row(row)][: max(1, min(doc_open_limit, 4))]
+    if not workflow_rows:
+        return {
+            "sources": [],
+            "slot_status": {
+                "required_slots": ["workflow"],
+                "filled_slots": [],
+                "missing_slots": ["workflow"],
+                "slots_complete": False,
+                "workflow_paths": [],
+                "method_paths": [],
+            },
+        }
+
+    related_records = _match_method_records_from_candidates(
+        query=query,
+        workflow_rows=workflow_rows,
+        max_records=max(1, doc_open_limit - len(workflow_rows)),
+    )
+    method_rows = [
+        _build_lookup_source_excerpt(record, section_index=index + 1)
+        for index, record in enumerate(related_records[: max(0, doc_open_limit - len(workflow_rows))])
+    ]
+    sources = merge_doc_sources([workflow_rows, method_rows])[:doc_open_limit]
+    slot_status = _build_workflow_slot_bundle(
+        query=query,
+        workflow_rows=workflow_rows,
+        method_records=related_records,
+    )
+    return {
+        "sources": sources,
+        "slot_status": slot_status,
+    }
+
+
 async def collect_sources(
     *,
     redis,
@@ -597,29 +840,78 @@ async def collect_sources(
     active_collection: str,
     search_only: bool,
     response_type: str,
+    workflow_first: bool = False,
 ) -> List[Dict[str, Any]]:
-    wiki_rows = list(search_wiki(query=query, top_k=min(top_k, doc_open_limit), max_chars=max_chars).get("results", []) or [])
+    rt = str(response_type or "").strip().lower()
+    explicit_wiki_id = ""
+    if isinstance(filters, dict):
+        explicit_wiki_id = str(filters.get("wiki_id") or "").strip().lower()
 
-    doc_rows = list(
-        (
-            await search_docs(
-                redis,
-                search_svc,
-                embed_model,
+    code_first_types = {
+        "code_explain",
+        "code_review",
+        "bug_fix",
+        "refactor",
+        "troubleshooting",
+    }
+    wiki_first_types = set(wiki_config.routing_doc_first_response_types()) | {
+        "api_lookup",
+        "code_generate",
+        "compare",
+        "design_review",
+        "migration",
+        "general",
+        "doc_lookup",
+    }
+    wiki_priority = "code_first" if rt in code_first_types else "wiki_first" if rt in wiki_first_types else "wiki_first"
+
+    workflow_bundle = _build_workflow_first_bundle(
+        query=query,
+        top_k=top_k,
+        doc_open_limit=doc_open_limit,
+        max_chars=max_chars,
+        explicit_wiki_id=explicit_wiki_id,
+    ) if workflow_first else {"sources": [], "slot_status": {}}
+
+    wiki_rows = list(workflow_bundle.get("sources") or []) if workflow_first else []
+    if not wiki_rows:
+        wiki_rows = list(
+            search_wiki(
                 query=query,
-                filters=filters,
-                top_k=top_k,
-                collection=active_collection,
-                session_id=session_id,
-                use_reranker=str(response_type or "").strip().lower() in {"api_lookup", "code_generate"},
-            )
-        ).get("results", [])
-        or []
-    )
+                top_k=min(top_k, doc_open_limit),
+                max_chars=max_chars,
+                wiki_id=explicit_wiki_id,
+            ).get("results", [])
+            or []
+        )
+
+    doc_rows: List[Dict[str, Any]] = []
+    if not bool((workflow_bundle.get("slot_status") or {}).get("slots_complete")):
+        doc_rows = list(
+            (
+                await search_docs(
+                    redis,
+                    search_svc,
+                    embed_model,
+                    query=query,
+                    filters=filters,
+                    top_k=top_k,
+                    collection=active_collection,
+                    session_id=session_id,
+                    use_reranker=str(response_type or "").strip().lower() in {"api_lookup", "code_generate"},
+                )
+            ).get("results", [])
+            or []
+        )
+    strong_wiki_coverage = len(wiki_rows) >= min(2, max(1, doc_open_limit // 2))
     if search_only:
+        if wiki_priority == "code_first":
+            return merge_doc_sources([doc_rows, wiki_rows])[:doc_open_limit]
         return merge_doc_sources([wiki_rows, doc_rows])[:doc_open_limit]
 
     remaining = max(0, doc_open_limit - len(wiki_rows[:doc_open_limit]))
+    if wiki_priority != "code_first" and strong_wiki_coverage:
+        remaining = min(remaining, 2)
     chunk_ids = [
         row.get("chunk_id")
         for row in doc_rows
@@ -634,6 +926,8 @@ async def collect_sources(
         session_id=session_id,
         explicit_reference=False,
     )
+    if wiki_priority == "code_first":
+        return merge_doc_sources([opened.get("chunks", []), doc_rows, wiki_rows])[:doc_open_limit]
     return merge_doc_sources([wiki_rows, opened.get("chunks", []), doc_rows])[:doc_open_limit]
 
 
@@ -920,6 +1214,7 @@ async def lookup_sources_and_code(
     max_chars: int,
     max_line_span: int,
     response_type: str,
+    workflow_first: bool,
     search_only: bool,
     collection: Optional[str],
     collect_code_evidence_async,
@@ -936,7 +1231,7 @@ async def lookup_sources_and_code(
     capped_limit = clamp_int(limit, 1, 50)
     doc_open_limit = min(capped_limit, clamp_int(config.CHAT_TOOL_DOC_OPEN_LIMIT, 1, 50))
     code_window_cap = clamp_int(config.CHAT_TOOL_CODE_MAX_WINDOWS, 4, 24)
-    active_collection = collection or config.RAG_DEFAULT_COLLECTION
+    active_collection = collection or config.EVIDENCE_DEFAULT_COLLECTION
 
     if str(response_type or "").strip().lower() in {"api_lookup", "exact_api_lookup"}:
         lookup_summary = build_exact_api_lookup_summary(query)
@@ -969,6 +1264,14 @@ async def lookup_sources_and_code(
                 },
             }
 
+    workflow_bundle = _build_workflow_first_bundle(
+        query=query,
+        top_k=capped_top_k,
+        doc_open_limit=doc_open_limit,
+        max_chars=max_chars,
+        explicit_wiki_id=str(filters.get("wiki_id") or "").strip().lower() if isinstance(filters, dict) else "",
+    ) if workflow_first else {"slot_status": {}}
+
     sources = await collect_sources(
         redis=redis,
         search_svc=search_svc,
@@ -982,6 +1285,7 @@ async def lookup_sources_and_code(
         active_collection=active_collection,
         search_only=search_only,
         response_type=response_type,
+        workflow_first=workflow_first,
     )
     doc_symbol_candidates = extract_doc_symbol_candidates(sources, max_candidates=12)
     wiki_code_windows = await collect_wiki_anchor_code_windows(
@@ -1015,4 +1319,5 @@ async def lookup_sources_and_code(
         "sources": sources,
         "code_windows": code_windows,
         "citations": build_citations(sources, code_windows),
+        "workflow_bundle": workflow_bundle.get("slot_status") if workflow_first else {},
     }

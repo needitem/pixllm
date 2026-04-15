@@ -275,6 +275,7 @@ async def orchestrate_lookup_sources_and_code(
         query=request.query,
         filters=request.filters,
         response_type=request.response_type,
+        workflow_first=request.workflow_first,
         top_k=request.top_k,
         limit=request.limit,
         max_chars=request.max_chars,

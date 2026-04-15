@@ -1,7 +1,7 @@
 import re
 from typing import Dict, Iterable, List, Sequence, Tuple
 
-from ... import rag_config
+from ... import wiki_config
 
 _IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{1,}")
 _ASCII_WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
@@ -75,7 +75,7 @@ def split_identifier_parts(value: str) -> List[str]:
 
 
 def identifier_structure_score(token: str) -> int:
-    weights = rag_config.heuristics_weights("identifier_structure_score", _IDENTIFIER_STRUCTURE_SCORE_DEFAULTS)
+    weights = wiki_config.heuristics_weights("identifier_structure_score", _IDENTIFIER_STRUCTURE_SCORE_DEFAULTS)
     raw = str(token or "").strip()
     parts = split_identifier_parts(raw)
     score = 0
@@ -103,7 +103,7 @@ def _unique_preserving_order(values: Iterable[str]) -> List[str]:
 
 
 def _query_term_config() -> Dict[str, int]:
-    return rag_config.heuristics_weights("query_term_extraction", _QUERY_TERM_EXTRACTION_DEFAULTS)
+    return wiki_config.heuristics_weights("query_term_extraction", _QUERY_TERM_EXTRACTION_DEFAULTS)
 def _title_compound(words: Sequence[str]) -> str:
     return "".join(word[:1].upper() + word[1:] for word in words if word)
 
@@ -230,7 +230,7 @@ def _iter_symbol_candidate_pool(query: str) -> List[Tuple[str, str]]:
 
 
 def extract_symbol_query_candidates(query: str, max_candidates: int = 3) -> List[str]:
-    weights = rag_config.heuristics_weights("symbol_query_candidate_score", _SYMBOL_QUERY_CANDIDATE_SCORE_DEFAULTS)
+    weights = wiki_config.heuristics_weights("symbol_query_candidate_score", _SYMBOL_QUERY_CANDIDATE_SCORE_DEFAULTS)
     config = _query_term_config()
     scored: List[Tuple[int, str]] = []
 

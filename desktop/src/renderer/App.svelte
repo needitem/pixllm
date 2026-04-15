@@ -7,7 +7,9 @@
     fetchRun,
     fetchRuns,
     fetchWikiContext,
+    lintWiki,
     readWikiPage,
+    rebuildWikiIndex,
     rejectRun,
     resumeRun,
     searchWiki,
@@ -31,8 +33,11 @@
     type RunTask,
     type StreamDonePayload,
     type StreamStatusPayload,
+    type WikiCoordinationStatus,
+    type WikiLintFinding,
     type WikiPage,
     type WikiSearchResult,
+    writebackWikiPage,
     writeWikiPage
   } from './lib/api';
   import { desktop } from './lib/bridge';
@@ -160,7 +165,7 @@
     llmApiToken: '',
     workspacePath: '',
     selectedModel: 'qwen3.5-27b',
-    sharedWikiId: 'engine',
+    wikiId: 'engine',
     recentWorkspaces: []
   };
   let settings: DesktopSettings = { ...DEFAULT_SETTINGS };
@@ -207,11 +212,14 @@
   let wikiPageUpdatedAt = '';
   let wikiBusy = false;
   let wikiSaving = false;
+  let wikiLintBusy = false;
   let wikiStatusMessage = '';
   let wikiErrorMessage = '';
+  let wikiCoordinationStatus: WikiCoordinationStatus | null = null;
+  let wikiLintFindings: WikiLintFinding[] = [];
   let wikiOriginalSignature = '';
   let wikiDirty = false;
-  let resolvedSharedWikiId = 'engine';
+  let resolvedWikiId = 'engine';
   let wikiLoadKey = '';
   let lastWikiLoadKey = '';
 
@@ -270,7 +278,7 @@
     workspaceDirtyCount,
     workspaceDiffCount
   );
-  $: resolvedSharedWikiId = resolveSharedWikiId(settings.sharedWikiId);
+  $: resolvedWikiId = resolveWikiId(settings.wikiId);
   $: wikiDirty = wikiEditorSignature() !== wikiOriginalSignature;
   $: connectionHostLabel = compactEndpoint(settings.serverBaseUrl);
   $: appBuildLabel = appInfo
@@ -322,7 +330,7 @@
     });
   }
   $: wikiLoadKey = viewMode === 'wiki'
-    ? `${String(settings.serverBaseUrl || '').trim()}|${resolvedSharedWikiId}`
+    ? `${String(settings.serverBaseUrl || '').trim()}|${resolvedWikiId}`
     : '';
   $: if (wikiLoadKey && wikiLoadKey !== lastWikiLoadKey) {
     lastWikiLoadKey = wikiLoadKey;
@@ -351,13 +359,9 @@
       .trim();
   }
 
-  function resolveSharedWikiId(value: string): string {
+  function resolveWikiId(value: string): string {
     const normalized = String(value || '').trim().toLowerCase();
-    if (!normalized) return 'engine';
-    if (['company_reference', 'company-reference', 'reference', 'shared_reference'].includes(normalized)) {
-      return 'engine';
-    }
-    return normalized;
+    return normalized || 'engine';
   }
 
   function formatDateTime(value: string | Date | null | undefined): string {
@@ -457,6 +461,28 @@
     return output;
   }
 
+  function latestAssistantMessage(): ConversationMessage | null {
+    for (let index = conversation.length - 1; index >= 0; index -= 1) {
+      const message = conversation[index];
+      if (message.role === 'assistant' && String(message.content || '').trim()) {
+        return message;
+      }
+    }
+    return null;
+  }
+
+  function latestUserPromptBefore(messageId: string): string {
+    const targetIndex = conversation.findIndex((message) => message.id === messageId);
+    if (targetIndex < 0) return '';
+    for (let index = targetIndex - 1; index >= 0; index -= 1) {
+      const message = conversation[index];
+      if (message.role === 'user' && String(message.content || '').trim()) {
+        return String(message.content || '').trim();
+      }
+    }
+    return '';
+  }
+
   async function openWikiPage(pathValue: string, options?: { preserveStatus?: boolean }) {
     const targetPath = String(pathValue || '').trim();
     if (!targetPath || !settings.serverBaseUrl.trim()) return;
@@ -466,7 +492,7 @@
       wikiStatusMessage = '';
     }
     try {
-      const page = await readWikiPage(settings.serverBaseUrl, settings.apiToken, resolvedSharedWikiId, targetPath);
+      const page = await readWikiPage(settings.serverBaseUrl, settings.apiToken, resolvedWikiId, targetPath);
       applyWikiPage(page);
     } catch (error) {
       wikiErrorMessage = error instanceof Error ? error.message : String(error);
@@ -481,7 +507,14 @@
     wikiErrorMessage = '';
     wikiStatusMessage = '';
     try {
-      const result = await fetchWikiContext(settings.serverBaseUrl, settings.apiToken, resolvedSharedWikiId);
+      const result = await fetchWikiContext(settings.serverBaseUrl, settings.apiToken, resolvedWikiId);
+      wikiCoordinationStatus = result.coordination_status || null;
+      const createdPaths = Array.isArray(result.coordination_status?.created_paths)
+        ? result.coordination_status.created_paths.filter((item) => String(item || '').trim().length > 0)
+        : [];
+      if (createdPaths.length > 0) {
+        wikiStatusMessage = `Initialized wiki coordination files: ${createdPaths.join(', ')}`;
+      }
       wikiResults = mergeWikiResults(result.coordination_pages || [], result.pages || []).slice(0, 48);
       const nextPath = selectPath || wikiResults[0]?.path || '';
       if (nextPath) {
@@ -510,7 +543,7 @@
       const result = await searchWiki(
         settings.serverBaseUrl,
         settings.apiToken,
-        resolvedSharedWikiId,
+        resolvedWikiId,
         query,
         24,
         false
@@ -532,6 +565,86 @@
     clearWikiEditor();
   }
 
+  async function handleRebuildWikiIndex() {
+    if (!settings.serverBaseUrl.trim()) return;
+    wikiBusy = true;
+    wikiErrorMessage = '';
+    wikiStatusMessage = '';
+    try {
+      const page = await rebuildWikiIndex(settings.serverBaseUrl, settings.apiToken, resolvedWikiId);
+      wikiStatusMessage = `Rebuilt ${page.path || 'index.md'}`;
+      await refreshWikiContext(page.path || 'index.md');
+    } catch (error) {
+      wikiErrorMessage = error instanceof Error ? error.message : String(error);
+    } finally {
+      wikiBusy = false;
+    }
+  }
+
+  async function handleWikiLint(repair = false) {
+    if (!settings.serverBaseUrl.trim()) return;
+    wikiLintBusy = true;
+    wikiErrorMessage = '';
+    wikiStatusMessage = '';
+    try {
+      const result = await lintWiki(settings.serverBaseUrl, settings.apiToken, resolvedWikiId, repair);
+      wikiLintFindings = Array.isArray(result.findings) ? result.findings : [];
+      wikiCoordinationStatus = result.coordination_status || wikiCoordinationStatus;
+      wikiStatusMessage = repair
+        ? `Lint repair completed with ${wikiLintFindings.length} findings.`
+        : `Lint completed with ${wikiLintFindings.length} findings.`;
+      if (repair) {
+        await refreshWikiContext(wikiSelectedPath);
+      }
+    } catch (error) {
+      wikiErrorMessage = error instanceof Error ? error.message : String(error);
+    } finally {
+      wikiLintBusy = false;
+    }
+  }
+
+  async function fileLatestAnswerToWiki() {
+    if (!settings.serverBaseUrl.trim()) return;
+    const assistant = latestAssistantMessage();
+    if (!assistant || !String(assistant.content || '').trim()) {
+      wikiErrorMessage = 'No assistant answer is available to file.';
+      return;
+    }
+    const query = latestUserPromptBefore(assistant.id);
+    const firstLine = String(assistant.content || '')
+      .split('\n')
+      .map((line) => line.replace(/^#+\s*/, '').trim())
+      .find((line) => line.length > 0);
+    wikiSaving = true;
+    wikiErrorMessage = '';
+    wikiStatusMessage = '';
+    try {
+      const result = await writebackWikiPage(
+        settings.serverBaseUrl,
+        settings.apiToken,
+        resolvedWikiId,
+        query,
+        assistant.content,
+        firstLine || 'Saved Analysis',
+        'analysis',
+        '',
+        wikiSelectedPath ? [wikiSelectedPath] : []
+      );
+      const page = result.page;
+      if (page?.path) {
+        wikiStatusMessage = `Filed latest answer to ${page.path}`;
+        await refreshWikiContext(page.path);
+      } else {
+        wikiStatusMessage = 'Filed latest answer to wiki.';
+        await refreshWikiContext(wikiSelectedPath);
+      }
+    } catch (error) {
+      wikiErrorMessage = error instanceof Error ? error.message : String(error);
+    } finally {
+      wikiSaving = false;
+    }
+  }
+
   async function saveWikiEditor() {
     if (!settings.serverBaseUrl.trim()) return;
     const targetPath = wikiSelectedPath.trim();
@@ -546,7 +659,7 @@
       const page = await writeWikiPage(
         settings.serverBaseUrl,
         settings.apiToken,
-        resolvedSharedWikiId,
+        resolvedWikiId,
         targetPath,
         wikiPageContent,
         wikiPageTitle,
@@ -1821,7 +1934,7 @@
       const llmBaseUrl = settingsForm.llmBaseUrl.trim();
       const llmApiToken = settingsForm.llmApiToken.trim();
       const selectedModel = settingsForm.selectedModel.trim();
-      const sharedWikiId = settingsForm.sharedWikiId.trim();
+      const wikiId = settingsForm.wikiId.trim();
 
       if (!serverBaseUrl || !selectedModel) {
         settingsSaveError = 'Server API URL and chat model are required.';
@@ -1834,7 +1947,7 @@
         llmBaseUrl,
         llmApiToken,
         selectedModel,
-        sharedWikiId
+        wikiId
       });
       applyLoadedSettings(next);
       settingsSaveMessage = 'Settings saved.';
@@ -2108,7 +2221,7 @@
           serverApiToken: settings.apiToken,
           llmBaseUrl: settings.llmBaseUrl,
           llmApiToken: settings.llmApiToken,
-          sharedWikiId: settings.sharedWikiId,
+          wikiId: settings.wikiId,
           selectedFilePath,
           sessionId: selectedSessionId || '',
           historyMessages
@@ -2975,7 +3088,7 @@
                   Workspace
                 </button>
                 <button class:active={viewMode === 'wiki'} on:click={() => (viewMode = 'wiki')}>
-                  Shared Wiki
+                  LLM Wiki
                 </button>
               </div>
               <button class="secondary" on:click={toggleSidebar}>
@@ -3040,8 +3153,8 @@
                 <input bind:value={settingsForm.selectedModel} placeholder="qwen3.5-27b" />
               </label>
               <label class="field">
-                <span>Shared Wiki ID</span>
-                <input bind:value={settingsForm.sharedWikiId} placeholder="project-wiki" />
+                <span>LLM Wiki ID</span>
+                <input bind:value={settingsForm.wikiId} placeholder="project-wiki" />
               </label>
             </div>
             <div class="actions compact-actions">
@@ -3065,16 +3178,28 @@
             <section class="panel wiki-workspace-panel wiki-tab-panel">
               <div class="panel-head">
                 <div>
-                  <div class="section-title">Shared Wiki</div>
-                  <div class="muted small">Browse, edit, and save shared markdown pages in a dedicated workspace tab.</div>
+                  <div class="section-title">LLM Wiki</div>
+                  <div class="muted small">Browse, lint, and maintain the persistent LLM knowledge wiki.</div>
                 </div>
                 <div class="panel-head-meta">
-                  <span class="pill neutral">{resolvedSharedWikiId}</span>
+                  <span class="pill neutral">{resolvedWikiId}</span>
                   <button class="secondary" on:click={() => refreshWikiContext()} disabled={wikiBusy || wikiSaving}>
                     Refresh
                   </button>
+                  <button class="secondary" on:click={handleRebuildWikiIndex} disabled={wikiBusy || wikiSaving || wikiLintBusy}>
+                    Rebuild Index
+                  </button>
+                  <button class="secondary" on:click={() => handleWikiLint(false)} disabled={wikiBusy || wikiSaving || wikiLintBusy}>
+                    {wikiLintBusy ? 'Linting…' : 'Lint'}
+                  </button>
+                  <button class="secondary" on:click={() => handleWikiLint(true)} disabled={wikiBusy || wikiSaving || wikiLintBusy}>
+                    Repair
+                  </button>
                   <button class="secondary" on:click={createWikiPage} disabled={wikiBusy || wikiSaving}>
                     New
+                  </button>
+                  <button class="secondary" on:click={fileLatestAnswerToWiki} disabled={wikiBusy || wikiSaving || wikiLintBusy}>
+                    File Latest Answer
                   </button>
                   <button class="primary" on:click={saveWikiEditor} disabled={wikiBusy || wikiSaving || !wikiDirty}>
                     {wikiSaving ? 'Saving…' : 'Save'}
@@ -3104,6 +3229,44 @@
               {/if}
               {#if wikiStatusMessage}
                 <div class="status-copy">{wikiStatusMessage}</div>
+              {/if}
+              {#if wikiCoordinationStatus}
+                <div class="wiki-health-row">
+                  <span class={`pill ${wikiCoordinationStatus.has_coordination_spine ? 'success' : 'danger'}`}>
+                    {wikiCoordinationStatus.has_coordination_spine ? 'Wiki spine ready' : 'Wiki spine incomplete'}
+                  </span>
+                  <span class="muted small">
+                    {`${Array.isArray(wikiCoordinationStatus.required_present_paths) ? wikiCoordinationStatus.required_present_paths.length : 0}/${
+                      Array.isArray(wikiCoordinationStatus.required_paths) ? wikiCoordinationStatus.required_paths.length : 0
+                    } core pages available`}
+                  </span>
+                </div>
+              {/if}
+              {#if wikiLintFindings.length > 0}
+                <div class="wiki-lint-box">
+                  <div class="section-title">Lint Findings</div>
+                  <div class="wiki-finding-list">
+                    {#each wikiLintFindings as finding}
+                      <div class="wiki-finding-item">
+                        <div class="wiki-finding-head">
+                          <span class={`pill ${finding.severity === 'error' ? 'danger' : finding.severity === 'warning' ? 'accent' : 'neutral'}`}>
+                            {finding.severity || 'info'}
+                          </span>
+                          {#if finding.code}
+                            <span class="muted small">{finding.code}</span>
+                          {/if}
+                        </div>
+                        <div>{finding.message || 'No message'}</div>
+                        {#if finding.path}
+                          <div class="wiki-result-path">{finding.path}</div>
+                        {/if}
+                        {#if finding.target}
+                          <div class="wiki-result-path">target: {finding.target}</div>
+                        {/if}
+                      </div>
+                    {/each}
+                  </div>
+                </div>
               {/if}
 
               <div class="wiki-workspace-grid">
@@ -5198,6 +5361,49 @@
     align-items: end;
   }
 
+  .wiki-health-row {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+
+  .wiki-lint-box {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    border: 1px solid rgba(148, 163, 184, 0.14);
+    border-radius: 18px;
+    background: rgba(8, 14, 24, 0.52);
+    padding: 12px 14px;
+  }
+
+  .wiki-finding-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-height: 220px;
+    overflow: auto;
+  }
+
+  .wiki-finding-item {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    border-radius: 14px;
+    border: 1px solid rgba(148, 163, 184, 0.12);
+    background: rgba(10, 18, 30, 0.84);
+    padding: 10px 12px;
+    line-height: 1.45;
+  }
+
+  .wiki-finding-head {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+
   .wiki-search-field {
     flex: 1 1 auto;
     min-width: 0;
@@ -5239,11 +5445,12 @@
     text-align: left;
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
     border-radius: 14px;
     border: 1px solid rgba(148, 163, 184, 0.14);
     background: rgba(10, 18, 30, 0.88);
     padding: 12px;
+    line-height: 1.4;
   }
 
   .wiki-result-item.selected {
@@ -5254,20 +5461,29 @@
   .wiki-result-title {
     font-size: 0.97rem;
     font-weight: 600;
+    line-height: 1.35;
     color: #f8fafc;
+    overflow-wrap: anywhere;
   }
 
   .wiki-result-path {
     font-size: 0.79rem;
+    line-height: 1.45;
     color: rgba(148, 163, 184, 0.92);
-    word-break: break-all;
+    overflow-wrap: anywhere;
+    word-break: break-word;
   }
 
   .wiki-result-meta {
     display: flex;
     justify-content: space-between;
     gap: 8px;
-    align-items: center;
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .wiki-result-meta .muted.small {
+    line-height: 1.35;
   }
 
   .wiki-editor-pane {

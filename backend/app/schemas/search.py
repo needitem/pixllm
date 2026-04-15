@@ -6,7 +6,7 @@ from .. import config
 
 class SearchRequest(BaseModel):
     query: str
-    collection: str = config.RAG_DEFAULT_COLLECTION
+    collection: str = config.EVIDENCE_DEFAULT_COLLECTION
     source_mode: Literal["docs", "code"] = "docs"
     top_k: int = 10
     page: int = 1

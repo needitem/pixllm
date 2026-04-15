@@ -20,7 +20,6 @@ import openai
 from . import config
 from .services.tools.codebase import CodeToolService
 from .services.tools.workspace_sync import restore_import_code_workspace
-from .core.orchestration import OrchestrationPolicy
 from .services.search.service import SearchService
 
 
@@ -91,7 +90,6 @@ class AppState:
     search_svc: Optional[SearchService] = None
     embed_model: Optional[BGEM3FlagModel] = None
     vllm_client: Optional[openai.OpenAI] = None
-    orchestration_policy: Optional[OrchestrationPolicy] = None
     code_tools: Optional[CodeToolService] = None
 
 
@@ -120,9 +118,9 @@ async def init_state():
         try:
             collections = state.search_svc.qdrant.get_collections().collections
             names = {c.name for c in collections}
-            if config.RAG_DEFAULT_COLLECTION not in names:
+            if config.EVIDENCE_DEFAULT_COLLECTION not in names:
                 state.search_svc.qdrant.create_collection(
-                    collection_name=config.RAG_DEFAULT_COLLECTION,
+                    collection_name=config.EVIDENCE_DEFAULT_COLLECTION,
                     vectors_config={"dense": VectorParams(size=1024, distance=Distance.COSINE)},
                     sparse_vectors_config={"sparse": SparseVectorParams(index=SparseIndexParams())},
                 )
@@ -158,8 +156,6 @@ async def init_state():
         base_url=f"{config.VLLM_URL}/v1",
         api_key="EMPTY",
     )
-    state.orchestration_policy = OrchestrationPolicy(config.ORCHESTRATION_CONFIG_DIR)
-
     if config.CODE_TOOL_ENABLED:
         state.code_tools = CodeToolService(
             roots=config.effective_code_search_roots(),
@@ -193,10 +189,6 @@ def get_embed_model() -> Optional[BGEM3FlagModel]:
 
 def get_vllm_client() -> Optional[openai.OpenAI]:
     return state.vllm_client
-
-
-def get_orchestrator() -> Optional[OrchestrationPolicy]:
-    return state.orchestration_policy
 
 
 def get_code_tools() -> Optional[CodeToolService]:
