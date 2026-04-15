@@ -279,4 +279,16 @@ verification_rules:
   - cross_check_matching_methods_page_before_emitting_code
   - require_verified_api_facts_for_code_examples
   - prefer_named_enum_members_when_index_mapping_is_non_obvious
+forbidden_answer_patterns:
+  - 'Pixoneer\.NXDL\.NXDLio'
+  - 'GetBandCount\s*\('
+  - 'GetNumberOfBands\s*\('
+  - '\bIsValid\b'
+  - 'Initialize\s*\(\s*ref\s+error'
+  - 'LoadFile\s*\([^)]*ref\s+error'
+  - 'eIOCreateXLDMode\.XLDMode_None'
+  - 'AddImageLayer\s*\(\s*composite\s*\)'
+  - 'AddImageLayer\s*\(\s*compositesLayer\s*\)'
+  - 'NXImageView\w*\s*\.\s*Lock\s*\('
+  - 'NXImageView\w*\s*\.\s*UnLock\s*\('
 ```

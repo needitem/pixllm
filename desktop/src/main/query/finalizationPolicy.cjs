@@ -141,6 +141,26 @@ function answerContainsCodeExample(answer = '') {
   return /```[\s\S]*?```/.test(source) || /<code>[\s\S]*?<\/code>/i.test(source);
 }
 
+function matchForbiddenAnswerPatterns(answer = '', patterns = []) {
+  const source = toStringValue(answer);
+  if (!source) return [];
+  const matched = [];
+  for (const item of Array.isArray(patterns) ? patterns : []) {
+    const pattern = toStringValue(item);
+    if (!pattern) continue;
+    try {
+      if (new RegExp(pattern, 'i').test(source)) {
+        matched.push(pattern);
+      }
+    } catch {
+      if (source.toLowerCase().includes(pattern.toLowerCase())) {
+        matched.push(pattern);
+      }
+    }
+  }
+  return matched;
+}
+
 function requestNeedsGroundedChangeEvidence(requestContext = {}) {
   const intent = requestContext?.intent && typeof requestContext.intent === 'object'
     ? requestContext.intent
@@ -182,6 +202,10 @@ function evaluateFinalAnswerPolicy({
     || referenceEvidence.hasVerifiedCodeEvidence;
   const hasVerifiedApiFacts = Number(referenceEvidence.apiFactCount || 0) > 0
     || Number(referenceEvidence.workflowRequiredFactCount || 0) > 0;
+  const matchedForbiddenAnswerPatterns = matchForbiddenAnswerPatterns(
+    finalAnswer,
+    referenceEvidence.workflowForbiddenAnswerPatterns,
+  );
   const usedTools = Array.isArray(trace) && trace.length > 0;
   const prefersWorkflowFirst = Boolean(requestContext?.workflowPlan?.preferWikiFirst);
 
@@ -220,6 +244,29 @@ function evaluateFinalAnswerPolicy({
         turn,
         finalAnswerPreview: toStringValue(finalAnswer).slice(0, 240),
         acknowledgesMissingVerification,
+        referenceEvidence,
+        ...summary,
+      },
+    };
+  }
+
+  if (
+    prefersWorkflowFirst
+    && !requestRequiresWorkspaceMutation(requestContext)
+    && containsCodeExample
+    && !acknowledgesMissingVerification
+    && matchedForbiddenAnswerPatterns.length > 0
+  ) {
+    return {
+      ok: false,
+      reason: 'workflow_forbidden_pattern_detected',
+      blockingMessage: `The draft answer used workflow-forbidden code patterns: ${matchedForbiddenAnswerPatterns.slice(0, 4).join(', ')}. Rewrite the snippet strictly from the workflow Required Facts and Common Pitfalls.`,
+      details: {
+        turn,
+        finalAnswerPreview: toStringValue(finalAnswer).slice(0, 240),
+        acknowledgesMissingVerification,
+        containsCodeExample,
+        matchedForbiddenAnswerPatterns,
         referenceEvidence,
         ...summary,
       },

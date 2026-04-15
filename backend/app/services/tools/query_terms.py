@@ -104,8 +104,6 @@ def _unique_preserving_order(values: Iterable[str]) -> List[str]:
 
 def _query_term_config() -> Dict[str, int]:
     return wiki_config.heuristics_weights("query_term_extraction", _QUERY_TERM_EXTRACTION_DEFAULTS)
-def _title_compound(words: Sequence[str]) -> str:
-    return "".join(word[:1].upper() + word[1:] for word in words if word)
 
 
 def _ascii_query_words(query: str) -> List[str]:

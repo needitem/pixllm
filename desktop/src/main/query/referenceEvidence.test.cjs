@@ -20,6 +20,7 @@ test('summarizeWikiEvidence keeps the strongest workflow bundle across searches'
           slots_complete: true,
           workflow_paths: ['workflows/imageview-xdm-display-workflow.md'],
           method_paths: ['methods/Methods_T_Pixoneer_NXDL_NIO_XRasterIO.md'],
+          forbidden_answer_patterns: ['GetBandCount\\s*\\('],
           required_facts: [
             {
               symbol: 'XRasterIO.LoadFile',
@@ -53,4 +54,5 @@ test('summarizeWikiEvidence keeps the strongest workflow bundle across searches'
   assert.equal(summary.workflowSlotsComplete, true);
   assert.deepEqual(summary.workflowMissingSlots, []);
   assert.equal(summary.workflowRequiredFactCount, 1);
+  assert.deepEqual(summary.workflowForbiddenAnswerPatterns, ['GetBandCount\\s*\\(']);
 });

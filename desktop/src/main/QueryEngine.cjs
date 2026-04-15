@@ -562,12 +562,6 @@ function stableSerialize(value) {
   return JSON.stringify(value ?? null);
 }
 
-function toolBatchSignature(toolUses) {
-  return (Array.isArray(toolUses) ? toolUses : [])
-    .map((toolUse) => `${toStringValue(toolUse?.name)}:${stableSerialize(toolUse?.input || {})}`)
-    .join('||');
-}
-
 function isLengthFinishReason(reason) {
   return /length|max_tokens|max_output_tokens/i.test(toStringValue(reason));
 }

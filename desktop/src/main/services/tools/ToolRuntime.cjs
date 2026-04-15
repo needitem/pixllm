@@ -195,6 +195,9 @@ function summarizeObservationForModel(toolName, observation = {}) {
     const workflowVerificationRules = Array.isArray(workflowBundle.verification_rules)
       ? workflowBundle.verification_rules
       : [];
+    const workflowForbiddenPatterns = Array.isArray(workflowBundle.forbidden_answer_patterns)
+      ? workflowBundle.forbidden_answer_patterns
+      : [];
     const workflowRequiredFacts = Array.isArray(workflowBundle.required_facts)
       ? workflowBundle.required_facts
       : [];
@@ -207,6 +210,11 @@ function summarizeObservationForModel(toolName, observation = {}) {
     if (workflowVerificationRuleLines.length > 0) {
       lines.push('workflow_verification_rules:');
       lines.push(...workflowVerificationRuleLines.map((item) => `- ${item}`));
+    }
+    const workflowForbiddenPatternLines = summarizePathItems(workflowForbiddenPatterns, (item) => item, 8);
+    if (workflowForbiddenPatternLines.length > 0) {
+      lines.push('workflow_forbidden_answer_patterns:');
+      lines.push(...workflowForbiddenPatternLines.map((item) => `- ${item}`));
     }
     const workflowRequiredFactLines = summarizePathItems(workflowRequiredFacts, (item) => {
       const symbol = toStringValue(item?.symbol);

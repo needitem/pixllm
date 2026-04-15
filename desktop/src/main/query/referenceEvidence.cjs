@@ -56,6 +56,7 @@ function summarizeWikiEvidence(trace = []) {
   let workflowRequiredFactCount = 0;
   let workflowBundleSeen = false;
   let bestWorkflowBundle = null;
+  const workflowForbiddenAnswerPatterns = [];
 
   for (const step of Array.isArray(trace) ? trace : []) {
     if (toStringValue(step?.tool) !== 'wiki_evidence_search' || step?.observation?.ok === false) {
@@ -88,6 +89,9 @@ function summarizeWikiEvidence(trace = []) {
     const workflowRequiredFacts = Array.isArray(workflowBundle.required_facts)
       ? workflowBundle.required_facts
       : [];
+    const forbiddenAnswerPatterns = Array.isArray(workflowBundle.forbidden_answer_patterns)
+      ? workflowBundle.forbidden_answer_patterns
+      : [];
 
     codeMatchCount += matches.length;
     codeWindowCount += windows.length;
@@ -111,6 +115,11 @@ function summarizeWikiEvidence(trace = []) {
       workflowBundleSeen = true;
       if (shouldPreferWorkflowBundle(workflowBundle, bestWorkflowBundle)) {
         bestWorkflowBundle = workflowBundle;
+      }
+      for (const pattern of forbiddenAnswerPatterns) {
+        const normalized = toStringValue(pattern);
+        if (!normalized || workflowForbiddenAnswerPatterns.includes(normalized)) continue;
+        workflowForbiddenAnswerPatterns.push(normalized);
       }
     }
 
@@ -158,6 +167,7 @@ function summarizeWikiEvidence(trace = []) {
     workflowSourceCount,
     methodSourceCount,
     workflowRequiredFactCount,
+    workflowForbiddenAnswerPatterns,
     evidenceTypes: normalizedEvidenceTypes,
     hasCodeEvidence,
     hasDocEvidence,

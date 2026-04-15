@@ -406,6 +406,7 @@ def _build_workflow_manifest_entry(
         "required_symbols": required_symbols,
         "required_facts": required_facts,
         "verification_rules": _normalize_string_list(required_section.get("verification_rules")),
+        "forbidden_answer_patterns": _normalize_string_list(required_section.get("forbidden_answer_patterns"), limit=64),
         "route_terms": route_terms,
         "linked_method_symbols": _normalize_string_list([record.get("qualified_symbol") for record in linked_records], limit=64),
         "source_anchors": _normalize_string_list(_SOURCE_ANCHOR_RE.findall(content), limit=64),

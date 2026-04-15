@@ -331,6 +331,7 @@ function WikiEvidenceSearchTool() {
           method_paths: arraySchema(stringSchema('Method paths used'), 'Method paths'),
           required_symbols: arraySchema(stringSchema('Workflow-required symbol'), 'Workflow-required symbols'),
           verification_rules: arraySchema(stringSchema('Workflow verification rule'), 'Workflow verification rules'),
+          forbidden_answer_patterns: arraySchema(stringSchema('Workflow forbidden answer pattern'), 'Workflow forbidden answer patterns'),
           required_facts: arraySchema(objectSchema({
             symbol: stringSchema('Required fact symbol'),
             declaration: stringSchema('Primary required declaration'),

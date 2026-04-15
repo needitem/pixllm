@@ -1,8 +1,10 @@
 import asyncio
 import json
+import logging
 import re
 from functools import lru_cache
 from pathlib import Path
+from time import perf_counter
 from types import SimpleNamespace
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -15,6 +17,8 @@ from .query_terms import extract_symbol_query_candidates
 from .query_strategy import expand_line_window, parse_line_range
 from .support import build_citations, clamp_int, dedupe_doc_items, normalize_doc_item, qdrant_point_id
 from .wiki_runtime import search_wiki
+
+logger = logging.getLogger(__name__)
 
 _WIKI_SOURCE_REF_RE = re.compile(r"\b(Source/[^`:\s]+):(\d+)(?:-(\d+))?\b")
 _BACKTICK_TOKEN_RE = re.compile(r"`([^`]+)`")
@@ -94,10 +98,6 @@ def _load_wiki_manifest(wiki_id: str = "engine") -> Dict[str, Any]:
     return _read_wiki_manifest_cached(normalized_wiki_id, _manifest_signature(normalized_wiki_id))
 
 
-def _methods_wiki_root() -> Path:
-    return _wiki_root("engine") / "methods"
-
-
 def _normalize_lookup_token(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", str(value or "").strip().lower())
 
@@ -108,6 +108,36 @@ def _load_methods_api_index(wiki_id: str = "engine") -> List[Dict[str, Any]]:
     if isinstance(records, list) and records:
         return [record for record in records if isinstance(record, dict)]
     return _load_methods_api_index_legacy(_normalize_wiki_id(wiki_id))
+
+
+@lru_cache(maxsize=16)
+def _load_methods_lookup_bundle(wiki_id: str, signature: str) -> Dict[str, Any]:
+    del signature
+    records = _load_methods_api_index(wiki_id)
+    type_lookup: Dict[str, str] = {}
+    record_lookup: Dict[str, Dict[str, Any]] = {}
+    for record in records:
+        type_name = str(record.get("type_name") or "")
+        qualified_type = str(record.get("qualified_type") or "")
+        qualified_symbol = str(record.get("qualified_symbol") or "").strip()
+        normalized_type_name = _normalize_lookup_token(type_name)
+        normalized_qualified_type = _normalize_lookup_token(qualified_type)
+        if normalized_type_name:
+            type_lookup[normalized_type_name] = type_name
+        if normalized_qualified_type:
+            type_lookup[normalized_qualified_type] = qualified_type
+        if qualified_symbol:
+            record_lookup[qualified_symbol] = record
+    return {
+        "records": records,
+        "type_lookup": type_lookup,
+        "record_lookup": record_lookup,
+    }
+
+
+def _methods_lookup_bundle(wiki_id: str = "engine") -> Dict[str, Any]:
+    normalized_wiki_id = _normalize_wiki_id(wiki_id)
+    return _load_methods_lookup_bundle(normalized_wiki_id, _manifest_signature(normalized_wiki_id))
 
 
 @lru_cache(maxsize=8)
@@ -173,15 +203,17 @@ def _load_methods_api_index_legacy(wiki_id: str = "engine") -> List[Dict[str, An
 def _extract_lookup_targets(
     query: str,
     records: Sequence[Dict[str, Any]],
+    type_lookup: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     source = str(query or "").strip()
     source = re.sub(r"(?<![A-Za-z0-9_])C\s*#", " csharp ", source, flags=re.IGNORECASE)
     source = re.sub(r"(?<![A-Za-z0-9_])C\s*\+\+", " cpp ", source, flags=re.IGNORECASE)
     lowered = source.lower()
-    type_lookup = {}
-    for record in records or []:
-        type_lookup[_normalize_lookup_token(record.get("type_name"))] = str(record.get("type_name") or "")
-        type_lookup[_normalize_lookup_token(record.get("qualified_type"))] = str(record.get("qualified_type") or "")
+    if type_lookup is None:
+        type_lookup = {}
+        for record in records or []:
+            type_lookup[_normalize_lookup_token(record.get("type_name"))] = str(record.get("type_name") or "")
+            type_lookup[_normalize_lookup_token(record.get("qualified_type"))] = str(record.get("qualified_type") or "")
 
     type_candidates: List[str] = []
     member_candidates: List[str] = []
@@ -265,12 +297,40 @@ def _load_workflow_manifest_index(wiki_id: str = "engine") -> List[Dict[str, Any
     return [record for record in records if isinstance(record, dict)]
 
 
-def _workflow_manifest_lookup(wiki_id: str = "engine") -> Dict[str, Dict[str, Any]]:
-    return {
+@lru_cache(maxsize=16)
+def _load_workflow_lookup_bundle(wiki_id: str, signature: str) -> Dict[str, Any]:
+    del signature
+    records = _load_workflow_manifest_index(wiki_id)
+    path_lookup = {
         str(record.get("path") or "").strip(): record
-        for record in _load_workflow_manifest_index(wiki_id)
+        for record in records
         if str(record.get("path") or "").strip()
     }
+    search_entries = []
+    for record in records:
+        search_entries.append(
+            {
+                "record": record,
+                "title_key": _normalize_lookup_token(record.get("title")),
+                "alias_keys": [_normalize_lookup_token(alias) for alias in record.get("aliases") or []],
+                "symbol_keys": [
+                    _normalize_lookup_token(symbol)
+                    for symbol in [*(record.get("symbols") or []), *(record.get("required_symbols") or [])]
+                ],
+                "term_keys": [_normalize_lookup_token(term) for term in record.get("route_terms") or []],
+            }
+        )
+    return {
+        "records": records,
+        "path_lookup": path_lookup,
+        "search_entries": search_entries,
+        "generated_at": str(_load_wiki_manifest(wiki_id).get("generated_at") or ""),
+    }
+
+
+def _workflow_lookup_bundle(wiki_id: str = "engine") -> Dict[str, Any]:
+    normalized_wiki_id = _normalize_wiki_id(wiki_id)
+    return _load_workflow_lookup_bundle(normalized_wiki_id, _manifest_signature(normalized_wiki_id))
 
 
 def _score_manifest_workflow(query: str, record: Dict[str, Any]) -> int:
@@ -302,15 +362,16 @@ def _build_manifest_workflow_rows(
     wiki_id: str,
     top_k: int,
     max_chars: int,
+    workflow_bundle: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
-    manifest = _load_wiki_manifest(wiki_id)
-    workflow_records = manifest.get("workflow_index") if isinstance(manifest.get("workflow_index"), list) else []
+    workflow_bundle = workflow_bundle or _workflow_lookup_bundle(wiki_id)
+    workflow_records = workflow_bundle.get("records") if isinstance(workflow_bundle.get("records"), list) else []
     if not workflow_records:
         return []
-    generated_at = str(manifest.get("generated_at") or "")
+    generated_at = str(workflow_bundle.get("generated_at") or "")
     ranked = [
-        (record, _score_manifest_workflow(query, record))
-        for record in workflow_records
+        (entry.get("record"), _score_manifest_workflow(query, entry.get("record") or {}))
+        for entry in (workflow_bundle.get("search_entries") or [])
     ]
     ranked = [item for item in ranked if item[1] > 0]
     ranked.sort(key=lambda item: item[1], reverse=True)
@@ -352,17 +413,21 @@ def _match_manifest_method_records(
     workflow_rows: Sequence[Dict[str, Any]],
     wiki_id: str,
     max_records: int,
+    workflow_bundle: Optional[Dict[str, Any]] = None,
+    methods_bundle: Optional[Dict[str, Any]] = None,
+    query_targets: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
-    methods_index = _load_methods_api_index(wiki_id)
+    methods_bundle = methods_bundle or _methods_lookup_bundle(wiki_id)
+    methods_index = methods_bundle.get("records") or []
     if not methods_index:
         return []
-    workflow_lookup = _workflow_manifest_lookup(wiki_id)
-    record_lookup = {
-        str(record.get("qualified_symbol") or "").strip(): record
-        for record in methods_index
-        if str(record.get("qualified_symbol") or "").strip()
-    }
-    query_targets = _extract_lookup_targets(query, methods_index)
+    workflow_lookup = (workflow_bundle or _workflow_lookup_bundle(wiki_id)).get("path_lookup") or {}
+    record_lookup = methods_bundle.get("record_lookup") or {}
+    query_targets = query_targets or _extract_lookup_targets(
+        query,
+        methods_index,
+        methods_bundle.get("type_lookup") or {},
+    )
     explicit_type_keys = {
         _normalize_lookup_token(item)
         for item in query_targets.get("type_candidates") or []
@@ -439,8 +504,11 @@ def _build_manifest_slot_bundle(
     workflow_rows: Sequence[Dict[str, Any]],
     method_records: Sequence[Dict[str, Any]],
     wiki_id: str,
+    workflow_bundle: Optional[Dict[str, Any]] = None,
+    methods_bundle: Optional[Dict[str, Any]] = None,
+    query_targets: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
-    workflow_lookup = _workflow_manifest_lookup(wiki_id)
+    workflow_lookup = (workflow_bundle or _workflow_lookup_bundle(wiki_id)).get("path_lookup") or {}
     workflow_entries = [
         workflow_lookup.get(_source_file_path(row))
         for row in workflow_rows or []
@@ -450,8 +518,9 @@ def _build_manifest_slot_bundle(
     if not workflow_entries:
         return None
 
-    methods_index = _load_methods_api_index(wiki_id)
-    query_targets = _extract_lookup_targets(query, methods_index) if methods_index else {
+    methods_bundle = methods_bundle or _methods_lookup_bundle(wiki_id)
+    methods_index = methods_bundle.get("records") or []
+    query_targets = query_targets or _extract_lookup_targets(query, methods_index, methods_bundle.get("type_lookup") or {}) if methods_index else {
         "type_candidates": [],
         "member_candidates": [],
         "is_specific_lookup": False,
@@ -461,25 +530,22 @@ def _build_manifest_slot_bundle(
     required_slots: List[str] = ["workflow"]
     filled_slots = {"workflow"} if workflow_rows else set()
     selected_symbols: List[str] = []
-
-    for entry in workflow_entries:
-        fact_symbols = _unique_preserve_order([
-            str(item.get("symbol") or "").strip()
-            for item in entry.get("required_facts") or []
-            if isinstance(item, dict) and str(item.get("symbol") or "").strip()
-        ])
-        linked_symbols = _unique_preserve_order([
-            *fact_symbols,
-            *(entry.get("linked_method_symbols") or []),
-            *(entry.get("required_symbols") or []),
-        ])
-        if explicit_lookup:
+    if explicit_lookup:
+        for entry in workflow_entries:
+            fact_symbols = _unique_preserve_order([
+                str(item.get("symbol") or "").strip()
+                for item in entry.get("required_facts") or []
+                if isinstance(item, dict) and str(item.get("symbol") or "").strip()
+            ])
+            linked_symbols = _unique_preserve_order([
+                *fact_symbols,
+                *(entry.get("linked_method_symbols") or []),
+                *(entry.get("required_symbols") or []),
+            ])
             selected_symbols.extend(
                 symbol for symbol in linked_symbols
                 if _matches_query_targets(symbol, query_targets)
             )
-        else:
-            selected_symbols.extend(linked_symbols[:3])
 
     selected_symbols = _unique_preserve_order(selected_symbols)
     if selected_symbols:
@@ -518,6 +584,12 @@ def _build_manifest_slot_bundle(
         for entry in workflow_entries
         for rule in (entry.get("verification_rules") or [])
         if str(rule or "").strip()
+    ])
+    forbidden_answer_patterns = _unique_preserve_order([
+        pattern
+        for entry in workflow_entries
+        for pattern in (entry.get("forbidden_answer_patterns") or [])
+        if str(pattern or "").strip()
     ])
     required_facts: List[Dict[str, Any]] = []
     seen_fact_keys = set()
@@ -565,6 +637,7 @@ def _build_manifest_slot_bundle(
         ]),
         "required_symbols": required_symbols,
         "verification_rules": verification_rules,
+        "forbidden_answer_patterns": forbidden_answer_patterns,
         "required_facts": required_facts,
     }
 
@@ -805,21 +878,28 @@ def _match_method_records_from_candidates(
     workflow_rows: Sequence[Dict[str, Any]],
     max_records: int,
     wiki_id: str = "engine",
+    query_targets: Optional[Dict[str, Any]] = None,
+    methods_bundle: Optional[Dict[str, Any]] = None,
+    workflow_bundle: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     manifest_records = _match_manifest_method_records(
         query=query,
         workflow_rows=workflow_rows,
         wiki_id=wiki_id,
         max_records=max_records,
+        workflow_bundle=workflow_bundle,
+        methods_bundle=methods_bundle,
+        query_targets=query_targets,
     )
     if manifest_records:
         return manifest_records
 
-    records = _load_methods_api_index(wiki_id)
+    methods_bundle = methods_bundle or _methods_lookup_bundle(wiki_id)
+    records = methods_bundle.get("records") or []
     if not records:
         return []
 
-    query_targets = _extract_lookup_targets(query, records)
+    query_targets = query_targets or _extract_lookup_targets(query, records, methods_bundle.get("type_lookup") or {})
 
     exact_lookup = build_exact_api_lookup_summary(query, wiki_id=wiki_id)
     if exact_lookup and exact_lookup.get("source_records"):
@@ -881,18 +961,25 @@ def _build_workflow_slot_bundle(
     workflow_rows: Sequence[Dict[str, Any]],
     method_records: Sequence[Dict[str, Any]],
     wiki_id: str = "engine",
+    workflow_bundle: Optional[Dict[str, Any]] = None,
+    methods_bundle: Optional[Dict[str, Any]] = None,
+    query_targets: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     manifest_slot_status = _build_manifest_slot_bundle(
         query=query,
         workflow_rows=workflow_rows,
         method_records=method_records,
         wiki_id=wiki_id,
+        workflow_bundle=workflow_bundle,
+        methods_bundle=methods_bundle,
+        query_targets=query_targets,
     )
     if manifest_slot_status is not None:
         return manifest_slot_status
 
-    methods_index = _load_methods_api_index(wiki_id)
-    query_targets = _extract_lookup_targets(query, methods_index) if methods_index else {
+    methods_bundle = methods_bundle or _methods_lookup_bundle(wiki_id)
+    methods_index = methods_bundle.get("records") or []
+    query_targets = query_targets or _extract_lookup_targets(query, methods_index, methods_bundle.get("type_lookup") or {}) if methods_index else {
         "type_candidates": [],
         "member_candidates": [],
         "is_specific_lookup": False,
@@ -985,11 +1072,12 @@ def _build_workflow_slot_bundle(
         ]),
         "required_symbols": [],
         "verification_rules": [],
+        "forbidden_answer_patterns": [],
         "required_facts": [],
     }
 
 
-def _build_workflow_first_bundle(
+def _build_workflow_first_bundle_uncached(
     *,
     query: str,
     top_k: int,
@@ -998,12 +1086,17 @@ def _build_workflow_first_bundle(
     explicit_wiki_id: str,
 ) -> Dict[str, Any]:
     normalized_wiki_id = _normalize_wiki_id(explicit_wiki_id or "engine")
+    workflow_lookup_bundle = _workflow_lookup_bundle(normalized_wiki_id)
+    methods_bundle = _methods_lookup_bundle(normalized_wiki_id)
+    methods_index = methods_bundle.get("records") or []
+    query_targets = _extract_lookup_targets(query, methods_index, methods_bundle.get("type_lookup") or {})
     workflow_search_limit = max(min(top_k, 20), min(max(4, doc_open_limit * 3), 20))
     wiki_rows = _build_manifest_workflow_rows(
         query=query,
         wiki_id=normalized_wiki_id,
         top_k=workflow_search_limit,
         max_chars=max_chars,
+        workflow_bundle=workflow_lookup_bundle,
     )
     if not wiki_rows:
         wiki_rows = list(
@@ -1030,12 +1123,18 @@ def _build_workflow_first_bundle(
         }
 
     primary_workflow_rows = workflow_rows[:1]
-    related_records = _match_method_records_from_candidates(
-        query=query,
-        workflow_rows=primary_workflow_rows,
-        max_records=max(1, doc_open_limit - len(workflow_rows)),
-        wiki_id=normalized_wiki_id,
-    )
+    if query_targets.get("is_specific_lookup"):
+        related_records = _match_method_records_from_candidates(
+            query=query,
+            workflow_rows=primary_workflow_rows,
+            max_records=max(1, doc_open_limit - len(workflow_rows)),
+            wiki_id=normalized_wiki_id,
+            query_targets=query_targets,
+            methods_bundle=methods_bundle,
+            workflow_bundle=workflow_lookup_bundle,
+        )
+    else:
+        related_records = []
     method_rows = [
         _build_lookup_source_excerpt(record, section_index=index + 1)
         for index, record in enumerate(related_records[: max(0, doc_open_limit - len(workflow_rows))])
@@ -1046,11 +1145,52 @@ def _build_workflow_first_bundle(
         workflow_rows=primary_workflow_rows,
         method_records=related_records,
         wiki_id=normalized_wiki_id,
+        workflow_bundle=workflow_lookup_bundle,
+        methods_bundle=methods_bundle,
+        query_targets=query_targets,
     )
     return {
         "sources": sources,
         "slot_status": slot_status,
     }
+
+
+@lru_cache(maxsize=64)
+def _build_workflow_first_bundle_cached(
+    wiki_id: str,
+    manifest_signature: str,
+    query: str,
+    top_k: int,
+    doc_open_limit: int,
+    max_chars: int,
+) -> Dict[str, Any]:
+    del manifest_signature
+    return _build_workflow_first_bundle_uncached(
+        query=query,
+        top_k=top_k,
+        doc_open_limit=doc_open_limit,
+        max_chars=max_chars,
+        explicit_wiki_id=wiki_id,
+    )
+
+
+def _build_workflow_first_bundle(
+    *,
+    query: str,
+    top_k: int,
+    doc_open_limit: int,
+    max_chars: int,
+    explicit_wiki_id: str,
+) -> Dict[str, Any]:
+    normalized_wiki_id = _normalize_wiki_id(explicit_wiki_id or "engine")
+    return _build_workflow_first_bundle_cached(
+        normalized_wiki_id,
+        _manifest_signature(normalized_wiki_id),
+        str(query or ""),
+        int(top_k),
+        int(doc_open_limit),
+        int(max_chars),
+    )
 
 
 async def collect_sources(
@@ -1068,6 +1208,7 @@ async def collect_sources(
     search_only: bool,
     response_type: str,
     workflow_first: bool = False,
+    workflow_bundle: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     rt = str(response_type or "").strip().lower()
     explicit_wiki_id = ""
@@ -1092,15 +1233,20 @@ async def collect_sources(
     }
     wiki_priority = "code_first" if rt in code_first_types else "wiki_first" if rt in wiki_first_types else "wiki_first"
 
-    workflow_bundle = _build_workflow_first_bundle(
-        query=query,
-        top_k=top_k,
-        doc_open_limit=doc_open_limit,
-        max_chars=max_chars,
-        explicit_wiki_id=explicit_wiki_id,
-    ) if workflow_first else {"sources": [], "slot_status": {}}
+    if workflow_first and isinstance(workflow_bundle, dict):
+        workflow_bundle_data = workflow_bundle
+    elif workflow_first:
+        workflow_bundle_data = _build_workflow_first_bundle(
+            query=query,
+            top_k=top_k,
+            doc_open_limit=doc_open_limit,
+            max_chars=max_chars,
+            explicit_wiki_id=explicit_wiki_id,
+        )
+    else:
+        workflow_bundle_data = {"sources": [], "slot_status": {}}
 
-    wiki_rows = list(workflow_bundle.get("sources") or []) if workflow_first else []
+    wiki_rows = list(workflow_bundle_data.get("sources") or []) if workflow_first else []
     if not wiki_rows:
         wiki_rows = list(
             search_wiki(
@@ -1113,7 +1259,7 @@ async def collect_sources(
         )
 
     doc_rows: List[Dict[str, Any]] = []
-    if not bool((workflow_bundle.get("slot_status") or {}).get("slots_complete")):
+    if not bool((workflow_bundle_data.get("slot_status") or {}).get("slots_complete")):
         doc_rows = list(
             (
                 await search_docs(
@@ -1314,6 +1460,24 @@ def merge_doc_sources(groups: Sequence[Sequence[Dict[str, Any]]]) -> List[Dict[s
     return dedupe_doc_items(merged)
 
 
+def should_skip_broad_code_evidence(
+    *,
+    workflow_first: bool,
+    response_type: str,
+    workflow_bundle: Optional[Dict[str, Any]],
+    wiki_code_windows: Sequence[Dict[str, Any]],
+) -> bool:
+    if not workflow_first:
+        return False
+    normalized_response_type = str(response_type or "").strip().lower()
+    if normalized_response_type not in {"general", "doc_lookup", "compare", "design_review", "migration"}:
+        return False
+    slot_status = workflow_bundle.get("slot_status") if isinstance(workflow_bundle, dict) else {}
+    if not bool((slot_status or {}).get("slots_complete")):
+        return False
+    return len(list(wiki_code_windows or [])) >= 4
+
+
 def _unique_strings(values: Iterable[str], *, limit: Optional[int] = None) -> List[str]:
     output: List[str] = []
     seen = set()
@@ -1360,6 +1524,20 @@ def extract_doc_symbol_candidates(
     return _unique_strings(candidates, limit=max_candidates)
 
 
+def wiki_anchor_window_budget(
+    *,
+    doc_chunks: Sequence[Dict[str, Any]],
+    response_type: str,
+    code_window_cap: int,
+) -> int:
+    capped = clamp_int(code_window_cap, 1, 32)
+    normalized_response_type = str(response_type or "").strip().lower()
+    workflow_only = bool(doc_chunks) and all(_is_workflow_row(chunk) for chunk in doc_chunks)
+    if workflow_only and normalized_response_type in {"general", "doc_lookup", "compare", "design_review", "migration"}:
+        return min(capped, 6)
+    return capped
+
+
 async def collect_wiki_anchor_code_windows(
     *,
     redis,
@@ -1372,9 +1550,14 @@ async def collect_wiki_anchor_code_windows(
     code_window_cap: int,
     search_only: bool,
 ) -> List[Dict[str, Any]]:
+    anchor_budget = wiki_anchor_window_budget(
+        doc_chunks=doc_chunks,
+        response_type=response_type,
+        code_window_cap=code_window_cap,
+    )
     anchors = prioritize_wiki_source_anchors(
         extract_wiki_source_anchors(doc_chunks),
-        max_candidates=clamp_int(code_window_cap, 1, 32),
+        max_candidates=anchor_budget,
     )
     if not anchors or code_tools is None:
         return []
@@ -1386,7 +1569,7 @@ async def collect_wiki_anchor_code_windows(
     windows: List[Dict[str, Any]] = []
     seen = set()
     per_path_count: Dict[str, int] = {}
-    per_path_cap = 2
+    per_path_cap = 1 if anchor_budget <= 6 else 2
     max_windows = min(clamp_int(code_window_cap, 1, 24), max(6, len(anchors)))
 
     for anchor in anchors:
@@ -1447,12 +1630,20 @@ async def lookup_sources_and_code(
     collect_code_evidence_async,
     state=None,
 ) -> Dict[str, Any]:
+    total_started_at = perf_counter()
+    timings_ms: Dict[str, float] = {}
+
+    def record_timing(stage: str, started_at: float) -> None:
+        timings_ms[stage] = round((perf_counter() - started_at) * 1000, 2)
+
     if state is not None:
         search_svc = search_svc if search_svc is not None else getattr(state, "search_svc", None)
         embed_model = embed_model if embed_model is not None else getattr(state, "embed_model", None)
         code_tools = code_tools if code_tools is not None else getattr(state, "code_tools", None)
 
+    stage_started_at = perf_counter()
     await resolve_tool_user_context(redis, session_id=session_id, user_id=user_id)
+    record_timing("resolve_user_context", stage_started_at)
 
     capped_top_k = clamp_int(top_k, 1, 50)
     capped_limit = clamp_int(limit, 1, 50)
@@ -1462,13 +1653,18 @@ async def lookup_sources_and_code(
     normalized_wiki_id = _normalize_wiki_id(str(filters.get("wiki_id") or "").strip() if isinstance(filters, dict) else "engine")
 
     if str(response_type or "").strip().lower() in {"api_lookup", "exact_api_lookup"}:
+        stage_started_at = perf_counter()
         lookup_summary = build_exact_api_lookup_summary(query, wiki_id=normalized_wiki_id)
+        record_timing("exact_lookup_summary", stage_started_at)
         if lookup_summary is not None:
             source_records = list(lookup_summary.get("source_records") or [])[:doc_open_limit]
+            stage_started_at = perf_counter()
             exact_sources = [
                 _build_lookup_source_excerpt(record, section_index=index + 1)
                 for index, record in enumerate(source_records)
             ]
+            record_timing("build_exact_sources", stage_started_at)
+            stage_started_at = perf_counter()
             exact_code_windows = await collect_wiki_anchor_code_windows(
                 redis=redis,
                 session_id=session_id,
@@ -1480,18 +1676,25 @@ async def lookup_sources_and_code(
                 code_window_cap=code_window_cap,
                 search_only=search_only,
             )
+            record_timing("exact_wiki_anchor_windows", stage_started_at)
+            stage_started_at = perf_counter()
+            citations = build_citations(exact_sources, exact_code_windows)
+            record_timing("build_citations", stage_started_at)
+            timings_ms["total"] = round((perf_counter() - total_started_at) * 1000, 2)
             return {
                 "query": query,
                 "sources": exact_sources,
                 "code_windows": exact_code_windows,
-                "citations": build_citations(exact_sources, exact_code_windows),
+                "citations": citations,
                 "lookup_summary": {
                     key: value
                     for key, value in lookup_summary.items()
                     if key != "source_records"
                 },
+                "timings_ms": timings_ms,
             }
 
+    stage_started_at = perf_counter()
     workflow_bundle = _build_workflow_first_bundle(
         query=query,
         top_k=capped_top_k,
@@ -1499,7 +1702,9 @@ async def lookup_sources_and_code(
         max_chars=max_chars,
         explicit_wiki_id=normalized_wiki_id,
     ) if workflow_first else {"slot_status": {}}
+    record_timing("build_workflow_bundle", stage_started_at)
 
+    stage_started_at = perf_counter()
     sources = await collect_sources(
         redis=redis,
         search_svc=search_svc,
@@ -1514,8 +1719,13 @@ async def lookup_sources_and_code(
         search_only=search_only,
         response_type=response_type,
         workflow_first=workflow_first,
+        workflow_bundle=workflow_bundle,
     )
+    record_timing("collect_sources", stage_started_at)
+    stage_started_at = perf_counter()
     doc_symbol_candidates = extract_doc_symbol_candidates(sources, max_candidates=12)
+    record_timing("extract_doc_symbols", stage_started_at)
+    stage_started_at = perf_counter()
     wiki_code_windows = await collect_wiki_anchor_code_windows(
         redis=redis,
         session_id=session_id,
@@ -1527,25 +1737,56 @@ async def lookup_sources_and_code(
         code_window_cap=code_window_cap,
         search_only=search_only,
     )
-    searched_code_windows = await collect_code_evidence_async(
-        redis=redis,
-        code_tools=code_tools,
-        session_id=session_id,
-        query=query,
-        extra_query_candidates=doc_symbol_candidates,
-        capped_limit=capped_limit,
-        max_chars=max_chars,
-        max_line_span=max_line_span,
+    record_timing("collect_wiki_anchor_code_windows", stage_started_at)
+    if should_skip_broad_code_evidence(
+        workflow_first=workflow_first,
         response_type=response_type,
-        search_only=search_only,
-        code_window_cap=code_window_cap,
-    )
+        workflow_bundle=workflow_bundle,
+        wiki_code_windows=wiki_code_windows,
+    ):
+        searched_code_windows = []
+        timings_ms["collect_code_evidence"] = 0.0
+    else:
+        stage_started_at = perf_counter()
+        searched_code_windows = await collect_code_evidence_async(
+            redis=redis,
+            code_tools=code_tools,
+            session_id=session_id,
+            query=query,
+            extra_query_candidates=doc_symbol_candidates,
+            capped_limit=capped_limit,
+            max_chars=max_chars,
+            max_line_span=max_line_span,
+            response_type=response_type,
+            search_only=search_only,
+            code_window_cap=code_window_cap,
+        )
+        record_timing("collect_code_evidence", stage_started_at)
+    stage_started_at = perf_counter()
     code_windows = merge_code_windows([wiki_code_windows, searched_code_windows])
+    record_timing("merge_code_windows", stage_started_at)
+    stage_started_at = perf_counter()
+    citations = build_citations(sources, code_windows)
+    record_timing("build_citations", stage_started_at)
+    timings_ms["total"] = round((perf_counter() - total_started_at) * 1000, 2)
+    if timings_ms["total"] >= 2000:
+        logger.info(
+            "lookup_sources_and_code_timing",
+            extra={
+                "query": query[:200],
+                "response_type": str(response_type or ""),
+                "workflow_first": bool(workflow_first),
+                "timings_ms": timings_ms,
+                "source_count": len(sources),
+                "code_window_count": len(code_windows),
+            },
+        )
 
     return {
         "query": query,
         "sources": sources,
         "code_windows": code_windows,
-        "citations": build_citations(sources, code_windows),
+        "citations": citations,
         "workflow_bundle": workflow_bundle.get("slot_status") if workflow_first else {},
+        "timings_ms": timings_ms,
     }

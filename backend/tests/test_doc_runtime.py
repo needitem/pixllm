@@ -123,6 +123,10 @@ class DocRuntimeManifestFirstTests(unittest.IsolatedAsyncioTestCase):
                 "use_this_workflow_as_primary_path",
                 bundle.get("slot_status", {}).get("verification_rules") or [],
             )
+            self.assertEqual(
+                bundle.get("slot_status", {}).get("forbidden_answer_patterns"),
+                [],
+            )
             self.assertTrue(
                 any(
                     str(item.get("symbol") or "") == "XRasterIO.LoadFile"
@@ -190,3 +194,274 @@ class ToolRuntimeCodeEvidenceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result, [])
         self.assertEqual(search_code_mock.await_count, 1)
+
+
+class DocRuntimeLookupTimingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_collect_sources_uses_precomputed_workflow_bundle(self):
+        precomputed_bundle = {
+            "sources": [
+                {
+                    "file_path": "workflows/wf-raster-load.md",
+                    "chunk_id": "wiki:engine:workflows/wf-raster-load.md#manifest",
+                }
+            ],
+            "slot_status": {"slots_complete": True},
+        }
+
+        with patch(
+            "backend.app.services.tools.doc_runtime._build_workflow_first_bundle",
+            side_effect=AssertionError("workflow bundle should not be rebuilt"),
+        ), patch(
+            "backend.app.services.tools.doc_runtime.search_wiki",
+            side_effect=AssertionError("search_wiki should not run when bundle sources exist"),
+        ):
+            sources = await doc_runtime.collect_sources(
+                redis=None,
+                search_svc=None,
+                embed_model=None,
+                session_id="session-1",
+                query="How do I call XRasterIO.LoadFile to load raster data?",
+                filters={"wiki_id": "engine"},
+                top_k=8,
+                doc_open_limit=4,
+                max_chars=4000,
+                active_collection="documents",
+                search_only=True,
+                response_type="api_lookup",
+                workflow_first=True,
+                workflow_bundle=precomputed_bundle,
+            )
+
+        self.assertEqual(sources, precomputed_bundle["sources"])
+
+    async def test_lookup_sources_and_code_returns_timings_and_builds_workflow_bundle_once(self):
+        workflow_bundle = {
+            "sources": [
+                {
+                    "file_path": "workflows/wf-raster-load.md",
+                    "chunk_id": "wiki:engine:workflows/wf-raster-load.md#manifest",
+                }
+            ],
+            "slot_status": {"slots_complete": True},
+        }
+        collect_sources_mock = AsyncMock(return_value=workflow_bundle["sources"])
+        collect_wiki_windows_mock = AsyncMock(return_value=[])
+        collect_code_evidence_mock = AsyncMock(return_value=[])
+
+        with patch(
+            "backend.app.services.tools.doc_runtime.resolve_tool_user_context",
+            AsyncMock(return_value={}),
+        ), patch(
+            "backend.app.services.tools.doc_runtime._build_workflow_first_bundle",
+            return_value=workflow_bundle,
+        ) as build_bundle_mock, patch(
+            "backend.app.services.tools.doc_runtime.collect_sources",
+            collect_sources_mock,
+        ), patch(
+            "backend.app.services.tools.doc_runtime.collect_wiki_anchor_code_windows",
+            collect_wiki_windows_mock,
+        ), patch(
+            "backend.app.services.tools.doc_runtime.extract_doc_symbol_candidates",
+            return_value=[],
+        ), patch(
+            "backend.app.services.tools.doc_runtime.build_citations",
+            return_value=[],
+        ):
+            result = await doc_runtime.lookup_sources_and_code(
+                redis=None,
+                search_svc=None,
+                embed_model=None,
+                code_tools=None,
+                session_id="session-1",
+                user_id="user-1",
+                query="How do I call XRasterIO.LoadFile to load raster data?",
+                filters={"wiki_id": "engine"},
+                top_k=8,
+                limit=8,
+                max_chars=4000,
+                max_line_span=80,
+                response_type="general",
+                workflow_first=True,
+                search_only=False,
+                collection="documents",
+                collect_code_evidence_async=collect_code_evidence_mock,
+            )
+
+        self.assertEqual(build_bundle_mock.call_count, 1)
+        self.assertIs(collect_sources_mock.await_args.kwargs["workflow_bundle"], workflow_bundle)
+        self.assertIn("build_workflow_bundle", result["timings_ms"])
+        self.assertIn("collect_sources", result["timings_ms"])
+        self.assertIn("total", result["timings_ms"])
+
+    async def test_lookup_sources_and_code_skips_broad_code_evidence_when_workflow_anchors_are_strong(self):
+        workflow_bundle = {
+            "sources": [
+                {
+                    "file_path": "workflows/imageview-xdm-display-workflow.md",
+                    "chunk_id": "wiki:engine:workflows/imageview-xdm-display-workflow.md#manifest",
+                }
+            ],
+            "slot_status": {"slots_complete": True},
+        }
+        wiki_windows = [
+            {"path": f"file{i}.cs", "line_range": f"{i}-{i}"}
+            for i in range(1, 7)
+        ]
+        collect_code_evidence_mock = AsyncMock(side_effect=AssertionError("broad code evidence should be skipped"))
+
+        with patch(
+            "backend.app.services.tools.doc_runtime.resolve_tool_user_context",
+            AsyncMock(return_value={}),
+        ), patch(
+            "backend.app.services.tools.doc_runtime._build_workflow_first_bundle",
+            return_value=workflow_bundle,
+        ), patch(
+            "backend.app.services.tools.doc_runtime.collect_sources",
+            AsyncMock(return_value=workflow_bundle["sources"]),
+        ), patch(
+            "backend.app.services.tools.doc_runtime.collect_wiki_anchor_code_windows",
+            AsyncMock(return_value=wiki_windows),
+        ), patch(
+            "backend.app.services.tools.doc_runtime.extract_doc_symbol_candidates",
+            return_value=["XRasterIO", "XRSLoadFile"],
+        ), patch(
+            "backend.app.services.tools.doc_runtime.build_citations",
+            return_value=[],
+        ):
+            result = await doc_runtime.lookup_sources_and_code(
+                redis=None,
+                search_svc=None,
+                embed_model=None,
+                code_tools=None,
+                session_id="session-1",
+                user_id="user-1",
+                query="c#에서 ImageView를 이용하여 XDM 파일 로드하여 화면에 도시하는 방법 알려줘",
+                filters={"wiki_id": "engine"},
+                top_k=8,
+                limit=8,
+                max_chars=4000,
+                max_line_span=120,
+                response_type="general",
+                workflow_first=True,
+                search_only=False,
+                collection="documents",
+                collect_code_evidence_async=collect_code_evidence_mock,
+            )
+
+        self.assertEqual(result["code_windows"], wiki_windows)
+        self.assertEqual(result["timings_ms"]["collect_code_evidence"], 0.0)
+
+    def test_build_workflow_first_bundle_skips_method_matching_for_non_specific_lookup(self):
+        workflow_bundle = {
+            "records": [
+                {
+                    "path": "workflows/wf-raster-load.md",
+                    "title": "Raster Load Workflow",
+                    "content": WORKFLOW_PAGE,
+                    "symbols": ["XRasterIO", "LoadFile"],
+                    "required_symbols": ["XRasterIO.LoadFile"],
+                    "tags": ["engine", "workflow"],
+                    "required_facts": [
+                        {
+                            "symbol": "XRasterIO.LoadFile",
+                            "declaration": "NRS::XRSLoadFile^ LoadFile(...);",
+                            "source": "Source/NXDLio/NXDLio.h:230",
+                        }
+                    ],
+                    "verification_rules": ["use_this_workflow_as_primary_path"],
+                    "forbidden_answer_patterns": [],
+                    "aliases": ["Load Raster"],
+                    "route_terms": ["Raster Load Workflow", "XRasterIO", "LoadFile"],
+                }
+            ],
+            "path_lookup": {
+                "workflows/wf-raster-load.md": {
+                    "path": "workflows/wf-raster-load.md",
+                    "title": "Raster Load Workflow",
+                    "content": WORKFLOW_PAGE,
+                    "symbols": ["XRasterIO", "LoadFile"],
+                    "required_symbols": ["XRasterIO.LoadFile"],
+                    "tags": ["engine", "workflow"],
+                    "required_facts": [
+                        {
+                            "symbol": "XRasterIO.LoadFile",
+                            "declaration": "NRS::XRSLoadFile^ LoadFile(...);",
+                            "source": "Source/NXDLio/NXDLio.h:230",
+                        }
+                    ],
+                    "verification_rules": ["use_this_workflow_as_primary_path"],
+                    "forbidden_answer_patterns": [],
+                    "aliases": ["Load Raster"],
+                    "route_terms": ["Raster Load Workflow", "XRasterIO", "LoadFile"],
+                }
+            },
+            "search_entries": [
+                {
+                    "record": {
+                        "path": "workflows/wf-raster-load.md",
+                        "title": "Raster Load Workflow",
+                        "content": WORKFLOW_PAGE,
+                        "symbols": ["XRasterIO", "LoadFile"],
+                        "required_symbols": ["XRasterIO.LoadFile"],
+                        "tags": ["engine", "workflow"],
+                        "required_facts": [
+                            {
+                                "symbol": "XRasterIO.LoadFile",
+                                "declaration": "NRS::XRSLoadFile^ LoadFile(...);",
+                                "source": "Source/NXDLio/NXDLio.h:230",
+                            }
+                        ],
+                        "verification_rules": ["use_this_workflow_as_primary_path"],
+                        "forbidden_answer_patterns": [],
+                        "aliases": ["Load Raster"],
+                        "route_terms": ["Raster Load Workflow", "XRasterIO", "LoadFile"],
+                    }
+                }
+            ],
+            "generated_at": "2026-01-01T00:00:00Z",
+        }
+        methods_bundle = {
+            "records": [],
+            "type_lookup": {},
+            "record_lookup": {},
+        }
+
+        with patch(
+            "backend.app.services.tools.doc_runtime._workflow_lookup_bundle",
+            return_value=workflow_bundle,
+        ), patch(
+            "backend.app.services.tools.doc_runtime._methods_lookup_bundle",
+            return_value=methods_bundle,
+        ), patch(
+            "backend.app.services.tools.doc_runtime._match_method_records_from_candidates",
+            side_effect=AssertionError("method matching should not run for non-specific workflow guidance"),
+        ):
+            bundle = doc_runtime._build_workflow_first_bundle(
+                query="How do I load raster data?",
+                top_k=8,
+                doc_open_limit=4,
+                max_chars=4000,
+                explicit_wiki_id="engine",
+            )
+
+        self.assertEqual(bundle["slot_status"]["required_slots"], ["workflow", "method_or_anchor"])
+
+
+class DocRuntimeAnchorBudgetTests(unittest.TestCase):
+    def test_wiki_anchor_window_budget_limits_general_workflow_only_queries(self):
+        budget = doc_runtime.wiki_anchor_window_budget(
+            doc_chunks=[{"file_path": "workflows/imageview-xdm-display-workflow.md"}],
+            response_type="general",
+            code_window_cap=12,
+        )
+
+        self.assertEqual(budget, 6)
+
+    def test_wiki_anchor_window_budget_keeps_api_lookup_capacity(self):
+        budget = doc_runtime.wiki_anchor_window_budget(
+            doc_chunks=[{"file_path": "workflows/imageview-xdm-display-workflow.md"}],
+            response_type="api_lookup",
+            code_window_cap=12,
+        )
+
+        self.assertEqual(budget, 12)
