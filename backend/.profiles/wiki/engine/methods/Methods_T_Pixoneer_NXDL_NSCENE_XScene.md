@@ -1,4 +1,4 @@
----
+﻿---
 title: Pixoneer.NXDL.NSCENE.XScene Methods
 aliases:
   - XScene Methods
@@ -36,6 +36,24 @@ tags:
 - Type declaration: `Source/NXDLscene/NXDLscene.h:2465`
 - Method count: `14`
 
+## Method Page Facts
+```yaml
+page_family: method_reference
+qualified_type: Pixoneer.NXDL.NSCENE.XScene
+type_name: XScene
+namespace: Pixoneer.NXDL.NSCENE
+method_section_prefix: "## "
+verification_rules:
+  - treat_declaration_lines_as_symbol_existence_evidence
+  - treat_implementation_lines_as_source_anchor_evidence
+  - prefer_this_page_over_examples_for_exact_call_shapes
+  - do_not_invent_members_not_listed_here
+```
+
+## Runtime Usage
+- Use this page to verify exact symbol existence before emitting code.
+- Cross-check declaration and implementation lines when overloads or call shapes matter.
+- Treat examples and workflow pages as composition guidance, but treat this page as the canonical member list.
 ## AddNode
 - Description: 객체를 컨테이너에 추가한다.
 - Declaration: `Source/NXDLscene/NXDLscene.h:2503`

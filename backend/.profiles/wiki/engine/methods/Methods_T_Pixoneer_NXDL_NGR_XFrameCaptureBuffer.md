@@ -1,4 +1,4 @@
----
+﻿---
 title: Pixoneer.NXDL.NGR.XFrameCaptureBuffer Methods
 aliases:
   - XFrameCaptureBuffer Methods
@@ -41,6 +41,24 @@ tags:
 - Type declaration: `Source/NXDLgr/XFrameCaptureBuffer.h:29`
 - Method count: `19`
 
+## Method Page Facts
+```yaml
+page_family: method_reference
+qualified_type: Pixoneer.NXDL.NGR.XFrameCaptureBuffer
+type_name: XFrameCaptureBuffer
+namespace: Pixoneer.NXDL.NGR
+method_section_prefix: "## "
+verification_rules:
+  - treat_declaration_lines_as_symbol_existence_evidence
+  - treat_implementation_lines_as_source_anchor_evidence
+  - prefer_this_page_over_examples_for_exact_call_shapes
+  - do_not_invent_members_not_listed_here
+```
+
+## Runtime Usage
+- Use this page to verify exact symbol existence before emitting code.
+- Cross-check declaration and implementation lines when overloads or call shapes matter.
+- Treat examples and workflow pages as composition guidance, but treat this page as the canonical member list.
 ## BeginPixelProcessingMode
 - Description: 갈무리 버퍼에 독립적으로 렌더링을 하는 모드를 시작한다. 주로 쉐이더를 통한 오프-스크린 픽셀 처리에 쓰인다.
 - Declaration: `Source/NXDLgr/XFrameCaptureBuffer.h:321`

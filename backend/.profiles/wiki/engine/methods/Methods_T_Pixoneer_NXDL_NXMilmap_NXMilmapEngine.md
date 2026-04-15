@@ -1,4 +1,4 @@
----
+﻿---
 title: Pixoneer.NXDL.NXMilmap.NXMilmapEngine Methods
 aliases:
   - NXMilmapEngine Methods
@@ -38,6 +38,24 @@ tags:
 - Type declaration: `Source/NXMilmap/NXMilmapEngine.h:23`
 - Method count: `16`
 
+## Method Page Facts
+```yaml
+page_family: method_reference
+qualified_type: Pixoneer.NXDL.NXMilmap.NXMilmapEngine
+type_name: NXMilmapEngine
+namespace: Pixoneer.NXDL.NXMilmap
+method_section_prefix: "## "
+verification_rules:
+  - treat_declaration_lines_as_symbol_existence_evidence
+  - treat_implementation_lines_as_source_anchor_evidence
+  - prefer_this_page_over_examples_for_exact_call_shapes
+  - do_not_invent_members_not_listed_here
+```
+
+## Runtime Usage
+- Use this page to verify exact symbol existence before emitting code.
+- Cross-check declaration and implementation lines when overloads or call shapes matter.
+- Treat examples and workflow pages as composition guidance, but treat this page as the canonical member list.
 ## AddView
 - Description: 엔진에 NXMilmapView를 추가한다. 이 함수는 윈도우 컨트롤이 호출한다.
 - Declaration: `Source/NXMilmap/NXMilmapEngine.h:37`

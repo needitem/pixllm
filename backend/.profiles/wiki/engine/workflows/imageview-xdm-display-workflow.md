@@ -1,4 +1,4 @@
----
+﻿---
 title: ImageView XDM Display Workflow
 aliases:
   - ImageView XDM load display
@@ -194,3 +194,17 @@ public sealed class MainForm : Form
 - Do not pass `NXImageLayerComposites` directly to `AddImageLayer(ref ...)` without the verified base-layer pattern. Use `NXImageLayer layer = compositeLayer; imageView.AddImageLayer(ref layer);`.
 - Do not leave a fake path like `C:\\path\\to\\your\\file.xdm` in an auto-executed code path. Either parameterize the path, open a file dialog, or leave the example path in a commented usage snippet instead of calling it automatically.
 - If you define WinForms handlers such as `Form_Load` or `FormClosing`, wire them in `InitializeComponent()` or remove the dead handlers. Unwired handlers are treated as an incomplete interaction path.
+## Structured Page Facts
+```yaml
+page_family: curated_workflow
+role: curated_reference
+verification_rules:
+  - use_this_page_when_the_question_matches_its_scenario_scope
+  - cross_check_methods_pages_before_emitting_exact_call_shapes
+  - keep_output_shape_rules_from_this_page_when_present
+```
+
+## Runtime Usage
+- Use this page as a richer scenario-level reference than the normalized `wf-*.md` pages when the question clearly matches this scenario.
+- If this page defines output-shape constraints such as WPF/XAML delivery, keep those constraints in the final answer.
+- Do not use sample-driven code patterns here to override conflicting exact signatures from methods pages.

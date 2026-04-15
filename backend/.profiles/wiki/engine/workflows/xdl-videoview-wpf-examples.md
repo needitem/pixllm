@@ -1,4 +1,4 @@
----
+﻿---
 title: XDL VideoView WPF Examples
 aliases:
   - XDL_VideoView01_wpf
@@ -59,3 +59,17 @@ tags:
 # Delivery Notes
 - `XDL_VideoView03_wpf` and later samples should be treated as multi-part WPF UI examples, not bare code snippets.
 - If the user asks for a "full player" rather than a minimal playback demo, prefer the later samples because they include timeline and enhancement UI, not only file open/play calls.
+## Structured Page Facts
+```yaml
+page_family: sample_workflow_examples
+role: curated_reference
+verification_rules:
+  - use_this_page_when_the_question_matches_its_scenario_scope
+  - cross_check_methods_pages_before_emitting_exact_call_shapes
+  - keep_output_shape_rules_from_this_page_when_present
+```
+
+## Runtime Usage
+- Use this page as a richer scenario-level reference than the normalized `wf-*.md` pages when the question clearly matches this scenario.
+- If this page defines output-shape constraints such as WPF/XAML delivery, keep those constraints in the final answer.
+- Do not use sample-driven code patterns here to override conflicting exact signatures from methods pages.

@@ -1,4 +1,4 @@
----
+﻿---
 title: Pixoneer.NXDL.XGrid Methods
 aliases:
   - XGrid Methods
@@ -43,6 +43,24 @@ tags:
 - Type declaration: `Source/NXDL/NXDL.h:2400`
 - Method count: `22`
 
+## Method Page Facts
+```yaml
+page_family: method_reference
+qualified_type: Pixoneer.NXDL.XGrid
+type_name: XGrid
+namespace: Pixoneer.NXDL
+method_section_prefix: "## "
+verification_rules:
+  - treat_declaration_lines_as_symbol_existence_evidence
+  - treat_implementation_lines_as_source_anchor_evidence
+  - prefer_this_page_over_examples_for_exact_call_shapes
+  - do_not_invent_members_not_listed_here
+```
+
+## Runtime Usage
+- Use this page to verify exact symbol existence before emitting code.
+- Cross-check declaration and implementation lines when overloads or call shapes matter.
+- Treat examples and workflow pages as composition guidance, but treat this page as the canonical member list.
 ## Alloc
 - Description: 입력받은 자료 공간 차원 정보 및 데이터 타입에 해당하는 메모리 공간을 할당한다. 만약 이미 할당된 공간이 할당하고자 하는 메모리 공간보다 큰 경우 새롭게 메모리를 할당하지 않고 기존 메모리를 사용하되 파라미터(행 크기, 열 크기, 데이터 타입)만을 변경시킨다.
 - Declaration: `Source/NXDL/NXDL.h:2457`

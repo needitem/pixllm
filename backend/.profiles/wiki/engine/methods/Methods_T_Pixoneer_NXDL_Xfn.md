@@ -1,4 +1,4 @@
----
+﻿---
 title: Pixoneer.NXDL.Xfn Methods
 aliases:
   - Xfn Methods
@@ -45,6 +45,24 @@ tags:
 - Type declaration: `Source/NXDL/NXDL.h:3214`
 - Method count: `41`
 
+## Method Page Facts
+```yaml
+page_family: method_reference
+qualified_type: Pixoneer.NXDL.Xfn
+type_name: Xfn
+namespace: Pixoneer.NXDL
+method_section_prefix: "## "
+verification_rules:
+  - treat_declaration_lines_as_symbol_existence_evidence
+  - treat_implementation_lines_as_source_anchor_evidence
+  - prefer_this_page_over_examples_for_exact_call_shapes
+  - do_not_invent_members_not_listed_here
+```
+
+## Runtime Usage
+- Use this page to verify exact symbol existence before emitting code.
+- Cross-check declaration and implementation lines when overloads or call shapes matter.
+- Treat examples and workflow pages as composition guidance, but treat this page as the canonical member list.
 ## CalArcDistAndAngle
 - Description: 두 위도/경도 점을 입력하여 두 점 간의 거리와 방향(첫 번째 점으로부터 두 번째 점을 잇는 선분에 대한 북쪽으로의 방향)을 계산한다.
 - Declaration: `Source/NXDL/NXDL.h:3404`

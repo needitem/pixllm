@@ -1,4 +1,4 @@
----
+﻿---
 title: Pixoneer.NXDL.NXVideo.XVideoChannel Methods
 aliases:
   - XVideoChannel Methods
@@ -46,6 +46,24 @@ tags:
 - Type declaration: `Source/NXVideo/XVideoChannel.h:28`
 - Method count: `54`
 
+## Method Page Facts
+```yaml
+page_family: method_reference
+qualified_type: Pixoneer.NXDL.NXVideo.XVideoChannel
+type_name: XVideoChannel
+namespace: Pixoneer.NXDL.NXVideo
+method_section_prefix: "## "
+verification_rules:
+  - treat_declaration_lines_as_symbol_existence_evidence
+  - treat_implementation_lines_as_source_anchor_evidence
+  - prefer_this_page_over_examples_for_exact_call_shapes
+  - do_not_invent_members_not_listed_here
+```
+
+## Runtime Usage
+- Use this page to verify exact symbol existence before emitting code.
+- Cross-check declaration and implementation lines when overloads or call shapes matter.
+- Treat examples and workflow pages as composition guidance, but treat this page as the canonical member list.
 ## Activate
 - Description: XVideo객체에 포함된 XVideoChannel객체 중 이 객체를 활성화한다. 활성화된 객체만 스트리밍이 수행된다.
 - Declaration: `not found`

@@ -1,4 +1,4 @@
----
+﻿---
 title: Pixoneer.NXDL.NXMilmap.NXMilmapConfig Methods
 aliases:
   - NXMilmapConfig Methods
@@ -36,6 +36,24 @@ tags:
 - Type declaration: `Source/NXMilmap/NXMilmapConfig.h:214`
 - Method count: `14`
 
+## Method Page Facts
+```yaml
+page_family: method_reference
+qualified_type: Pixoneer.NXDL.NXMilmap.NXMilmapConfig
+type_name: NXMilmapConfig
+namespace: Pixoneer.NXDL.NXMilmap
+method_section_prefix: "## "
+verification_rules:
+  - treat_declaration_lines_as_symbol_existence_evidence
+  - treat_implementation_lines_as_source_anchor_evidence
+  - prefer_this_page_over_examples_for_exact_call_shapes
+  - do_not_invent_members_not_listed_here
+```
+
+## Runtime Usage
+- Use this page to verify exact symbol existence before emitting code.
+- Cross-check declaration and implementation lines when overloads or call shapes matter.
+- Treat examples and workflow pages as composition guidance, but treat this page as the canonical member list.
 ## Add
 - Description: MilmapScale을 추가한다. MilmapScale 종류에 따라 MapScales와 PBPScales에 추가한다.
 - Declaration: `Source/NXMilmap/NXMilmapConfig.h:230`

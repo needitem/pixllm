@@ -1,4 +1,4 @@
----
+﻿---
 title: Engine Question Workflow Index
 aliases:
   - Engine Question Workflow Index
@@ -61,3 +61,17 @@ tags:
   - [xdl-milmapview-wpf-examples.md](xdl-milmapview-wpf-examples.md)
 
 - Answer index: [engine-question-answer-index.md](engine-question-answer-index.md)
+## Structured Page Facts
+```yaml
+page_family: workflow_index
+role: curated_reference
+verification_rules:
+  - use_this_page_when_the_question_matches_its_scenario_scope
+  - cross_check_methods_pages_before_emitting_exact_call_shapes
+  - keep_output_shape_rules_from_this_page_when_present
+```
+
+## Runtime Usage
+- Use this page as a richer scenario-level reference than the normalized `wf-*.md` pages when the question clearly matches this scenario.
+- If this page defines output-shape constraints such as WPF/XAML delivery, keep those constraints in the final answer.
+- Do not use sample-driven code patterns here to override conflicting exact signatures from methods pages.

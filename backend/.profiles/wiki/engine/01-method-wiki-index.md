@@ -1,4 +1,4 @@
----
+﻿---
 title: PIXLLM Engine Method Wiki Index
 aliases:
   - Engine Method Index
@@ -40,3 +40,17 @@ tags:
 - `Pixoneer.NXDL.NIO.XDtedElevManager`
 - `Pixoneer.NXDL.NIO.XGeoidManager`
 - `Pixoneer.NXDL.NIO.XRPFToc`
+## Structured Index Facts
+```yaml
+page_family: method_index
+role: generated_reference_catalog
+authoritative_children: methods/*.md
+verification_rules:
+  - use_method_pages_for_exact_symbol_and_signature_checks
+  - do_not_answer_usage_questions_from_the_index_alone
+```
+
+## Runtime Usage
+- Use this page for coarse discovery only.
+- After locating the likely type, open the matching `methods/*.md` page before emitting exact calls.
+- For usage questions, prefer a workflow page first and then use this index only to find the exact methods page.

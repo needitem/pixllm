@@ -1,4 +1,4 @@
----
+﻿---
 title: Pixoneer.NXDL.NDFS.XPBPProviderExporter Methods
 aliases:
   - XPBPProviderExporter Methods
@@ -26,6 +26,24 @@ tags:
 - Type declaration: `Source/NXDLdfs/NXDLdfs.h:478`
 - Method count: `4`
 
+## Method Page Facts
+```yaml
+page_family: method_reference
+qualified_type: Pixoneer.NXDL.NDFS.XPBPProviderExporter
+type_name: XPBPProviderExporter
+namespace: Pixoneer.NXDL.NDFS
+method_section_prefix: "## "
+verification_rules:
+  - treat_declaration_lines_as_symbol_existence_evidence
+  - treat_implementation_lines_as_source_anchor_evidence
+  - prefer_this_page_over_examples_for_exact_call_shapes
+  - do_not_invent_members_not_listed_here
+```
+
+## Runtime Usage
+- Use this page to verify exact symbol existence before emitting code.
+- Cross-check declaration and implementation lines when overloads or call shapes matter.
+- Treat examples and workflow pages as composition guidance, but treat this page as the canonical member list.
 ## AddPName
 - Description: 지점을 추가한다.
 - Declaration: `Source/NXDLdfs/NXDLdfs.h:494`

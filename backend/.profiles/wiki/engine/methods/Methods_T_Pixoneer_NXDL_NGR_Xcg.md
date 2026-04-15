@@ -1,4 +1,4 @@
----
+﻿---
 title: Pixoneer.NXDL.NGR.Xcg Methods
 aliases:
   - Xcg Methods
@@ -28,6 +28,24 @@ tags:
 - Type declaration: `Source/NXDLgr/NXDLgr.h:4114`
 - Method count: `6`
 
+## Method Page Facts
+```yaml
+page_family: method_reference
+qualified_type: Pixoneer.NXDL.NGR.Xcg
+type_name: Xcg
+namespace: Pixoneer.NXDL.NGR
+method_section_prefix: "## "
+verification_rules:
+  - treat_declaration_lines_as_symbol_existence_evidence
+  - treat_implementation_lines_as_source_anchor_evidence
+  - prefer_this_page_over_examples_for_exact_call_shapes
+  - do_not_invent_members_not_listed_here
+```
+
+## Runtime Usage
+- Use this page to verify exact symbol existence before emitting code.
+- Cross-check declaration and implementation lines when overloads or call shapes matter.
+- Treat examples and workflow pages as composition guidance, but treat this page as the canonical member list.
 ## GetClosestPtOnLine
 - Description: 직선과 점의 최단점을 구한다.
 - Declaration: `Source/NXDLgr/NXDLgr.h:4133`

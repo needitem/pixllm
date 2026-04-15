@@ -1,4 +1,4 @@
----
+﻿---
 title: Engine Workflow Retention Notes
 aliases:
   - Engine Workflow Retention Notes
@@ -39,3 +39,17 @@ tags:
 - New workflow files are shorter and answer-routing oriented.
 - Deleting older pages now would remove useful WPF/sample context.
 - The removed files were generation-only artifacts, not user-facing workflow pages.
+## Structured Page Facts
+```yaml
+page_family: retention_notes
+role: curated_reference
+verification_rules:
+  - use_this_page_when_the_question_matches_its_scenario_scope
+  - cross_check_methods_pages_before_emitting_exact_call_shapes
+  - keep_output_shape_rules_from_this_page_when_present
+```
+
+## Runtime Usage
+- Use this page as a richer scenario-level reference than the normalized `wf-*.md` pages when the question clearly matches this scenario.
+- If this page defines output-shape constraints such as WPF/XAML delivery, keep those constraints in the final answer.
+- Do not use sample-driven code patterns here to override conflicting exact signatures from methods pages.

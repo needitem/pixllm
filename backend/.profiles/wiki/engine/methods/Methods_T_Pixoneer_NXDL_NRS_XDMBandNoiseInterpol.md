@@ -1,4 +1,4 @@
----
+﻿---
 title: Pixoneer.NXDL.NRS.XDMBandNoiseInterpol Methods
 aliases:
   - XDMBandNoiseInterpol Methods
@@ -26,6 +26,24 @@ tags:
 - Type declaration: `Source/NXDLrs/XDMBandNoiseInterpol.h:155`
 - Method count: `4`
 
+## Method Page Facts
+```yaml
+page_family: method_reference
+qualified_type: Pixoneer.NXDL.NRS.XDMBandNoiseInterpol
+type_name: XDMBandNoiseInterpol
+namespace: Pixoneer.NXDL.NRS
+method_section_prefix: "## "
+verification_rules:
+  - treat_declaration_lines_as_symbol_existence_evidence
+  - treat_implementation_lines_as_source_anchor_evidence
+  - prefer_this_page_over_examples_for_exact_call_shapes
+  - do_not_invent_members_not_listed_here
+```
+
+## Runtime Usage
+- Use this page to verify exact symbol existence before emitting code.
+- Cross-check declaration and implementation lines when overloads or call shapes matter.
+- Treat examples and workflow pages as composition guidance, but treat this page as the canonical member list.
 ## BuildAuxDataStructure
 - Description: ReadVerts 함수를 통해 생성된 (x,y,z) 구조체를 이용해서 Interpolation 방법에 따른 잡음제거 구조체를 생성한다.
 - Declaration: `Source/NXDLrs/XDMBandNoiseInterpol.h:192`

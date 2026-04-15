@@ -1,4 +1,4 @@
----
+﻿---
 title: Pixoneer.NXDL.NXAnnotation.NIO.NCanvasFileImageEnhance Methods
 aliases:
   - NCanvasFileImageEnhance Methods
@@ -25,6 +25,24 @@ tags:
 - Type declaration: `not found`
 - Method count: `2`
 
+## Method Page Facts
+```yaml
+page_family: method_reference
+qualified_type: Pixoneer.NXDL.NXAnnotation.NIO.NCanvasFileImageEnhance
+type_name: NCanvasFileImageEnhance
+namespace: Pixoneer.NXDL.NXAnnotation.NIO
+method_section_prefix: "## "
+verification_rules:
+  - treat_declaration_lines_as_symbol_existence_evidence
+  - treat_implementation_lines_as_source_anchor_evidence
+  - prefer_this_page_over_examples_for_exact_call_shapes
+  - do_not_invent_members_not_listed_here
+```
+
+## Runtime Usage
+- Use this page to verify exact symbol existence before emitting code.
+- Cross-check declaration and implementation lines when overloads or call shapes matter.
+- Treat examples and workflow pages as composition guidance, but treat this page as the canonical member list.
 ## GetColorBalanceValue
 - Description: 편집영상 영상효과 중 color balance value를 가져온다.
 - Declaration: `not found`
