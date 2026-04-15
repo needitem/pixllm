@@ -135,6 +135,12 @@ function answerAcknowledgesMissingVerification(answer = '') {
   ].some((pattern) => pattern.test(source));
 }
 
+function answerContainsCodeExample(answer = '') {
+  const source = toStringValue(answer);
+  if (!source) return false;
+  return /```[\s\S]*?```/.test(source) || /<code>[\s\S]*?<\/code>/i.test(source);
+}
+
 function requestNeedsGroundedChangeEvidence(requestContext = {}) {
   const intent = requestContext?.intent && typeof requestContext.intent === 'object'
     ? requestContext.intent
@@ -166,6 +172,7 @@ function evaluateFinalAnswerPolicy({
   const summary = summarizeTraceEvidence({ trace, describeTool });
   const referenceEvidence = summarizeWikiEvidence(trace);
   const acknowledgesMissingVerification = answerAcknowledgesMissingVerification(finalAnswer);
+  const containsCodeExample = answerContainsCodeExample(finalAnswer);
   const hasWorkspaceGrounding =
     summary.hasDiscoveryEvidence
     || summary.hasInspectionEvidence
@@ -173,6 +180,8 @@ function evaluateFinalAnswerPolicy({
   const hasGroundedChangeEvidence =
     hasWorkspaceGrounding
     || referenceEvidence.hasVerifiedCodeEvidence;
+  const hasVerifiedApiFacts = Number(referenceEvidence.apiFactCount || 0) > 0
+    || Number(referenceEvidence.workflowRequiredFactCount || 0) > 0;
   const usedTools = Array.isArray(trace) && trace.length > 0;
   const prefersWorkflowFirst = Boolean(requestContext?.workflowPlan?.preferWikiFirst);
 
@@ -211,6 +220,28 @@ function evaluateFinalAnswerPolicy({
         turn,
         finalAnswerPreview: toStringValue(finalAnswer).slice(0, 240),
         acknowledgesMissingVerification,
+        referenceEvidence,
+        ...summary,
+      },
+    };
+  }
+
+  if (
+    prefersWorkflowFirst
+    && !requestRequiresWorkspaceMutation(requestContext)
+    && containsCodeExample
+    && !acknowledgesMissingVerification
+    && !hasVerifiedApiFacts
+  ) {
+    return {
+      ok: false,
+      reason: 'verified_api_facts_required',
+      blockingMessage: 'Do not finalize a workflow-first guidance answer that includes code until verified API facts or workflow required facts are present. Run wiki_evidence_search and ground the snippet in the emitted signatures instead of inventing APIs.',
+      details: {
+        turn,
+        finalAnswerPreview: toStringValue(finalAnswer).slice(0, 240),
+        acknowledgesMissingVerification,
+        containsCodeExample,
         referenceEvidence,
         ...summary,
       },

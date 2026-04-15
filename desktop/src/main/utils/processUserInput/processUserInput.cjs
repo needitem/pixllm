@@ -377,6 +377,7 @@ function summarizeRequestContext(context = {}) {
   }
   if (context.workflowPlan?.preferWikiFirst) {
     lines.push('Workflow-first guidance: search wiki workflow pages first, read the best matching workflow page next, then inspect the implementation or methods pages referenced by that workflow before using broader evidence search.');
+    lines.push('For workflow-first answers that include code or API signatures, gather verified API facts and stay inside the workflow Required Facts instead of inventing convenience APIs.');
   }
 
   const initialToolNames = Array.isArray(context.initialToolNames) ? context.initialToolNames : [];

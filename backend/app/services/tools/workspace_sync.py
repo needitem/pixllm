@@ -7,6 +7,8 @@ from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
+_RESTORE_WRITE_ATTEMPTS = 2
+
 
 def _is_subpath(path: Path, parent: Path) -> bool:
     try:
@@ -126,8 +128,27 @@ async def restore_import_code_workspace(
             finally:
                 response.close()
                 response.release_conn()
-            target_path.parent.mkdir(parents=True, exist_ok=True)
-            target_path.write_bytes(data)
+            last_write_error = None
+            preserved_existing_file = False
+            for attempt in range(_RESTORE_WRITE_ATTEMPTS):
+                try:
+                    target_path.parent.mkdir(parents=True, exist_ok=True)
+                    target_path.write_bytes(data)
+                    last_write_error = None
+                    break
+                except FileNotFoundError as exc:
+                    if target_path.exists() and target_path.is_file():
+                        preserved_existing_file = True
+                        last_write_error = None
+                        break
+                    last_write_error = exc
+                    if attempt + 1 >= _RESTORE_WRITE_ATTEMPTS:
+                        raise
+            if preserved_existing_file:
+                skipped += 1
+                continue
+            if last_write_error is not None:
+                raise last_write_error
             restored += 1
         except Exception:
             logger.warning(

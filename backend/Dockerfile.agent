@@ -1,5 +1,8 @@
 FROM python:3.10-slim
 
+ARG TORCH_VERSION=2.6.0
+ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cu126
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential curl ripgrep subversion \
     libglib2.0-0 libsm6 libxext6 libxrender1 libxcb1 libgl1 && \
@@ -8,6 +11,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 COPY requirements-agent.txt .
+RUN pip install --no-cache-dir --index-url ${TORCH_INDEX_URL} --extra-index-url https://pypi.org/simple torch==${TORCH_VERSION}
 RUN pip install --no-cache-dir -r requirements-agent.txt
 
 COPY app ./app

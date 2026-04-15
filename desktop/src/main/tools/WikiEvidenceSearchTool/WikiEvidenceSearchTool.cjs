@@ -329,6 +329,17 @@ function WikiEvidenceSearchTool() {
           slots_complete: booleanSchema('Whether workflow-first slots are fully satisfied'),
           workflow_paths: arraySchema(stringSchema('Workflow paths used'), 'Workflow paths'),
           method_paths: arraySchema(stringSchema('Method paths used'), 'Method paths'),
+          required_symbols: arraySchema(stringSchema('Workflow-required symbol'), 'Workflow-required symbols'),
+          verification_rules: arraySchema(stringSchema('Workflow verification rule'), 'Workflow verification rules'),
+          required_facts: arraySchema(objectSchema({
+            symbol: stringSchema('Required fact symbol'),
+            declaration: stringSchema('Primary required declaration'),
+            declaration_candidates: arraySchema(objectSchema({
+              declaration: stringSchema('Alternative required declaration'),
+              source: stringSchema('Alternative required declaration source'),
+            }), 'Alternative workflow declarations'),
+            source: stringSchema('Primary required declaration source'),
+          }), 'Workflow required facts'),
         }),
         negative_evidence: stringSchema('Explicit negative result when no exact API was found'),
         error: stringSchema('Error code'),

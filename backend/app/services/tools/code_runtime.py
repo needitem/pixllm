@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import re
 import subprocess
@@ -451,7 +452,8 @@ async def search_code(
     symbol_lookup_log: List[Dict[str, Any]] = []
     min_variant_hits = min(max_rows, 3)
     for symbol in extract_symbol_query_candidates(q, max_candidates=2):
-        symbol_lookup = run_symbol_lookup(
+        symbol_lookup = await asyncio.to_thread(
+            run_symbol_lookup,
             code_tools,
             symbol=symbol,
             limit=min(max_rows, 4),
@@ -476,7 +478,12 @@ async def search_code(
             break
 
     for candidate in iter_code_query_variants(q):
-        results, _ = code_tools.search(query=candidate["query"], top_k=max_rows, repo_filter=None)
+        results, _ = await asyncio.to_thread(
+            code_tools.search,
+            query=candidate["query"],
+            top_k=max_rows,
+            repo_filter=None,
+        )
         variant_rows = code_tool_results_to_rows(
             results,
             code_tools,

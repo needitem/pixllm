@@ -1,3 +1,5 @@
+import asyncio
+import json
 import re
 from functools import lru_cache
 from pathlib import Path
@@ -20,12 +22,12 @@ _TYPE_LIKE_RE = re.compile(r"^(?:[A-Z][A-Za-z0-9_]*|e[A-Z][A-Za-z0-9_]*)$")
 _LOOKUP_TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_.]*")
 _LOOKUP_QUALIFIED_RE = re.compile(r"\b([A-Z][A-Za-z0-9_]*)[.:]([A-Za-z_][A-Za-z0-9_]*)\b")
 _SECTION_HEADING_RE = re.compile(r"^##\s+(.+?)\s*$")
-_WORKFLOW_STEP_RE = re.compile(r"^\s*(\d+)\.\s+(.*)$")
-_STEP_OUTPUT_TYPE_RE = re.compile(r"\bto get\s+([A-Z][A-Za-z0-9_]*)\b", re.IGNORECASE)
 _METHODS_DOC_STEM_PREFIX = "Methods_T_"
 _QUERY_FILLER_TOKENS = {
     "api",
     "bool",
+    "csharp",
+    "cpp",
     "code",
     "declaration",
     "example",
@@ -53,21 +55,64 @@ _LOOKUP_HINT_TOKENS = {
 }
 
 
+def _normalize_wiki_id(value: str) -> str:
+    raw = str(value or "").strip().lower()
+    return raw or "engine"
+
+
+def _wiki_root(wiki_id: str = "engine") -> Path:
+    return Path(__file__).resolve().parents[3] / config.WIKI_PROFILE_DIR / "wiki" / _normalize_wiki_id(wiki_id)
+
+
+def _manifest_file(wiki_id: str = "engine") -> Path:
+    return _wiki_root(wiki_id) / ".runtime" / "manifest.json"
+
+
+def _manifest_signature(wiki_id: str = "engine") -> str:
+    path = _manifest_file(wiki_id)
+    if not path.exists():
+        return "missing"
+    stat = path.stat()
+    return f"{stat.st_mtime_ns}:{stat.st_size}"
+
+
+@lru_cache(maxsize=16)
+def _read_wiki_manifest_cached(wiki_id: str, signature: str) -> Dict[str, Any]:
+    del signature
+    path = _manifest_file(wiki_id)
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _load_wiki_manifest(wiki_id: str = "engine") -> Dict[str, Any]:
+    normalized_wiki_id = _normalize_wiki_id(wiki_id)
+    return _read_wiki_manifest_cached(normalized_wiki_id, _manifest_signature(normalized_wiki_id))
+
+
 def _methods_wiki_root() -> Path:
-    return Path(__file__).resolve().parents[3] / config.WIKI_PROFILE_DIR / "wiki" / "engine" / "methods"
-
-
-def _workflow_wiki_root() -> Path:
-    return _methods_wiki_root().parent / "workflows"
+    return _wiki_root("engine") / "methods"
 
 
 def _normalize_lookup_token(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", str(value or "").strip().lower())
 
 
-@lru_cache(maxsize=1)
-def _load_methods_api_index() -> List[Dict[str, Any]]:
-    root = _methods_wiki_root()
+def _load_methods_api_index(wiki_id: str = "engine") -> List[Dict[str, Any]]:
+    manifest = _load_wiki_manifest(wiki_id)
+    records = manifest.get("methods_index")
+    if isinstance(records, list) and records:
+        return [record for record in records if isinstance(record, dict)]
+    return _load_methods_api_index_legacy(_normalize_wiki_id(wiki_id))
+
+
+@lru_cache(maxsize=8)
+def _load_methods_api_index_legacy(wiki_id: str = "engine") -> List[Dict[str, Any]]:
+    root = _wiki_root(wiki_id) / "methods"
     if not root.exists():
         return []
 
@@ -130,6 +175,8 @@ def _extract_lookup_targets(
     records: Sequence[Dict[str, Any]],
 ) -> Dict[str, Any]:
     source = str(query or "").strip()
+    source = re.sub(r"(?<![A-Za-z0-9_])C\s*#", " csharp ", source, flags=re.IGNORECASE)
+    source = re.sub(r"(?<![A-Za-z0-9_])C\s*\+\+", " cpp ", source, flags=re.IGNORECASE)
     lowered = source.lower()
     type_lookup = {}
     for record in records or []:
@@ -210,6 +257,318 @@ def _build_lookup_source_excerpt(record: Dict[str, Any], *, section_index: int) 
     }
 
 
+def _load_workflow_manifest_index(wiki_id: str = "engine") -> List[Dict[str, Any]]:
+    manifest = _load_wiki_manifest(wiki_id)
+    records = manifest.get("workflow_index")
+    if not isinstance(records, list):
+        return []
+    return [record for record in records if isinstance(record, dict)]
+
+
+def _workflow_manifest_lookup(wiki_id: str = "engine") -> Dict[str, Dict[str, Any]]:
+    return {
+        str(record.get("path") or "").strip(): record
+        for record in _load_workflow_manifest_index(wiki_id)
+        if str(record.get("path") or "").strip()
+    }
+
+
+def _score_manifest_workflow(query: str, record: Dict[str, Any]) -> int:
+    normalized_query = _normalize_lookup_token(query)
+    if not normalized_query:
+        return 0
+    score = 0
+    title_key = _normalize_lookup_token(record.get("title"))
+    if title_key and title_key in normalized_query:
+        score += 24
+    for alias in record.get("aliases") or []:
+        alias_key = _normalize_lookup_token(alias)
+        if alias_key and alias_key in normalized_query:
+            score += 18
+    for symbol in [*(record.get("symbols") or []), *(record.get("required_symbols") or [])]:
+        symbol_key = _normalize_lookup_token(symbol)
+        if symbol_key and symbol_key in normalized_query:
+            score += 22
+    for term in record.get("route_terms") or []:
+        term_key = _normalize_lookup_token(term)
+        if term_key and term_key in normalized_query:
+            score += 8
+    return score
+
+
+def _build_manifest_workflow_rows(
+    *,
+    query: str,
+    wiki_id: str,
+    top_k: int,
+    max_chars: int,
+) -> List[Dict[str, Any]]:
+    manifest = _load_wiki_manifest(wiki_id)
+    workflow_records = manifest.get("workflow_index") if isinstance(manifest.get("workflow_index"), list) else []
+    if not workflow_records:
+        return []
+    generated_at = str(manifest.get("generated_at") or "")
+    ranked = [
+        (record, _score_manifest_workflow(query, record))
+        for record in workflow_records
+    ]
+    ranked = [item for item in ranked if item[1] > 0]
+    ranked.sort(key=lambda item: item[1], reverse=True)
+    results: List[Dict[str, Any]] = []
+    for index, (record, score) in enumerate(ranked[: max(1, min(top_k, 4))], start=1):
+        text = str(record.get("content") or "")[:max(400, clamp_int(max_chars, 400, 12000))]
+        title = str(record.get("title") or record.get("path") or "").strip()
+        path = str(record.get("path") or "").strip()
+        symbols = _unique_preserve_order([
+            *(record.get("symbols") or []),
+            *(record.get("required_symbols") or []),
+        ])
+        results.append(
+            {
+                "chunk_id": f"wiki:{wiki_id}:{path}#manifest",
+                "doc_id": f"wiki:{wiki_id}:{path}",
+                "wiki_id": wiki_id,
+                "source_url": f"{wiki_id}/{path}",
+                "file_path": path,
+                "heading_path": f"{title} > Manifest",
+                "paragraph_range": "manifest",
+                "text": text,
+                "truncated": len(text) < len(str(record.get("content") or "")),
+                "updated_at": generated_at,
+                "source_kind": "wiki",
+                "document_type": "wiki",
+                "score": score,
+                "title": title,
+                "symbols": symbols,
+                "tags": [str(item or "").strip() for item in record.get("tags") or [] if str(item or "").strip()],
+            }
+        )
+    return results
+
+
+def _match_manifest_method_records(
+    *,
+    query: str,
+    workflow_rows: Sequence[Dict[str, Any]],
+    wiki_id: str,
+    max_records: int,
+) -> List[Dict[str, Any]]:
+    methods_index = _load_methods_api_index(wiki_id)
+    if not methods_index:
+        return []
+    workflow_lookup = _workflow_manifest_lookup(wiki_id)
+    record_lookup = {
+        str(record.get("qualified_symbol") or "").strip(): record
+        for record in methods_index
+        if str(record.get("qualified_symbol") or "").strip()
+    }
+    query_targets = _extract_lookup_targets(query, methods_index)
+    explicit_type_keys = {
+        _normalize_lookup_token(item)
+        for item in query_targets.get("type_candidates") or []
+        if _normalize_lookup_token(item)
+    }
+    explicit_member_keys = {
+        _normalize_lookup_token(item)
+        for item in query_targets.get("member_candidates") or []
+        if _normalize_lookup_token(item)
+    }
+    explicit_lookup = bool(query_targets.get("is_specific_lookup"))
+
+    selected: List[Dict[str, Any]] = []
+    seen = set()
+    for row in workflow_rows or []:
+        workflow_path = _source_file_path(row)
+        manifest_entry = workflow_lookup.get(workflow_path)
+        if not manifest_entry:
+            continue
+        for qualified_symbol in manifest_entry.get("linked_method_symbols") or []:
+            record = record_lookup.get(str(qualified_symbol or "").strip())
+            if not record:
+                continue
+            type_key = _normalize_lookup_token(record.get("type_name") or record.get("qualified_type"))
+            member_key = _normalize_lookup_token(record.get("member_name"))
+            if explicit_lookup and explicit_type_keys and type_key not in explicit_type_keys:
+                continue
+            if explicit_lookup and explicit_member_keys and member_key not in explicit_member_keys:
+                continue
+            lookup_key = str(record.get("qualified_symbol") or "").strip().lower()
+            if not lookup_key or lookup_key in seen:
+                continue
+            seen.add(lookup_key)
+            selected.append(record)
+            if len(selected) >= max_records:
+                return selected
+    return selected
+
+
+def _symbol_type_and_member(symbol: str) -> Tuple[str, str]:
+    raw = str(symbol or "").strip().replace("::", ".")
+    if not raw:
+        return "", ""
+    parts = [part for part in raw.split(".") if part]
+    if len(parts) >= 2:
+        return parts[-2], parts[-1]
+    return "", parts[-1] if parts else ""
+
+
+def _matches_query_targets(symbol: str, query_targets: Dict[str, Any]) -> bool:
+    type_name, member_name = _symbol_type_and_member(symbol)
+    normalized_type = _normalize_lookup_token(type_name)
+    normalized_member = _normalize_lookup_token(member_name)
+    query_type_keys = {
+        _normalize_lookup_token(item)
+        for item in query_targets.get("type_candidates") or []
+        if _normalize_lookup_token(item)
+    }
+    query_member_keys = {
+        _normalize_lookup_token(item)
+        for item in query_targets.get("member_candidates") or []
+        if _normalize_lookup_token(item)
+    }
+    if query_type_keys and normalized_type not in query_type_keys:
+        return False
+    if query_member_keys and normalized_member not in query_member_keys:
+        return False
+    return bool(query_type_keys or query_member_keys)
+
+
+def _build_manifest_slot_bundle(
+    *,
+    query: str,
+    workflow_rows: Sequence[Dict[str, Any]],
+    method_records: Sequence[Dict[str, Any]],
+    wiki_id: str,
+) -> Optional[Dict[str, Any]]:
+    workflow_lookup = _workflow_manifest_lookup(wiki_id)
+    workflow_entries = [
+        workflow_lookup.get(_source_file_path(row))
+        for row in workflow_rows or []
+        if workflow_lookup.get(_source_file_path(row))
+    ]
+    workflow_entries = [entry for entry in workflow_entries if isinstance(entry, dict)]
+    if not workflow_entries:
+        return None
+
+    methods_index = _load_methods_api_index(wiki_id)
+    query_targets = _extract_lookup_targets(query, methods_index) if methods_index else {
+        "type_candidates": [],
+        "member_candidates": [],
+        "is_specific_lookup": False,
+    }
+    explicit_lookup = bool(query_targets.get("is_specific_lookup"))
+
+    required_slots: List[str] = ["workflow"]
+    filled_slots = {"workflow"} if workflow_rows else set()
+    selected_symbols: List[str] = []
+
+    for entry in workflow_entries:
+        fact_symbols = _unique_preserve_order([
+            str(item.get("symbol") or "").strip()
+            for item in entry.get("required_facts") or []
+            if isinstance(item, dict) and str(item.get("symbol") or "").strip()
+        ])
+        linked_symbols = _unique_preserve_order([
+            *fact_symbols,
+            *(entry.get("linked_method_symbols") or []),
+            *(entry.get("required_symbols") or []),
+        ])
+        if explicit_lookup:
+            selected_symbols.extend(
+                symbol for symbol in linked_symbols
+                if _matches_query_targets(symbol, query_targets)
+            )
+        else:
+            selected_symbols.extend(linked_symbols[:3])
+
+    selected_symbols = _unique_preserve_order(selected_symbols)
+    if selected_symbols:
+        required_slots.extend([f"symbol:{symbol}" for symbol in selected_symbols])
+    else:
+        required_slots.append("method_or_anchor")
+
+    matched_symbols = {
+        _normalize_lookup_token(record.get("qualified_symbol") or "")
+        for record in method_records or []
+        if _normalize_lookup_token(record.get("qualified_symbol") or "")
+    }
+    matched_symbols.update(
+        _normalize_lookup_token(f"{record.get('type_name')}.{record.get('member_name')}")
+        for record in method_records or []
+        if str(record.get("type_name") or "").strip() and str(record.get("member_name") or "").strip()
+    )
+    for symbol in selected_symbols:
+        if _normalize_lookup_token(symbol) in matched_symbols:
+            filled_slots.add(f"symbol:{symbol}")
+
+    if "method_or_anchor" in required_slots and (
+        method_records
+        or extract_wiki_source_anchors(workflow_rows)
+    ):
+        filled_slots.add("method_or_anchor")
+
+    required_symbols = _unique_preserve_order([
+        symbol
+        for entry in workflow_entries
+        for symbol in (entry.get("required_symbols") or [])
+        if str(symbol or "").strip()
+    ])
+    verification_rules = _unique_preserve_order([
+        rule
+        for entry in workflow_entries
+        for rule in (entry.get("verification_rules") or [])
+        if str(rule or "").strip()
+    ])
+    required_facts: List[Dict[str, Any]] = []
+    seen_fact_keys = set()
+    for entry in workflow_entries:
+        for item in entry.get("required_facts") or []:
+            if not isinstance(item, dict):
+                continue
+            symbol = str(item.get("symbol") or "").strip()
+            source = str(item.get("source") or "").strip()
+            declaration = str(item.get("declaration") or "").strip()
+            declaration_candidates = item.get("declaration_candidates") if isinstance(item.get("declaration_candidates"), list) else None
+            if not symbol:
+                continue
+            fact_key = (
+                symbol.lower(),
+                source.lower(),
+                declaration.lower(),
+                json.dumps(declaration_candidates, ensure_ascii=False, sort_keys=True) if declaration_candidates is not None else "",
+            )
+            if fact_key in seen_fact_keys:
+                continue
+            seen_fact_keys.add(fact_key)
+            required_facts.append(
+                {
+                    "symbol": symbol,
+                    "declaration": declaration or None,
+                    "declaration_candidates": declaration_candidates,
+                    "source": source or None,
+                }
+            )
+
+    required_unique = _unique_preserve_order(required_slots)
+    filled_unique = [slot for slot in required_unique if slot in filled_slots]
+    missing_slots = [slot for slot in required_unique if slot not in filled_slots]
+    return {
+        "required_slots": required_unique,
+        "filled_slots": filled_unique,
+        "missing_slots": missing_slots,
+        "slots_complete": len(missing_slots) == 0,
+        "workflow_paths": _unique_preserve_order([_source_file_path(row) for row in workflow_rows if _source_file_path(row)]),
+        "method_paths": _unique_preserve_order([
+            str(record.get("doc_path") or "").strip()
+            for record in method_records or []
+            if str(record.get("doc_path") or "").strip()
+        ]),
+        "required_symbols": required_symbols,
+        "verification_rules": verification_rules,
+        "required_facts": required_facts,
+    }
+
+
 def _unique_preserve_order(values: Sequence[str]) -> List[str]:
     output: List[str] = []
     seen = set()
@@ -225,176 +584,8 @@ def _unique_preserve_order(values: Sequence[str]) -> List[str]:
     return output
 
 
-def _extract_workflow_member_candidates(step_text: str, known_types: Dict[str, str]) -> List[Dict[str, str]]:
-    candidates: List[Dict[str, str]] = []
-    seen = set()
-
-    def _append(member_name: str, type_name: str = "") -> None:
-        normalized_member = _normalize_lookup_token(member_name)
-        normalized_type = _normalize_lookup_token(type_name)
-        key = (normalized_type, normalized_member)
-        if not normalized_member or key in seen:
-            return
-        seen.add(key)
-        candidates.append({
-            "type_name": str(type_name or "").strip(),
-            "member_name": str(member_name or "").strip(),
-        })
-
-    for raw_token in _BACKTICK_TOKEN_RE.findall(str(step_text or "")):
-        token = str(raw_token or "").strip()
-        if not token:
-            continue
-        qualified_match = _LOOKUP_QUALIFIED_RE.search(token)
-        if qualified_match:
-            _append(qualified_match.group(2), qualified_match.group(1))
-            continue
-        call_match = re.match(r"([A-Za-z_][A-Za-z0-9_]*)\s*\(", token)
-        if call_match:
-            member_name = str(call_match.group(1) or "").strip()
-            if _normalize_lookup_token(member_name) not in known_types:
-                _append(member_name)
-            continue
-        if _TYPE_LIKE_RE.match(token) and _normalize_lookup_token(token) not in known_types:
-            _append(token)
-
-    for call_match in re.finditer(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(", str(step_text or "")):
-        member_name = str(call_match.group(1) or "").strip()
-        if _normalize_lookup_token(member_name) not in known_types:
-            _append(member_name)
-
-    return candidates
-
-
-@lru_cache(maxsize=1)
-def _load_workflow_api_steps() -> List[Dict[str, Any]]:
-    methods_index = _load_methods_api_index()
-    workflow_root = _workflow_wiki_root()
-    if not workflow_root.exists() or not methods_index:
-        return []
-
-    known_types = {}
-    member_to_records: Dict[str, List[Dict[str, Any]]] = {}
-    qualified_to_record: Dict[Tuple[str, str], Dict[str, Any]] = {}
-    for record in methods_index:
-        known_types[_normalize_lookup_token(record.get("type_name"))] = str(record.get("type_name") or "")
-        known_types[_normalize_lookup_token(record.get("qualified_type"))] = str(record.get("type_name") or "")
-        member_to_records.setdefault(_normalize_lookup_token(record.get("member_name")), []).append(record)
-        qualified_to_record[(
-            _normalize_lookup_token(record.get("type_name")),
-            _normalize_lookup_token(record.get("member_name")),
-        )] = record
-
-    steps: List[Dict[str, Any]] = []
-    for path in sorted(workflow_root.glob("*.md")):
-        try:
-            lines = path.read_text(encoding="utf-8").splitlines()
-        except Exception:
-            continue
-        active_types: List[str] = []
-        relative_doc_path = path.relative_to(workflow_root.parent).as_posix()
-
-        for index, raw_line in enumerate(lines):
-            match = _WORKFLOW_STEP_RE.match(str(raw_line or ""))
-            if not match:
-                continue
-            step_text = str(match.group(2) or "").strip()
-            explicit_types = _unique_preserve_order([
-                known_types.get(_normalize_lookup_token(token), "")
-                for token in extract_symbol_query_candidates(step_text, max_candidates=12)
-            ])
-            produced_types = _unique_preserve_order([
-                known_types.get(_normalize_lookup_token(group_match.group(1)), str(group_match.group(1) or "").strip())
-                for group_match in _STEP_OUTPUT_TYPE_RE.finditer(step_text)
-            ])
-            member_candidates = _extract_workflow_member_candidates(step_text, known_types)
-            resolved_records: List[Dict[str, Any]] = []
-
-            preferred_types = _unique_preserve_order([*explicit_types, *active_types])
-            for candidate in member_candidates:
-                explicit_type = known_types.get(_normalize_lookup_token(candidate.get("type_name")), str(candidate.get("type_name") or "").strip())
-                member_name = str(candidate.get("member_name") or "").strip()
-                normalized_member = _normalize_lookup_token(member_name)
-                if not normalized_member:
-                    continue
-                if explicit_type:
-                    record = qualified_to_record.get((
-                        _normalize_lookup_token(explicit_type),
-                        normalized_member,
-                    ))
-                    if record:
-                        resolved_records.append(record)
-                        continue
-                method_records = member_to_records.get(normalized_member, [])
-                selected = next(
-                    (
-                        record
-                        for preferred_type in preferred_types
-                        for record in method_records
-                        if _normalize_lookup_token(record.get("type_name")) == _normalize_lookup_token(preferred_type)
-                    ),
-                    None,
-                )
-                if selected is None and len(method_records) == 1:
-                    selected = method_records[0]
-                if selected is not None:
-                    resolved_records.append(selected)
-
-            steps.append({
-                "doc_path": relative_doc_path,
-                "line_index": index,
-                "text": step_text,
-                "explicit_types": explicit_types,
-                "produced_types": produced_types,
-                "resolved_records": _unique_preserve_order([
-                    str(record.get("qualified_symbol") or "")
-                    for record in resolved_records
-                ]),
-                "record_lookup": {
-                    str(record.get("qualified_symbol") or ""): record
-                    for record in resolved_records
-                },
-            })
-            active_types = _unique_preserve_order([*produced_types, *explicit_types, *active_types])[:8]
-    return steps
-
-
-def _derive_workflow_related_records(
-    *,
-    type_candidates: Sequence[str],
-    member_candidates: Sequence[str],
-) -> List[Dict[str, Any]]:
-    type_keys = {_normalize_lookup_token(item) for item in type_candidates or [] if _normalize_lookup_token(item)}
-    member_keys = {_normalize_lookup_token(item) for item in member_candidates or [] if _normalize_lookup_token(item)}
-    if not type_keys and not member_keys:
-        return []
-
-    related_records: List[Dict[str, Any]] = []
-    seen = set()
-    for step in _load_workflow_api_steps():
-        explicit_keys = {_normalize_lookup_token(item) for item in step.get("explicit_types") or []}
-        produced_keys = {_normalize_lookup_token(item) for item in step.get("produced_types") or []}
-        text_key = _normalize_lookup_token(step.get("text") or "")
-        if not (
-            type_keys.intersection(explicit_keys)
-            or type_keys.intersection(produced_keys)
-            or any(member_key and member_key in text_key for member_key in member_keys)
-        ):
-            continue
-        for qualified_symbol in step.get("resolved_records") or []:
-            record = (step.get("record_lookup") or {}).get(qualified_symbol)
-            if not record:
-                continue
-            key = str(record.get("qualified_symbol") or "").strip().lower()
-            if not key or key in seen:
-                continue
-            seen.add(key)
-            related_records.append(record)
-    return related_records
-
-
-def build_exact_api_lookup_summary(query: str) -> Optional[Dict[str, Any]]:
-    records = _load_methods_api_index()
+def build_exact_api_lookup_summary(query: str, wiki_id: str = "engine") -> Optional[Dict[str, Any]]:
+    records = _load_methods_api_index(wiki_id)
     if not records:
         return None
 
@@ -439,9 +630,16 @@ def build_exact_api_lookup_summary(query: str) -> Optional[Dict[str, Any]]:
             "source_records": selected_records,
         }
 
-    related_records = _derive_workflow_related_records(
-        type_candidates=type_candidates,
-        member_candidates=member_candidates,
+    related_records = _match_manifest_method_records(
+        query=query,
+        workflow_rows=_build_manifest_workflow_rows(
+            query=query,
+            wiki_id=wiki_id,
+            top_k=4,
+            max_chars=4000,
+        ),
+        wiki_id=wiki_id,
+        max_records=5,
     )
 
     missing_type = type_candidates[0] if type_candidates else ""
@@ -506,7 +704,12 @@ async def search_docs(
         use_reranker=bool(use_reranker) if use_reranker is not None else False,
         evidence_mode=None,
     )
-    results, _, elapsed_ms = run_retrieval_fn(search_svc, req, embed_model)
+    results, _, elapsed_ms = await asyncio.to_thread(
+        run_retrieval_fn,
+        search_svc,
+        req,
+        embed_model,
+    )
     docs = [normalize_doc_item(row) for row in results]
     await register_doc_search(redis, session_id, docs)
     return {"query": query, "top_k": capped_top_k, "results": docs, "query_time_ms": elapsed_ms}
@@ -601,24 +804,24 @@ def _match_method_records_from_candidates(
     query: str,
     workflow_rows: Sequence[Dict[str, Any]],
     max_records: int,
+    wiki_id: str = "engine",
 ) -> List[Dict[str, Any]]:
-    records = _load_methods_api_index()
+    manifest_records = _match_manifest_method_records(
+        query=query,
+        workflow_rows=workflow_rows,
+        wiki_id=wiki_id,
+        max_records=max_records,
+    )
+    if manifest_records:
+        return manifest_records
+
+    records = _load_methods_api_index(wiki_id)
     if not records:
         return []
 
     query_targets = _extract_lookup_targets(query, records)
-    workflow_symbols = extract_doc_symbol_candidates(workflow_rows, max_candidates=12)
-    type_candidates = _unique_preserve_order([*query_targets.get("type_candidates", []), *workflow_symbols])[:8]
-    member_candidates = _unique_preserve_order([*query_targets.get("member_candidates", []), *workflow_symbols])[:10]
 
-    related_records = _derive_workflow_related_records(
-        type_candidates=type_candidates,
-        member_candidates=member_candidates,
-    )
-    if related_records:
-        return related_records[:max_records]
-
-    exact_lookup = build_exact_api_lookup_summary(query)
+    exact_lookup = build_exact_api_lookup_summary(query, wiki_id=wiki_id)
     if exact_lookup and exact_lookup.get("source_records"):
         return list(exact_lookup.get("source_records") or [])[:max_records]
     return []
@@ -677,8 +880,18 @@ def _build_workflow_slot_bundle(
     query: str,
     workflow_rows: Sequence[Dict[str, Any]],
     method_records: Sequence[Dict[str, Any]],
+    wiki_id: str = "engine",
 ) -> Dict[str, Any]:
-    methods_index = _load_methods_api_index()
+    manifest_slot_status = _build_manifest_slot_bundle(
+        query=query,
+        workflow_rows=workflow_rows,
+        method_records=method_records,
+        wiki_id=wiki_id,
+    )
+    if manifest_slot_status is not None:
+        return manifest_slot_status
+
+    methods_index = _load_methods_api_index(wiki_id)
     query_targets = _extract_lookup_targets(query, methods_index) if methods_index else {
         "type_candidates": [],
         "member_candidates": [],
@@ -770,6 +983,9 @@ def _build_workflow_slot_bundle(
             for record in method_records or []
             if str(record.get("doc_path") or "").strip()
         ]),
+        "required_symbols": [],
+        "verification_rules": [],
+        "required_facts": [],
     }
 
 
@@ -781,17 +997,25 @@ def _build_workflow_first_bundle(
     max_chars: int,
     explicit_wiki_id: str,
 ) -> Dict[str, Any]:
+    normalized_wiki_id = _normalize_wiki_id(explicit_wiki_id or "engine")
     workflow_search_limit = max(min(top_k, 20), min(max(4, doc_open_limit * 3), 20))
-    wiki_rows = list(
-        search_wiki(
-            query=query,
-            top_k=workflow_search_limit,
-            max_chars=max_chars,
-            wiki_id=explicit_wiki_id,
-        ).get("results", [])
-        or []
+    wiki_rows = _build_manifest_workflow_rows(
+        query=query,
+        wiki_id=normalized_wiki_id,
+        top_k=workflow_search_limit,
+        max_chars=max_chars,
     )
-    workflow_rows = [row for row in wiki_rows if _is_workflow_row(row)][: max(1, min(doc_open_limit, 4))]
+    if not wiki_rows:
+        wiki_rows = list(
+            search_wiki(
+                query=query,
+                top_k=workflow_search_limit,
+                max_chars=max_chars,
+                wiki_id=explicit_wiki_id,
+            ).get("results", [])
+            or []
+        )
+    workflow_rows = [row for row in wiki_rows if _is_workflow_row(row)][:1]
     if not workflow_rows:
         return {
             "sources": [],
@@ -805,10 +1029,12 @@ def _build_workflow_first_bundle(
             },
         }
 
+    primary_workflow_rows = workflow_rows[:1]
     related_records = _match_method_records_from_candidates(
         query=query,
-        workflow_rows=workflow_rows,
+        workflow_rows=primary_workflow_rows,
         max_records=max(1, doc_open_limit - len(workflow_rows)),
+        wiki_id=normalized_wiki_id,
     )
     method_rows = [
         _build_lookup_source_excerpt(record, section_index=index + 1)
@@ -817,8 +1043,9 @@ def _build_workflow_first_bundle(
     sources = merge_doc_sources([workflow_rows, method_rows])[:doc_open_limit]
     slot_status = _build_workflow_slot_bundle(
         query=query,
-        workflow_rows=workflow_rows,
+        workflow_rows=primary_workflow_rows,
         method_records=related_records,
+        wiki_id=normalized_wiki_id,
     )
     return {
         "sources": sources,
@@ -1232,9 +1459,10 @@ async def lookup_sources_and_code(
     doc_open_limit = min(capped_limit, clamp_int(config.CHAT_TOOL_DOC_OPEN_LIMIT, 1, 50))
     code_window_cap = clamp_int(config.CHAT_TOOL_CODE_MAX_WINDOWS, 4, 24)
     active_collection = collection or config.EVIDENCE_DEFAULT_COLLECTION
+    normalized_wiki_id = _normalize_wiki_id(str(filters.get("wiki_id") or "").strip() if isinstance(filters, dict) else "engine")
 
     if str(response_type or "").strip().lower() in {"api_lookup", "exact_api_lookup"}:
-        lookup_summary = build_exact_api_lookup_summary(query)
+        lookup_summary = build_exact_api_lookup_summary(query, wiki_id=normalized_wiki_id)
         if lookup_summary is not None:
             source_records = list(lookup_summary.get("source_records") or [])[:doc_open_limit]
             exact_sources = [
@@ -1269,7 +1497,7 @@ async def lookup_sources_and_code(
         top_k=capped_top_k,
         doc_open_limit=doc_open_limit,
         max_chars=max_chars,
-        explicit_wiki_id=str(filters.get("wiki_id") or "").strip().lower() if isinstance(filters, dict) else "",
+        explicit_wiki_id=normalized_wiki_id,
     ) if workflow_first else {"slot_status": {}}
 
     sources = await collect_sources(

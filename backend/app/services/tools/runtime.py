@@ -174,6 +174,7 @@ async def _collect_code_evidence_async(
         query_candidates.append(normalized)
 
     merged_matches: List[Dict[str, Any]] = []
+    seen_match_keys: Set[Tuple[str, str]] = set()
     max_query_candidates = max(1, min(8, capped_limit, len(query_candidates)))
     for candidate_query in query_candidates[:max_query_candidates]:
         candidate_result = await search_code(
@@ -184,17 +185,14 @@ async def _collect_code_evidence_async(
             limit=capped_limit,
             session_id=session_id,
         )
-        merged_matches.extend(candidate_result.get("matches", []) or [])
-
-    deduped_matches: List[Dict[str, Any]] = []
-    seen_match_keys: Set[Tuple[str, str]] = set()
-    for row in merged_matches:
-        key = (str(row.get("path") or "").strip(), str(row.get("line_range") or "").strip())
-        if key in seen_match_keys:
-            continue
-        seen_match_keys.add(key)
-        deduped_matches.append(row)
-    merged_matches = deduped_matches
+        for row in candidate_result.get("matches", []) or []:
+            key = (str(row.get("path") or "").strip(), str(row.get("line_range") or "").strip())
+            if key in seen_match_keys:
+                continue
+            seen_match_keys.add(key)
+            merged_matches.append(row)
+        if len(merged_matches) >= capped_limit:
+            break
 
     if symbol_candidates:
         merged_matches = prioritize_usage_matches(

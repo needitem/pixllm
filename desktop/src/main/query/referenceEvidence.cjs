@@ -8,6 +8,39 @@ function normalizePath(value) {
   return toStringValue(value).replace(/\\/g, '/');
 }
 
+function workflowBundleScore(bundle = {}) {
+  const requiredSlots = Array.isArray(bundle.required_slots) ? bundle.required_slots.length : 0;
+  const filledSlots = Array.isArray(bundle.filled_slots) ? bundle.filled_slots.length : 0;
+  const missingSlots = Array.isArray(bundle.missing_slots) ? bundle.missing_slots.length : 0;
+  const requiredFacts = Array.isArray(bundle.required_facts) ? bundle.required_facts.length : 0;
+  const methodPaths = Array.isArray(bundle.method_paths) ? bundle.method_paths.length : 0;
+  const workflowPaths = Array.isArray(bundle.workflow_paths) ? bundle.workflow_paths.length : 0;
+  return [
+    Boolean(bundle.slots_complete) ? 1 : 0,
+    requiredFacts,
+    filledSlots,
+    workflowPaths,
+    methodPaths,
+    requiredSlots - missingSlots,
+    -missingSlots,
+  ];
+}
+
+function shouldPreferWorkflowBundle(candidate = {}, current = null) {
+  if (!current || Object.keys(current).length === 0) {
+    return true;
+  }
+  const candidateScore = workflowBundleScore(candidate);
+  const currentScore = workflowBundleScore(current);
+  for (let index = 0; index < candidateScore.length; index += 1) {
+    if (candidateScore[index] === currentScore[index]) {
+      continue;
+    }
+    return candidateScore[index] > currentScore[index];
+  }
+  return false;
+}
+
 function summarizeWikiEvidence(trace = []) {
   const evidenceTypes = new Set();
   let searchCount = 0;
@@ -20,9 +53,9 @@ function summarizeWikiEvidence(trace = []) {
   let apiFactCount = 0;
   let workflowSourceCount = 0;
   let methodSourceCount = 0;
-  let workflowSlotsComplete = false;
+  let workflowRequiredFactCount = 0;
   let workflowBundleSeen = false;
-  let workflowMissingSlots = [];
+  let bestWorkflowBundle = null;
 
   for (const step of Array.isArray(trace) ? trace : []) {
     if (toStringValue(step?.tool) !== 'wiki_evidence_search' || step?.observation?.ok === false) {
@@ -52,6 +85,9 @@ function summarizeWikiEvidence(trace = []) {
     const workflowBundle = observation?.workflow_bundle && typeof observation.workflow_bundle === 'object'
       ? observation.workflow_bundle
       : {};
+    const workflowRequiredFacts = Array.isArray(workflowBundle.required_facts)
+      ? workflowBundle.required_facts
+      : [];
 
     codeMatchCount += matches.length;
     codeWindowCount += windows.length;
@@ -60,6 +96,7 @@ function summarizeWikiEvidence(trace = []) {
     referenceAnchorCount += referenceAnchors.length;
     exampleCount += examples.length;
     apiFactCount += apiFacts.length;
+    workflowRequiredFactCount += workflowRequiredFacts.length;
     for (const item of sources) {
       const pathValue = normalizePath(item?.file_path || item?.source_url || '');
       if (!pathValue) continue;
@@ -72,10 +109,9 @@ function summarizeWikiEvidence(trace = []) {
     }
     if (Object.keys(workflowBundle).length > 0) {
       workflowBundleSeen = true;
-      workflowSlotsComplete = Boolean(workflowBundle.slots_complete);
-      workflowMissingSlots = Array.isArray(workflowBundle.missing_slots)
-        ? workflowBundle.missing_slots.map((item) => toStringValue(item)).filter(Boolean)
-        : [];
+      if (shouldPreferWorkflowBundle(workflowBundle, bestWorkflowBundle)) {
+        bestWorkflowBundle = workflowBundle;
+      }
     }
 
     for (const item of [...matches, ...windows]) {
@@ -105,6 +141,10 @@ function summarizeWikiEvidence(trace = []) {
     || referenceAnchorCount > 0
     || apiFactCount > 0
     || normalizedEvidenceTypes.some((item) => ['declaration', 'implementation'].includes(item));
+  const workflowSlotsComplete = Boolean(bestWorkflowBundle?.slots_complete);
+  const workflowMissingSlots = Array.isArray(bestWorkflowBundle?.missing_slots)
+    ? bestWorkflowBundle.missing_slots.map((item) => toStringValue(item)).filter(Boolean)
+    : [];
 
   return {
     searchCount,
@@ -117,6 +157,7 @@ function summarizeWikiEvidence(trace = []) {
     apiFactCount,
     workflowSourceCount,
     methodSourceCount,
+    workflowRequiredFactCount,
     evidenceTypes: normalizedEvidenceTypes,
     hasCodeEvidence,
     hasDocEvidence,

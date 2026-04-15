@@ -162,6 +162,9 @@ function summarizeObservationForModel(toolName, observation = {}) {
     lines.push('reference_origin: backend_server');
     const searchStatus = toStringValue(payload.search_status || payload.searchStatus);
     const negativeEvidence = toStringValue(payload.negative_evidence || payload.negativeEvidence);
+    const workflowBundle = payload?.workflow_bundle && typeof payload.workflow_bundle === 'object'
+      ? payload.workflow_bundle
+      : {};
     const matchedApi = payload.matched_api && typeof payload.matched_api === 'object'
       ? payload.matched_api
       : (payload.matchedApi && typeof payload.matchedApi === 'object' ? payload.matchedApi : null);
@@ -185,6 +188,36 @@ function summarizeObservationForModel(toolName, observation = {}) {
     if (relatedApiLines.length > 0) {
       lines.push('related_apis:');
       lines.push(...relatedApiLines.map((item) => `- ${item}`));
+    }
+    const workflowRequiredSymbols = Array.isArray(workflowBundle.required_symbols)
+      ? workflowBundle.required_symbols
+      : [];
+    const workflowVerificationRules = Array.isArray(workflowBundle.verification_rules)
+      ? workflowBundle.verification_rules
+      : [];
+    const workflowRequiredFacts = Array.isArray(workflowBundle.required_facts)
+      ? workflowBundle.required_facts
+      : [];
+    const workflowRequiredSymbolLines = summarizePathItems(workflowRequiredSymbols, (item) => item, 8);
+    if (workflowRequiredSymbolLines.length > 0) {
+      lines.push('workflow_required_symbols:');
+      lines.push(...workflowRequiredSymbolLines.map((item) => `- ${item}`));
+    }
+    const workflowVerificationRuleLines = summarizePathItems(workflowVerificationRules, (item) => item, 8);
+    if (workflowVerificationRuleLines.length > 0) {
+      lines.push('workflow_verification_rules:');
+      lines.push(...workflowVerificationRuleLines.map((item) => `- ${item}`));
+    }
+    const workflowRequiredFactLines = summarizePathItems(workflowRequiredFacts, (item) => {
+      const symbol = toStringValue(item?.symbol);
+      const declaration = toStringValue(item?.declaration)
+        || toStringValue(Array.isArray(item?.declaration_candidates) ? item.declaration_candidates[0]?.declaration : '');
+      const source = toStringValue(item?.source);
+      return [symbol, declaration ? `-> ${declaration}` : '', source ? `@ ${source}` : ''].filter(Boolean).join(' ');
+    }, 6);
+    if (workflowRequiredFactLines.length > 0) {
+      lines.push('workflow_required_facts:');
+      lines.push(...workflowRequiredFactLines.map((item) => `- ${item}`));
     }
     const matches = summarizePathItems(payload.matches, (item) => {
       const pathValue = toStringValue(item?.path);

@@ -1,8 +1,9 @@
+import json
 import re
 import time
 from collections import defaultdict
 from pathlib import Path, PurePosixPath
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import yaml
 
@@ -34,12 +35,15 @@ _STRUCTURE_DIRS = (
 )
 _MARKDOWN_LINK_RE = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
 _SOURCE_ANCHOR_RE = re.compile(r"\bSource/[^`\s:]+:\d+(?:-\d+)?\b")
+_SOURCE_REF_CAPTURE_RE = re.compile(r"\b(Source/[^`\s:]+):(\d+)(?:-(\d+))?\b")
+_SECTION_HEADING_RE = re.compile(r"^##\s+(.+?)\s*$")
 _CURATED_KINDS = {"home", "topic", "entity", "analysis", "decision", "workflow", "source", "page"}
 _WRITEBACK_CATEGORY_PATHS = {
     "analysis": "pages/analyses",
     "decision": "pages/decisions",
     "topic": "pages/topics",
 }
+_RUNTIME_MANIFEST_PATH = ".runtime/manifest.json"
 
 
 def _slugify(value: str, fallback: str = "engine") -> str:
@@ -108,6 +112,31 @@ def _extract_summary(content: str) -> str:
 
 def _normalize_multiline_text(value: str) -> str:
     return str(value or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+
+
+def _normalize_string_list(values: Any, *, limit: int = 24) -> List[str]:
+    output: List[str] = []
+    seen = set()
+    for item in values if isinstance(values, list) else []:
+        normalized = str(item or "").strip()
+        if not normalized:
+            continue
+        key = normalized.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        output.append(normalized)
+        if len(output) >= limit:
+            break
+    return output
+
+
+def _normalize_lookup_token(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").strip().lower())
+
+
+def _runtime_manifest_file(root: Path) -> Path:
+    return root / PurePosixPath(_RUNTIME_MANIFEST_PATH).as_posix()
 
 
 def _yaml_dump(data: Dict[str, Any]) -> str:
@@ -204,6 +233,200 @@ def _resolve_relative_link_path(root: Path, current_path: str, raw_target: str) 
     if page_path.exists():
         return normalized_page
     return normalized_page
+
+
+def _extract_section_yaml(content: str, heading: str) -> Dict[str, Any]:
+    _meta, body = _read_frontmatter(content)
+    lines = str(body or "").splitlines()
+    normalized_heading = str(heading or "").strip().lower()
+    for index, raw_line in enumerate(lines):
+        if str(raw_line or "").strip().lower() != f"## {normalized_heading}":
+            continue
+        cursor = index + 1
+        while cursor < len(lines) and not str(lines[cursor] or "").strip():
+            cursor += 1
+        if cursor >= len(lines) or str(lines[cursor] or "").strip().lower() not in {"```yaml", "```yml"}:
+            return {}
+        cursor += 1
+        block_lines: List[str] = []
+        while cursor < len(lines) and str(lines[cursor] or "").strip() != "```":
+            block_lines.append(lines[cursor])
+            cursor += 1
+        try:
+            parsed = yaml.safe_load("\n".join(block_lines)) or {}
+        except Exception:
+            parsed = {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _extract_method_records(root: Path, pages: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    records: List[Dict[str, Any]] = []
+    for page in pages or []:
+        path = str(page.get("path") or "")
+        if str(page.get("kind") or "") != "method":
+            continue
+        stem = PurePosixPath(path).stem
+        if not stem.startswith("Methods_T_"):
+            continue
+        qualified_type = stem[len("Methods_T_") :].replace("_", ".")
+        type_name = qualified_type.split(".")[-1]
+        lines = str(page.get("content") or "").splitlines()
+        section_starts = [
+            index
+            for index, raw_line in enumerate(lines)
+            if _SECTION_HEADING_RE.match(str(raw_line or ""))
+        ]
+        for section_index, start in enumerate(section_starts):
+            match = _SECTION_HEADING_RE.match(lines[start])
+            member_name = str(match.group(1) if match else "").strip()
+            if not member_name or member_name.lower() == "overview":
+                continue
+            end = section_starts[section_index + 1] if section_index + 1 < len(section_starts) else len(lines)
+            section_text = "\n".join(lines[start:end]).strip()
+            if not section_text:
+                continue
+            source_refs = [
+                {
+                    "path": str(ref_match.group(1) or "").strip().replace("\\", "/"),
+                    "line_range": (
+                        f"{max(1, int(ref_match.group(2) or 1))}-{max(max(1, int(ref_match.group(2) or 1)), int(ref_match.group(3) or ref_match.group(2) or 1))}"
+                    ),
+                }
+                for ref_match in _SOURCE_REF_CAPTURE_RE.finditer(section_text)
+            ]
+            records.append(
+                {
+                    "qualified_type": qualified_type,
+                    "type_name": type_name,
+                    "member_name": member_name,
+                    "qualified_symbol": f"{qualified_type}.{member_name}",
+                    "doc_path": path,
+                    "heading_path": f"{qualified_type} Methods > {member_name}",
+                    "text": section_text,
+                    "source_refs": source_refs,
+                }
+            )
+    return records
+
+
+def _resolve_method_records_for_symbols(
+    symbols: Sequence[str],
+    methods_index: Sequence[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    by_qualified: Dict[str, Dict[str, Any]] = {}
+    by_short_qualified: Dict[str, Dict[str, Any]] = {}
+    by_member: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+
+    for record in methods_index or []:
+        qualified_symbol = str(record.get("qualified_symbol") or "").strip()
+        type_name = str(record.get("type_name") or "").strip()
+        member_name = str(record.get("member_name") or "").strip()
+        qualified_type = str(record.get("qualified_type") or "").strip()
+        if qualified_symbol:
+            by_qualified[_normalize_lookup_token(qualified_symbol)] = record
+        if type_name and member_name:
+            by_short_qualified[_normalize_lookup_token(f"{type_name}.{member_name}")] = record
+        if qualified_type and member_name:
+            by_short_qualified[_normalize_lookup_token(f"{qualified_type}.{member_name}")] = record
+        if member_name:
+            by_member[_normalize_lookup_token(member_name)].append(record)
+
+    output: List[Dict[str, Any]] = []
+    seen = set()
+    for symbol in symbols or []:
+        normalized_symbol = _normalize_lookup_token(symbol)
+        if not normalized_symbol:
+            continue
+        selected = by_qualified.get(normalized_symbol) or by_short_qualified.get(normalized_symbol)
+        if selected is None and "." not in str(symbol or ""):
+            member_matches = by_member.get(normalized_symbol, [])
+            if len(member_matches) == 1:
+                selected = member_matches[0]
+        if not selected:
+            continue
+        key = str(selected.get("qualified_symbol") or "").strip().lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        output.append(selected)
+    return output
+
+
+def _build_workflow_manifest_entry(
+    page: Dict[str, Any],
+    methods_index: Sequence[Dict[str, Any]],
+) -> Dict[str, Any]:
+    content = str(page.get("content") or "")
+    meta, _body = _read_frontmatter(content)
+    required_section = _extract_section_yaml(content, "Required Facts")
+    frontmatter_symbols = _normalize_string_list(meta.get("symbols"))
+    required_symbols = _normalize_string_list(required_section.get("required_symbols"))
+    required_facts: List[Dict[str, Any]] = []
+    for item in required_section.get("required_facts") if isinstance(required_section.get("required_facts"), list) else []:
+        if not isinstance(item, dict):
+            continue
+        symbol = str(item.get("symbol") or "").strip()
+        if not symbol:
+            continue
+        required_facts.append(
+            {
+                "symbol": symbol,
+                "declaration": str(item.get("declaration") or "").strip() or None,
+                "declaration_candidates": item.get("declaration_candidates") if isinstance(item.get("declaration_candidates"), list) else None,
+                "source": str(item.get("source") or "").strip() or None,
+            }
+        )
+    explicit_symbols = _normalize_string_list([item.get("symbol") for item in required_facts if isinstance(item, dict)], limit=64)
+    linked_records = _resolve_method_records_for_symbols(
+        [*explicit_symbols, *required_symbols],
+        methods_index,
+    )
+    route_terms = _normalize_string_list(
+        [
+            page.get("title"),
+            PurePosixPath(str(page.get("path") or "")).stem,
+            required_section.get("workflow_family"),
+            *(_normalize_string_list(meta.get("aliases"))),
+            *frontmatter_symbols,
+            *required_symbols,
+        ],
+        limit=64,
+    )
+    return {
+        "path": str(page.get("path") or "").strip(),
+        "title": str(page.get("title") or "").strip(),
+        "summary": str(page.get("summary") or "").strip(),
+        "aliases": _normalize_string_list(meta.get("aliases")),
+        "symbols": frontmatter_symbols,
+        "tags": _normalize_string_list(meta.get("tags")),
+        "workflow_family": str(required_section.get("workflow_family") or "").strip(),
+        "output_shape": str(required_section.get("output_shape") or "").strip(),
+        "required_output_files": _normalize_string_list(required_section.get("required_output_files")),
+        "required_symbols": required_symbols,
+        "required_facts": required_facts,
+        "verification_rules": _normalize_string_list(required_section.get("verification_rules")),
+        "route_terms": route_terms,
+        "linked_method_symbols": _normalize_string_list([record.get("qualified_symbol") for record in linked_records], limit=64),
+        "source_anchors": _normalize_string_list(_SOURCE_ANCHOR_RE.findall(content), limit=64),
+        "content": content,
+    }
+
+
+def _build_runtime_manifest(root: Path, pages: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    methods_index = _extract_method_records(root, pages)
+    workflow_index = [
+        _build_workflow_manifest_entry(page, methods_index)
+        for page in pages or []
+        if str(page.get("kind") or "") == "workflow"
+    ]
+    return {
+        "version": 1,
+        "wiki_id": root.name,
+        "generated_at": now_iso(),
+        "methods_index": methods_index,
+        "workflow_index": workflow_index,
+    }
 
 
 def _infer_kind(path: str) -> str:
@@ -634,7 +857,9 @@ class WikiService:
 
     async def rebuild_index(self, wiki_id: str) -> Dict[str, Any]:
         await self.ensure_coordination_pages(wiki_id, create_if_missing=True)
-        pages = await self.list_pages(wiki_id)
+        normalized_wiki_id = _slugify(wiki_id, "engine")
+        root = self._root(normalized_wiki_id)
+        pages = await self.list_pages(normalized_wiki_id)
         groups = {
             "Coordination": {"readme", "schema", "index", "log", "home"},
             "Sources": {"source"},
@@ -692,7 +917,13 @@ class WikiService:
                 lines.append(f"- [{page.get('title') or page.get('path')}]({page.get('path')}){suffix}")
 
         index_body = "\n".join(lines)
-        return self._write_page_text(wiki_id, "index.md", index_body)
+        manifest_file = _runtime_manifest_file(root)
+        manifest_file.parent.mkdir(parents=True, exist_ok=True)
+        manifest_file.write_text(
+            json.dumps(_build_runtime_manifest(root, pages), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        return self._write_page_text(normalized_wiki_id, "index.md", index_body)
 
     async def ingest_source_document(
         self,

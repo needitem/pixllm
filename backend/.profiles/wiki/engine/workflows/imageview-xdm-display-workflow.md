@@ -39,7 +39,7 @@ tags:
 - Bind bands into a composite: `XDMComposite.SetBand` -> `Source/NXDLrs/NXDLrs.h:1423`, `Source/NXDLrs/XDMComposite.cpp:81`
 - Get the composite manager: `NXImageLayerComposites.GetXDMCompManager` -> `Source/NXImage/NXImageLayerComposites.h:149`, `Source/NXImage/NXImageLayerComposites.cpp:66`
 - Add the composite: `XDMCompManager.AddXDMComposite` -> `Source/NXDLrs/NXDLrs.h:1867`, `Source/NXDLrs/XDMCompManager.cpp:68`
-- Attach the layer to the view: `NXImageView.AddImageLayer` -> `Source/NXImage/NXImageView.h:836`, `Source/NXImage/NXImageView.cpp:162`
+- Attach the composites layer to the view: `NXImageView.AddImageLayer` -> `Source/NXImage/NXImageView.h:836`, `Source/NXImage/NXImageView.cpp:162`
 - Refresh rendering: `NXImageLayerComposites.ZoomFit` / `Invalidate` -> `Source/NXImage/NXImageLayerComposites.h:142`, `Source/NXImage/NXImageLayerComposites.cpp:56`; `Source/NXImage/NXImageLayerComposites.h:146`, `Source/NXImage/NXImageLayerComposites.cpp:61`
 
 # Verified Workflow Source Anchors
@@ -53,12 +53,12 @@ tags:
 # Verified Steps
 1. Create a WPF `Window` with `System.Windows.Forms.Integration.WindowsFormsHost`.
 2. Create `NXImageView` and `NXImageLayerComposites`.
-3. Assign `host.Child = imageView`, then add the layer through `AddImageLayer(ref layer)`.
+3. Assign `host.Child = imageView`, cast the composites layer to `NXImageLayer`, then add that layer through `AddImageLayer(ref layer)`.
 4. Create `XRasterIO` and call `Initialize`.
 5. Call `LoadFile(path, out error, false, eIOCreateXLDMode.All_NoMsg)` to get `XRSLoadFile`.
 6. Create `XDMComposite`.
 7. Pull one band for grayscale, or three bands for RGB, using `GetBandAt`.
-8. Call `SetBand(ref band, index)` for each band.
+8. For grayscale, set `Mode = eCompMode.Gray` and bind band index `0`. For RGB, set `Mode = eCompMode.RGB` and prefer `eCompBandIdx.Red`, `eCompBandIdx.Green`, and `eCompBandIdx.Blue` instead of raw `0`, `1`, `2`. If you must use integers, the verified RGB mapping is `Red = 2`, `Green = 1`, `Blue = 0`.
 9. Call `GetXDMCompManager()` on the composites layer.
 10. Lock the layer if you are mutating the manager while rendering is active: `Lock` -> `Source/NXImage/NXImageLayerComposites.h:153`, `Source/NXImage/NXImageLayerComposites.cpp:71`
 11. Register the composite with `AddXDMComposite(ref composite)`.
@@ -138,15 +138,24 @@ public partial class MainWindow : Window
 
         XDMComposite composite = new XDMComposite();
 
-        XDMBand band0 = loadFile.GetBandAt(0);
-        composite.SetBand(ref band0, 0);
-
         if (loadFile.NumBand >= 3)
         {
-            XDMBand band1 = loadFile.GetBandAt(1);
-            XDMBand band2 = loadFile.GetBandAt(2);
-            composite.SetBand(ref band1, 1);
-            composite.SetBand(ref band2, 2);
+            composite.Mode = eCompMode.RGB;
+
+            XDMBand bandRed = loadFile.GetBandAt(0);
+            XDMBand bandGreen = loadFile.GetBandAt(1);
+            XDMBand bandBlue = loadFile.GetBandAt(2);
+
+            composite.SetBand(ref bandRed, eCompBandIdx.Red);
+            composite.SetBand(ref bandGreen, eCompBandIdx.Green);
+            composite.SetBand(ref bandBlue, eCompBandIdx.Blue);
+        }
+        else
+        {
+            composite.Mode = eCompMode.Gray;
+
+            XDMBand bandGray = loadFile.GetBandAt(0);
+            composite.SetBand(ref bandGray, eCompBandIdx.Gray);
         }
 
         XDMCompManager manager = _compositeLayer.GetXDMCompManager();
@@ -183,7 +192,7 @@ public sealed class MainForm : Form
 - Prefer the WPF shell above when the user asks for a generic C# desktop program. Use the WinForms variant only when WinForms is explicitly requested.
 - For WPF answers, do not stop at a single code-behind class. Include the XAML shell that hosts `WindowsFormsHost`.
 - For focused hosting details, see `workflows/nximageview-wpf-hosting.md`.
-- If the file is grayscale, a single `SetBand` call is enough. If the file has three or more channels, fill indices `0`, `1`, and `2`.
+- If the file is grayscale, a single `SetBand` call is enough after `Mode = eCompMode.Gray`. If the file has three or more channels, set `Mode = eCompMode.RGB` and bind `Red`, `Green`, and `Blue` explicitly. Do not assume raw integer order `0, 1, 2` means `R, G, B`.
 - These workflow notes are reference guidance, not a requirement to pass a standalone compile gate before answering.
 - If some signatures remain uncertain, prefer calling out the uncertainty from verified source excerpts instead of blocking on compile-oriented verification.
 
@@ -192,6 +201,11 @@ public sealed class MainForm : Form
 - Do not replace `out error` with `ref error` unless the verified signature explicitly says `ref`.
 - Do not use `GetXDMCompManager` like a property. In this workflow it is a method call: `GetXDMCompManager()`.
 - Do not pass `NXImageLayerComposites` directly to `AddImageLayer(ref ...)` without the verified base-layer pattern. Use `NXImageLayer layer = compositeLayer; imageView.AddImageLayer(ref layer);`.
+- Do not pass `XDMComposite` directly to `NXImageView.AddImageLayer(...)`. `AddImageLayer` accepts `NXImageLayer^%`, so the display path is `NXImageLayerComposites -> GetXDMCompManager() -> AddXDMComposite(ref composite)`.
+- Do not call `Lock()` or `UnLock()` on `NXImageView`. The verified lock scope for this workflow is `NXImageLayerComposites`.
+- Do not allocate a standalone `new XDMCompManager()` for display and expect it to appear in the view. Use the manager returned by `NXImageLayerComposites.GetXDMCompManager()`.
+- Do not use made-up convenience APIs such as `Pixoneer.NXDL.NXDLio`, `GetBandCount()`, `GetNumberOfBands()`, `IsValid`, or `ImageLayerComposites` unless a verified declaration proves they exist.
+- Do not emit raw RGB indexes without context. Prefer `eCompBandIdx.Red`, `eCompBandIdx.Green`, and `eCompBandIdx.Blue`, or state the verified integer mapping explicitly.
 - Do not leave a fake path like `C:\\path\\to\\your\\file.xdm` in an auto-executed code path. Either parameterize the path, open a file dialog, or leave the example path in a commented usage snippet instead of calling it automatically.
 - If you define WinForms handlers such as `Form_Load` or `FormClosing`, wire them in `InitializeComponent()` or remove the dead handlers. Unwired handlers are treated as an incomplete interaction path.
 
@@ -263,4 +277,6 @@ verification_rules:
   - verify_method_vs_property_form
   - verify_ref_out_and_enum_literals_when_signature_matters
   - cross_check_matching_methods_page_before_emitting_code
+  - require_verified_api_facts_for_code_examples
+  - prefer_named_enum_members_when_index_mapping_is_non_obvious
 ```
