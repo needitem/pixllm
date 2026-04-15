@@ -1,4 +1,4 @@
-﻿---
+---
 title: Pixoneer.NXDL.XWarpCoeff Methods
 aliases:
   - XWarpCoeff Methods
@@ -38,14 +38,14 @@ method_section_prefix: "## "
 verification_rules:
   - treat_declaration_lines_as_symbol_existence_evidence
   - treat_implementation_lines_as_source_anchor_evidence
-  - prefer_this_page_over_examples_for_exact_call_shapes
+  - use_this_page_only_after_a_workflow_or_type_hint_narrows_scope
   - do_not_invent_members_not_listed_here
 ```
 
 ## Runtime Usage
-- Use this page to verify exact symbol existence before emitting code.
-- Cross-check declaration and implementation lines when overloads or call shapes matter.
-- Treat examples and workflow pages as composition guidance, but treat this page as the canonical member list.
+- Use this page only as a verification layer after a workflow or explicit type hint identifies the target type.
+- Cross-check declaration and implementation lines when overloads, properties, or call shapes matter.
+- Do not synthesize end-to-end usage answers from this page alone.
 ## CreateRotation
 - Description: 회전각도와 센터 좌표를 입력 받아 영상변환계수를 산출한다. 이후 WarpPoint에 대한 좌표 변환은 입력된 센터 및 회전각을 적용한 좌표가 산출된다.
 - Declaration: `Source/NXDL/NXDL.h:2076`

@@ -1,4 +1,4 @@
-﻿---
+---
 title: Raster ROI Signature Workflow
 aliases:
   - Raster ROI Signature Workflow
@@ -16,8 +16,6 @@ tags:
 
 # Overview
 - Goal: Compute ROI and signature statistics.
-- Role: normalized workflow file used by the 360-question answer index.
-- Existing curated workflow/example pages should be kept and referenced, not replaced blindly.
 - Core calls:
   - `XROI.CalcStatistics`
   - `XROI.GetMean`
@@ -46,6 +44,7 @@ tags:
   - CalcStatistics를 먼저 수행한다.
   - 이후 mean/std/histogram/correlation 또는 SIG 저장/불러오기를 수행한다.
 
+
 ## Required Facts
 ```yaml
 workflow_family: raster
@@ -61,20 +60,40 @@ required_symbols:
   - XSIGSet.AddSIG
   - XSIGSet.LoadSIGSet
   - XSIGSet.SaveSIGSet
+required_facts:
+  - symbol: XROI.CalcStatistics
+    declaration: 'bool		CalcStatistics(ArrayList^ bands, XThread^ thd);'
+    source: 'Source/NXDLrs/NXDLrs.h:346'
+  - symbol: XROI.GetMean
+    declaration: 'double		GetMean(int nBandIdx);'
+    source: 'Source/NXDLrs/NXDLrs.h:288'
+  - symbol: XROI.GetStd
+    declaration: 'double		GetStd(int nBandIdx);'
+    source: 'Source/NXDLrs/NXDLrs.h:293'
+  - symbol: XROI.GetHistogram
+    declaration: '__int64		GetHistogram(int nBandIdx, int nIndex);'
+    source: 'Source/NXDLrs/NXDLrs.h:317'
+  - symbol: XROI.GetCorrelation
+    declaration: 'double		GetCorrelation(int nBandIdxA, int nBandIdxB);'
+    source: 'Source/NXDLrs/NXDLrs.h:311'
+  - symbol: XSIG.AddROI
+    declaration: 'int			AddROI(XROI^ roi);'
+    source: 'Source/NXDLrs/NXDLrs.h:378'
+  - symbol: XSIG.CalcStatistics
+    declaration: 'bool		CalcStatistics(ArrayList^ bands, XThread^ thd);'
+    source: 'Source/NXDLrs/NXDLrs.h:401'
+  - symbol: XSIGSet.AddSIG
+    declaration: 'void			AddSIG(XSIG^ sig);'
+    source: 'Source/NXDLrs/NXDLrs.h:481'
+  - symbol: XSIGSet.LoadSIGSet
+    declaration: 'bool			LoadSIGSet(String^ strFilePath);'
+    source: 'Source/NXDLrs/NXDLrs.h:502'
+  - symbol: XSIGSet.SaveSIGSet
+    declaration: 'bool			SaveSIGSet(String^ strFilePath);'
+    source: 'Source/NXDLrs/NXDLrs.h:507'
 verification_rules:
   - use_this_workflow_as_primary_path
   - verify_method_vs_property_form
   - verify_ref_out_and_enum_literals_when_signature_matters
   - cross_check_matching_methods_page_before_emitting_code
 ```
-
-## Output Guidance
-- Explanation requests: summarize the ordered call chain, prerequisites, and verified source anchors.
-- Code/sample requests: prefer a focused helper, method, or minimal snippet unless the user explicitly asks for a full app shell.
-- Keep the sample scoped to this workflow and do not mix neighboring subsystems unless the user explicitly asks for them.
-
-## Common Wrong Patterns
-- Do not invent helper methods or short overloads outside the verified symbol set above.
-- Do not convert verified methods into properties, or properties into methods, without source proof.
-- Do not guess `ref`/`out`, enum literals, or return types from naming alone.
-- Do not skip prerequisites implied by the ordered call chain in this workflow.

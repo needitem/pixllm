@@ -1,4 +1,4 @@
-﻿---
+---
 title: Thread Config License Workflow
 aliases:
   - Thread Config License Workflow
@@ -15,8 +15,6 @@ tags:
 
 # Overview
 - Goal: Use common NXDL utilities for progress reporting, config-path changes, and license checks.
-- Role: normalized workflow file used by the 360-question answer index.
-- Existing curated workflow/example pages should be kept and referenced, not replaced blindly.
 - Core calls:
   - `XThread.SendMessagePercent`
   - `Xfn.SetConfigPath`
@@ -33,6 +31,7 @@ tags:
   - config root가 필요하면 SetConfigPath를 먼저 호출한다.
   - 라이선스 문제는 ValidateLicense/IsValidLicense로 진단한다.
 
+
 ## Required Facts
 ```yaml
 workflow_family: runtime_utility
@@ -42,20 +41,25 @@ required_symbols:
   - Xfn.SetConfigPath
   - Xfn.ValidateLicense
   - Xfn.IsValidLicense
+required_facts:
+  - symbol: XThread.SendMessagePercent
+    declaration_candidates:
+      - declaration: '/// 		m_Thread.SendMessagePercent(0);'
+        source: 'Source/NXDL/NXDL.h:2212'
+      - declaration: 'void			SendMessagePercent(int nPercent);'
+        source: 'Source/NXDL/NXDL.h:2294'
+  - symbol: Xfn.SetConfigPath
+    declaration: 'static bool		SetConfigPath(System::String^ strPath);'
+    source: 'Source/NXDL/NXDL.h:3238'
+  - symbol: Xfn.ValidateLicense
+    declaration: 'static bool	ValidateLicense(String^ strSiteInfo);'
+    source: 'Source/NXDL/NXDL.h:3276'
+  - symbol: Xfn.IsValidLicense
+    declaration: 'static bool IsValidLicense(eLicenseType% type, String^% checkID, String^% dateExpire, String^% licensePath);'
+    source: 'Source/NXDL/NXDL.h:3284'
 verification_rules:
   - use_this_workflow_as_primary_path
   - verify_method_vs_property_form
   - verify_ref_out_and_enum_literals_when_signature_matters
   - cross_check_matching_methods_page_before_emitting_code
 ```
-
-## Output Guidance
-- Explanation requests: summarize the ordered call chain, prerequisites, and verified source anchors.
-- Code/sample requests: prefer a focused helper, method, or minimal snippet unless the user explicitly asks for a full app shell.
-- Keep the sample scoped to this workflow and do not mix neighboring subsystems unless the user explicitly asks for them.
-
-## Common Wrong Patterns
-- Do not invent helper methods or short overloads outside the verified symbol set above.
-- Do not convert verified methods into properties, or properties into methods, without source proof.
-- Do not guess `ref`/`out`, enum literals, or return types from naming alone.
-- Do not skip prerequisites implied by the ordered call chain in this workflow.

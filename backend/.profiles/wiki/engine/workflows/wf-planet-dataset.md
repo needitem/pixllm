@@ -1,4 +1,4 @@
-﻿---
+---
 title: Planet Dataset Workflow
 aliases:
   - Planet Dataset Workflow
@@ -17,8 +17,6 @@ tags:
 
 # Overview
 - Goal: Register PBI groups and switch the default dataset set.
-- Role: normalized workflow file used by the 360-question answer index.
-- Existing curated workflow/example pages should be kept and referenced, not replaced blindly.
 - Core calls:
   - `NXPlanetView.SetPBIDefaultDataSet`
   - `XPBTDataGroup.Sources.Add`
@@ -37,33 +35,40 @@ tags:
   - 엔진에 그룹을 등록/교체한다.
   - SetPBIDefaultDataSet으로 활성 조합을 고른다.
 
+
 ## Required Facts
 ```yaml
 workflow_family: map_view
-output_shape: view_shell_or_hosted_control
+output_shape: hosted_wpf_shell_by_default
+required_output_files:
+  - MainWindow.xaml
+  - MainWindow.xaml.cs
+  - App.xaml
+  - App.xaml.cs
 required_symbols:
   - NXPlanetView.SetPBIDefaultDataSet
   - XPBTDataGroup.Sources.Add
   - NXPlanetEngine.AddPBIGroup
   - NXPlanetEngine.RemovePBIGroup
+required_facts:
+  - symbol: NXPlanetView.SetPBIDefaultDataSet
+    declaration: 'void SetPBIDefaultDataSet(String^ strSource);'
+    source: 'Source/NXPlanet/NXPlanetView.h:694'
+  - symbol: XPBTDataGroup.Sources.Add
+    declaration_candidates:
+      - declaration: '///			rpfGroup.Sources.Add(src);'
+        source: 'Source/NXPlanet/NXPlanetView.h:168'
+      - declaration: '///			rpfGroup.Sources.Add(src);'
+        source: 'Source/NXPlanet/NXPlanetView.h:210'
+  - symbol: NXPlanetEngine.AddPBIGroup
+    declaration: 'static bool		AddPBIGroup(XPBTDataGroup^% Group);'
+    source: 'Source/NXPlanet/NXPlanetEngine.h:87'
+  - symbol: NXPlanetEngine.RemovePBIGroup
+    declaration: 'static bool		RemovePBIGroup(int nGroupID);'
+    source: 'Source/NXPlanet/NXPlanetEngine.h:92'
 verification_rules:
   - use_this_workflow_as_primary_path
   - verify_method_vs_property_form
   - verify_ref_out_and_enum_literals_when_signature_matters
   - cross_check_matching_methods_page_before_emitting_code
 ```
-
-## Output Guidance
-- Explanation requests: summarize the view initialization order, layer wiring, camera/state setup, and refresh path.
-- Code/sample requests: return the host/view shell plus the ordered initialization sequence for layers, SR, and interaction state.
-- If the user asks for WPF, include the XAML shell and code-behind instead of returning only a single `.cs` file.
-
-## Common Wrong Patterns
-- Do not invent helper methods or short overloads outside the verified symbol set above.
-- Do not convert verified methods into properties, or properties into methods, without source proof.
-- Do not guess `ref`/`out`, enum literals, or return types from naming alone.
-- Do not skip prerequisites implied by the ordered call chain in this workflow.
-- Do not skip the camera/state or layer setup steps when the question is about a runnable map/planet/uspace workflow.
-
-- See also:
-  - [xdl-planetview-wpf-examples.md](xdl-planetview-wpf-examples.md)

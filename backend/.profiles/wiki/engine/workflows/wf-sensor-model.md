@@ -1,4 +1,4 @@
-﻿---
+---
 title: Sensor Model Workflow
 aliases:
   - Sensor Model Workflow
@@ -18,8 +18,6 @@ tags:
 
 # Overview
 - Goal: Configure sensor models and project between image and world spaces.
-- Role: normalized workflow file used by the 360-question answer index.
-- Existing curated workflow/example pages should be kept and referenced, not replaced blindly.
 - Core calls:
   - `XFrameSensor.SetParamsLocal`
   - `XFrameSensor.SetParamsEarth`
@@ -43,6 +41,7 @@ tags:
   - local 또는 earth 경로를 택해 모델을 세팅한다.
   - 이후 image/world 변환 메서드를 반복 호출한다.
 
+
 ## Required Facts
 ```yaml
 workflow_family: sensor_model
@@ -55,20 +54,31 @@ required_symbols:
   - XSensorModel.WorldToImageG
   - XSensorModel.ImageToWorldG
   - XSensorModel.GetMapCoordOfImageCenter
+required_facts:
+  - symbol: XFrameSensor.SetParamsLocal
+    declaration: 'bool	SetParamsLocal(XFrameSensorParams^ param);'
+    source: 'Source/NXDLsm/NXDLsm.h:273'
+  - symbol: XFrameSensor.SetParamsEarth
+    declaration: 'bool	SetParamsEarth(XFrameSensorParams^ param);'
+    source: 'Source/NXDLsm/NXDLsm.h:268'
+  - symbol: XSensorModel.WorldToImageE
+    declaration: 'virtual bool	WorldToImageE(NXDL::XVertex3d^ ptEuc, [OutAttribute] XVertex2d^% ptImg);'
+    source: 'Source/NXDLsm/NXDLsm.h:57'
+  - symbol: XSensorModel.ImageToWorldE
+    declaration: 'virtual bool	ImageToWorldE(XVertex2d^ ptImg, double hEuc, [OutAttribute] NXDL::XVertex3d^% ptEuc);'
+    source: 'Source/NXDLsm/NXDLsm.h:64'
+  - symbol: XSensorModel.WorldToImageG
+    declaration: 'virtual bool	WorldToImageG(NXDL::XVertex3d^ ptGeo,[OutAttribute] NXDL::XVertex2d^% ptImg);'
+    source: 'Source/NXDLsm/NXDLsm.h:70'
+  - symbol: XSensorModel.ImageToWorldG
+    declaration: 'virtual bool	ImageToWorldG(NXDL::XVertex2d^ ptImg, const double hGeo, [OutAttribute] NXDL::XVertex3d^% ptGeo);'
+    source: 'Source/NXDLsm/NXDLsm.h:77'
+  - symbol: XSensorModel.GetMapCoordOfImageCenter
+    declaration: 'virtual NXDL::XVertex3d^ GetMapCoordOfImageCenter();'
+    source: 'Source/NXDLsm/NXDLsm.h:81'
 verification_rules:
   - use_this_workflow_as_primary_path
   - verify_method_vs_property_form
   - verify_ref_out_and_enum_literals_when_signature_matters
   - cross_check_matching_methods_page_before_emitting_code
 ```
-
-## Output Guidance
-- Explanation requests: summarize the ordered call chain, prerequisites, and verified source anchors.
-- Code/sample requests: prefer a focused helper, method, or minimal snippet unless the user explicitly asks for a full app shell.
-- Keep the sample scoped to this workflow and do not mix neighboring subsystems unless the user explicitly asks for them.
-
-## Common Wrong Patterns
-- Do not invent helper methods or short overloads outside the verified symbol set above.
-- Do not convert verified methods into properties, or properties into methods, without source proof.
-- Do not guess `ref`/`out`, enum literals, or return types from naming alone.
-- Do not skip prerequisites implied by the ordered call chain in this workflow.

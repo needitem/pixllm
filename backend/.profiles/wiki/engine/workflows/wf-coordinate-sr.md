@@ -1,4 +1,4 @@
-﻿---
+---
 title: Spatial Reference Workflow
 aliases:
   - Spatial Reference Workflow
@@ -14,8 +14,6 @@ tags:
 
 # Overview
 - Goal: Create and inspect spatial references before transforming points.
-- Role: normalized workflow file used by the 360-question answer index.
-- Existing curated workflow/example pages should be kept and referenced, not replaced blindly.
 - Core calls:
   - `XSpatialReference.SetWellKnownGeogCS`
   - `XSpatialReference.IsGeographic`
@@ -37,6 +35,7 @@ tags:
   - 좌표계 타입과 UTM 여부를 확인한다.
   - 필요 시 적용 범위를 확인한다.
 
+
 ## Required Facts
 ```yaml
 workflow_family: coordinate
@@ -49,20 +48,31 @@ required_symbols:
   - XSpatialReference.GetUTMZone
   - XSpatialReference.IsSame
   - XSpatialReference.GetAreaOfUse
+required_facts:
+  - symbol: XSpatialReference.SetWellKnownGeogCS
+    declaration: 'void	SetWellKnownGeogCS(String^ strGeog);'
+    source: 'Source/NXDLcc/NXDLcc.h:183'
+  - symbol: XSpatialReference.IsGeographic
+    declaration: 'bool	IsGeographic();'
+    source: 'Source/NXDLcc/NXDLcc.h:152'
+  - symbol: XSpatialReference.IsProjected
+    declaration: 'bool	IsProjected();'
+    source: 'Source/NXDLcc/NXDLcc.h:156'
+  - symbol: XSpatialReference.IsUTM
+    declaration: 'bool	IsUTM();'
+    source: 'Source/NXDLcc/NXDLcc.h:198'
+  - symbol: XSpatialReference.GetUTMZone
+    declaration: 'int		GetUTMZone(bool% bNorth);'
+    source: 'Source/NXDLcc/NXDLcc.h:194'
+  - symbol: XSpatialReference.IsSame
+    declaration: 'bool	IsSame(XSpatialReference^ sr);'
+    source: 'Source/NXDLcc/NXDLcc.h:170'
+  - symbol: XSpatialReference.GetAreaOfUse
+    declaration: 'bool	GetAreaOfUse(double% westLon, double% southLat, double% eastLon, double% northLat, String^% strAreaName);'
+    source: 'Source/NXDLcc/NXDLcc.h:213'
 verification_rules:
   - use_this_workflow_as_primary_path
   - verify_method_vs_property_form
   - verify_ref_out_and_enum_literals_when_signature_matters
   - cross_check_matching_methods_page_before_emitting_code
 ```
-
-## Output Guidance
-- Explanation requests: summarize the ordered call chain, prerequisites, and verified source anchors.
-- Code/sample requests: prefer a focused helper, method, or minimal snippet unless the user explicitly asks for a full app shell.
-- Keep the sample scoped to this workflow and do not mix neighboring subsystems unless the user explicitly asks for them.
-
-## Common Wrong Patterns
-- Do not invent helper methods or short overloads outside the verified symbol set above.
-- Do not convert verified methods into properties, or properties into methods, without source proof.
-- Do not guess `ref`/`out`, enum literals, or return types from naming alone.
-- Do not skip prerequisites implied by the ordered call chain in this workflow.

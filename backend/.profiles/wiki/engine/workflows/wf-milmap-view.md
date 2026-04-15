@@ -1,4 +1,4 @@
-﻿---
+---
 title: Milmap View Workflow
 aliases:
   - Milmap View Workflow
@@ -16,8 +16,6 @@ tags:
 
 # Overview
 - Goal: Control scale, center, layers, draw args, and capture on NXMilmapView.
-- Role: normalized workflow file used by the 360-question answer index.
-- Existing curated workflow/example pages should be kept and referenced, not replaced blindly.
 - Core calls:
   - `NXMilmapView.CheckMilmapData`
   - `NXMilmapView.SetGeoToCenter`
@@ -52,10 +50,16 @@ tags:
   - 레이어를 붙이고 필요 시 순서를 바꾼다.
   - draw args/capture/crosshair를 쓴다.
 
+
 ## Required Facts
 ```yaml
 workflow_family: map_view
-output_shape: view_shell_or_hosted_control
+output_shape: hosted_wpf_shell_by_default
+required_output_files:
+  - MainWindow.xaml
+  - MainWindow.xaml.cs
+  - App.xaml
+  - App.xaml.cs
 required_symbols:
   - NXMilmapView.CheckMilmapData
   - NXMilmapView.SetGeoToCenter
@@ -70,24 +74,55 @@ required_symbols:
   - NXMilmapView.ChangeLayerOrder
   - NXMilmapView.GetDrawArgs
   - NXMilmapView.CaptureScreen
+required_facts:
+  - symbol: NXMilmapView.CheckMilmapData
+    declaration: 'bool	CheckMilmapData(XVertex2d^ vGeo, int nScaleIndex);'
+    source: 'Source/NXMilmap/NXMilmapView.h:110'
+  - symbol: NXMilmapView.SetGeoToCenter
+    declaration: 'bool	SetGeoToCenter(int nScaleIndex, XVertex2d^ vGeo);'
+    source: 'Source/NXMilmap/NXMilmapView.h:116'
+  - symbol: NXMilmapView.SearchScale
+    declaration: 'int		SearchScale(String^ m);'
+    source: 'Source/NXMilmap/NXMilmapView.h:125'
+  - symbol: NXMilmapView.Zoom
+    declaration: 'bool	Zoom(int scaleIndex, double factor);'
+    source: 'Source/NXMilmap/NXMilmapView.h:131'
+  - symbol: NXMilmapView.ZoomFitRect
+    declaration: 'bool	ZoomFitRect(int scaleIndex, double llx, double lly, double urx, double ury, bool bAuto);'
+    source: 'Source/NXMilmap/NXMilmapView.h:141'
+  - symbol: NXMilmapView.IsExistScale
+    declaration: 'bool	IsExistScale(int index);'
+    source: 'Source/NXMilmap/NXMilmapView.h:146'
+  - symbol: NXMilmapView.SearchName
+    declaration: 'String^	SearchName(int index);'
+    source: 'Source/NXMilmap/NXMilmapView.h:151'
+  - symbol: NXMilmapView.ShowCross
+    declaration: 'void	ShowCross(bool bShow);'
+    source: 'Source/NXMilmap/NXMilmapView.h:155'
+  - symbol: NXMilmapView.RefreshScreen
+    declaration: 'bool	RefreshScreen();'
+    source: 'Source/NXMilmap/NXMilmapView.h:159'
+  - symbol: NXMilmapView.AddRenderLayer
+    declaration_candidates:
+      - declaration: 'bool	AddRenderLayer(NXMilmapLayer^% layer);'
+        source: 'Source/NXMilmap/NXMilmapView.h:165'
+      - declaration: 'bool	AddRenderLayer(NXRenderLayer^% layer);'
+        source: 'Source/NXMilmap/NXMilmapView.h:220'
+  - symbol: NXMilmapView.ChangeLayerOrder
+    declaration: 'bool		ChangeLayerOrder(cli::array<NXRenderLayer^>^% layers);'
+    source: 'Source/NXMilmap/NXMilmapView.h:231'
+  - symbol: NXMilmapView.GetDrawArgs
+    declaration: 'NXMilmapDrawArgs^	GetDrawArgs();'
+    source: 'Source/NXMilmap/NXMilmapView.h:242'
+  - symbol: NXMilmapView.CaptureScreen
+    declaration_candidates:
+      - declaration: 'Bitmap^	CaptureScreen();'
+        source: 'Source/NXMilmap/NXMilmapView.h:120'
+      - declaration: 'Bitmap^	CaptureScreen(int left, int top, int width, int height, bool bOnlyComposite);'
+        source: 'Source/NXMilmap/NXMilmapView.h:426'
 verification_rules:
   - use_this_workflow_as_primary_path
   - verify_method_vs_property_form
   - verify_ref_out_and_enum_literals_when_signature_matters
   - cross_check_matching_methods_page_before_emitting_code
 ```
-
-## Output Guidance
-- Explanation requests: summarize the view initialization order, layer wiring, camera/state setup, and refresh path.
-- Code/sample requests: return the host/view shell plus the ordered initialization sequence for layers, SR, and interaction state.
-- If the user asks for WPF, include the XAML shell and code-behind instead of returning only a single `.cs` file.
-
-## Common Wrong Patterns
-- Do not invent helper methods or short overloads outside the verified symbol set above.
-- Do not convert verified methods into properties, or properties into methods, without source proof.
-- Do not guess `ref`/`out`, enum literals, or return types from naming alone.
-- Do not skip prerequisites implied by the ordered call chain in this workflow.
-- Do not skip the camera/state or layer setup steps when the question is about a runnable map/planet/uspace workflow.
-
-- See also:
-  - [xdl-milmapview-wpf-examples.md](xdl-milmapview-wpf-examples.md)

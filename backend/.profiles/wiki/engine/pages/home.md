@@ -1,4 +1,4 @@
-﻿# Engine Wiki Home
+# Engine Wiki Home
 
 ## Coordination Facts
 ```yaml
@@ -12,10 +12,11 @@ verification_rules:
 ## Purpose
 - Use this wiki as the persistent answer and verification layer for engine questions.
 - Prefer workflow pages for usage and composition questions.
+- Prefer workflow `required_facts` when exact signatures matter.
 - Prefer methods pages for exact symbol existence, call shape, and source anchors.
 
 ## Start Here
 - [index.md](../index.md)
-- [01-method-wiki-index.md](../01-method-wiki-index.md)
 - [imageview-xdm-display-workflow.md](../workflows/imageview-xdm-display-workflow.md)
-- [xdl-imageview-wpf-examples.md](../workflows/xdl-imageview-wpf-examples.md)
+- [nximageview-wpf-hosting.md](../workflows/nximageview-wpf-hosting.md)
+- [01-method-wiki-index.md](../01-method-wiki-index.md)

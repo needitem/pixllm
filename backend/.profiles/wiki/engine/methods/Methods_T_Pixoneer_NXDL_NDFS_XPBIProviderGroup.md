@@ -1,4 +1,4 @@
-﻿---
+---
 title: Pixoneer.NXDL.NDFS.XPBIProviderGroup Methods
 aliases:
   - XPBIProviderGroup Methods
@@ -37,14 +37,14 @@ method_section_prefix: "## "
 verification_rules:
   - treat_declaration_lines_as_symbol_existence_evidence
   - treat_implementation_lines_as_source_anchor_evidence
-  - prefer_this_page_over_examples_for_exact_call_shapes
+  - use_this_page_only_after_a_workflow_or_type_hint_narrows_scope
   - do_not_invent_members_not_listed_here
 ```
 
 ## Runtime Usage
-- Use this page to verify exact symbol existence before emitting code.
-- Cross-check declaration and implementation lines when overloads or call shapes matter.
-- Treat examples and workflow pages as composition guidance, but treat this page as the canonical member list.
+- Use this page only as a verification layer after a workflow or explicit type hint identifies the target type.
+- Cross-check declaration and implementation lines when overloads, properties, or call shapes matter.
+- Do not synthesize end-to-end usage answers from this page alone.
 ## AddPBIFile
 - Description: Planet에 지형 영상 서비스를 위하여 PBI파일을 추가한다. PBI 파일을 strProviderName이 다르면 내부적으로 다른 파일 그룹을 생성한다. 일단 파일 그룹이 생성되면 입력된 파일명에 해당하는 PBI파일을 해당 그룹으로 추가한다.
 - Declaration: `Source/NXDLdfs/NXDLdfs.h:88`

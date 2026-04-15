@@ -1,4 +1,4 @@
-﻿---
+---
 title: Pixoneer.NXDL.NXVideo.XBERCodec Methods
 aliases:
   - XBERCodec Methods
@@ -48,14 +48,14 @@ method_section_prefix: "## "
 verification_rules:
   - treat_declaration_lines_as_symbol_existence_evidence
   - treat_implementation_lines_as_source_anchor_evidence
-  - prefer_this_page_over_examples_for_exact_call_shapes
+  - use_this_page_only_after_a_workflow_or_type_hint_narrows_scope
   - do_not_invent_members_not_listed_here
 ```
 
 ## Runtime Usage
-- Use this page to verify exact symbol existence before emitting code.
-- Cross-check declaration and implementation lines when overloads or call shapes matter.
-- Treat examples and workflow pages as composition guidance, but treat this page as the canonical member list.
+- Use this page only as a verification layer after a workflow or explicit type hint identifies the target type.
+- Cross-check declaration and implementation lines when overloads, properties, or call shapes matter.
+- Do not synthesize end-to-end usage answers from this page alone.
 ## Decode
 - Description: 부호 없는 8비트 정수값을 디코딩한다.
 - Declaration: `Source/NXVideo/XUasMetadata.h:937`, `Source/NXVideo/XUasMetadata.h:944`, `Source/NXVideo/XUasMetadata.h:951`, `Source/NXVideo/XUasMetadata.h:958`, `Source/NXVideo/XUasMetadata.h:965`, `Source/NXVideo/XUasMetadata.h:972`, `Source/NXVideo/XUasMetadata.h:979`, `Source/NXVideo/XUasMetadata.h:986`, `Source/NXVideo/XUasMetadata.h:993`, `Source/NXVideo/XUasMetadata.h:1005`, `Source/NXVideo/XUasMetadata.h:1017`, `Source/NXVideo/XUasMetadata.h:1029`

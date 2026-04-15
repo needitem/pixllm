@@ -1,4 +1,4 @@
-﻿# Engine Wiki Index
+# Engine Wiki Index
 
 ## Coordination Facts
 ```yaml
@@ -16,14 +16,10 @@ verification_rules:
 - [pages/home.md](pages/home.md)
 - [01-method-wiki-index.md](01-method-wiki-index.md)
 
-## Workflows
+## Canonical Workflows
 - [imageview-xdm-display-workflow.md](workflows/imageview-xdm-display-workflow.md)
 - [nximageview-wpf-hosting.md](workflows/nximageview-wpf-hosting.md)
-- [nxdl-example-wpf-index.md](workflows/nxdl-example-wpf-index.md)
-- [xdl-imageview-wpf-examples.md](workflows/xdl-imageview-wpf-examples.md)
-- [xdl-videoview-wpf-examples.md](workflows/xdl-videoview-wpf-examples.md)
-- [xdl-planetview-wpf-examples.md](workflows/xdl-planetview-wpf-examples.md)
-- [xdl-milmapview-wpf-examples.md](workflows/xdl-milmapview-wpf-examples.md)
+- `workflows/wf-*.md`
 
 ## Reference
 - [01-method-wiki-index.md](01-method-wiki-index.md)

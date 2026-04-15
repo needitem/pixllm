@@ -1,4 +1,4 @@
-﻿---
+---
 title: NXImageView WPF Hosting
 aliases:
   - NXImageView WPF
@@ -85,17 +85,25 @@ public partial class MainWindow : Window
 - If the user asks only for the shortest possible interop sample, WinForms remains the most direct path. If the user asks for the default desktop shell, prefer WPF.
 - If the request says WPF, a response that omits XAML should be treated as incomplete unless the user explicitly asks for code-behind only.
 - This page is intended as verified API guidance. It should not imply that the desktop agent must run standalone compile checks before producing an answer.
-## Structured Page Facts
-```yaml
-page_family: hosting_workflow
-role: curated_reference
-verification_rules:
-  - use_this_page_when_the_question_matches_its_scenario_scope
-  - cross_check_methods_pages_before_emitting_exact_call_shapes
-  - keep_output_shape_rules_from_this_page_when_present
-```
 
-## Runtime Usage
-- Use this page as a richer scenario-level reference than the normalized `wf-*.md` pages when the question clearly matches this scenario.
-- If this page defines output-shape constraints such as WPF/XAML delivery, keep those constraints in the final answer.
-- Do not use sample-driven code patterns here to override conflicting exact signatures from methods pages.
+## Required Facts
+```yaml
+workflow_family: image_hosting_wpf
+output_shape: hosted_wpf_shell_by_default
+required_output_files:
+  - MainWindow.xaml
+  - MainWindow.xaml.cs
+  - App.xaml
+  - App.xaml.cs
+required_symbols:
+  - NXImageView.AddImageLayer
+required_facts:
+  - symbol: NXImageView.AddImageLayer
+    declaration: 'bool		AddImageLayer(NXImageLayer^% layer);'
+    source: 'Source/NXImage/NXImageView.h:836'
+verification_rules:
+  - use_this_workflow_as_primary_path
+  - verify_method_vs_property_form
+  - verify_ref_out_and_enum_literals_when_signature_matters
+  - cross_check_matching_methods_page_before_emitting_code
+```

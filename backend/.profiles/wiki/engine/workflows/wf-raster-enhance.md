@@ -1,4 +1,4 @@
-﻿---
+---
 title: Raster Enhance Workflow
 aliases:
   - Raster Enhance Workflow
@@ -17,8 +17,6 @@ tags:
 
 # Overview
 - Goal: Tune cut and stretch parameters for display quality.
-- Role: normalized workflow file used by the 360-question answer index.
-- Existing curated workflow/example pages should be kept and referenced, not replaced blindly.
 - Core calls:
   - `XDMComposite.SetCutType`
   - `XDMComposite.SetStretchCoverage`
@@ -36,6 +34,7 @@ tags:
   - cut/stretch 설정을 조정한다.
   - 수동 min/max는 마지막에만 사용한다.
 
+
 ## Required Facts
 ```yaml
 workflow_family: raster
@@ -46,20 +45,25 @@ required_symbols:
   - XDMComposite.SetStretchType
   - XDMComposite.SetCutMin
   - XDMComposite.SetCutMax
+required_facts:
+  - symbol: XDMComposite.SetCutType
+    declaration: 'void		SetCutType(eCompCutType CutType, int Idx);'
+    source: 'Source/NXDLrs/NXDLrs.h:1445'
+  - symbol: XDMComposite.SetStretchCoverage
+    declaration: 'void		SetStretchCoverage(eCompStretchCoverage StretchCoverage, int Idx);'
+    source: 'Source/NXDLrs/NXDLrs.h:1477'
+  - symbol: XDMComposite.SetStretchType
+    declaration: 'void		SetStretchType(eCompStretchType StretchType, int Idx);'
+    source: 'Source/NXDLrs/NXDLrs.h:1487'
+  - symbol: XDMComposite.SetCutMin
+    declaration: 'void		SetCutMin(double min, int Idx);'
+    source: 'Source/NXDLrs/NXDLrs.h:1455'
+  - symbol: XDMComposite.SetCutMax
+    declaration: 'void		SetCutMax(double max, int Idx);'
+    source: 'Source/NXDLrs/NXDLrs.h:1465'
 verification_rules:
   - use_this_workflow_as_primary_path
   - verify_method_vs_property_form
   - verify_ref_out_and_enum_literals_when_signature_matters
   - cross_check_matching_methods_page_before_emitting_code
 ```
-
-## Output Guidance
-- Explanation requests: summarize the ordered call chain, prerequisites, and verified source anchors.
-- Code/sample requests: prefer a focused helper, method, or minimal snippet unless the user explicitly asks for a full app shell.
-- Keep the sample scoped to this workflow and do not mix neighboring subsystems unless the user explicitly asks for them.
-
-## Common Wrong Patterns
-- Do not invent helper methods or short overloads outside the verified symbol set above.
-- Do not convert verified methods into properties, or properties into methods, without source proof.
-- Do not guess `ref`/`out`, enum literals, or return types from naming alone.
-- Do not skip prerequisites implied by the ordered call chain in this workflow.

@@ -1,4 +1,4 @@
-﻿---
+---
 title: Raster Vector Overlay Workflow
 aliases:
   - Raster Vector Overlay Workflow
@@ -18,8 +18,6 @@ tags:
 
 # Overview
 - Goal: Load vector data and overlay it on raster/image views.
-- Role: normalized workflow file used by the 360-question answer index.
-- Existing curated workflow/example pages should be kept and referenced, not replaced blindly.
 - Core calls:
   - `XVectorIO.Initialize`
   - `XVectorIO.GetFileInfo`
@@ -35,6 +33,7 @@ tags:
   - 필요 시 메타정보를 읽는다.
   - 벡터 파일을 로드하고 벡터 레이어를 뷰에 붙인다.
 
+
 ## Required Facts
 ```yaml
 workflow_family: raster
@@ -44,20 +43,32 @@ required_symbols:
   - XVectorIO.GetFileInfo
   - XVectorIO.LoadFile
   - NXImageView.AddImageLayer
+required_facts:
+  - symbol: XVectorIO.Initialize
+    declaration: 'bool		Initialize([OutAttribute] String^% strError);'
+    source: 'Source/NXDLio/NXDLio.h:802'
+  - symbol: XVectorIO.GetFileInfo
+    declaration_candidates:
+      - declaration: 'bool GetFileInfo(String^ strFileName, double% minx, double% miny, double% minz, double% maxx, double% maxy, double% maxz, NCC::XSpatialReference^% sr);'
+        source: 'Source/NXDLio/NXDLio.h:865'
+      - declaration: 'bool GetFileInfo(String^ strFileName, String^% strDriverName, NCC::XSpatialReference^% sr, int% numLayer, ArrayList^% arrLayerName, ArrayList^% arrGeoName, ArrayList^% arrNumFeature, ArrayList^% arrMinx, ArrayList^% arrMiny, ArrayList^% arrMaxx, ArrayList^% arrMaxy);'
+        source: 'Source/NXDLio/NXDLio.h:880'
+      - declaration: 'bool GetFileInfo(String^ strFileName, String^% strDriverName, NCC::XSpatialReference^% sr, int% numLayer, ArrayList^% arrLayerName, ArrayList^% arrGeoName, ArrayList^% arrNumFeature, ArrayList^% arrMinx, ArrayList^% arrMiny, ArrayList^% arrMaxx, ArrayList^% arrMaxy, XThread^ thd);'
+        source: 'Source/NXDLio/NXDLio.h:896'
+  - symbol: XVectorIO.LoadFile
+    declaration_candidates:
+      - declaration: 'NVC::XvcBase^		LoadFile(String^ strFileName, [OutAttribute] String^% strError, NCC::XSpatialReference^% pInSR);'
+        source: 'Source/NXDLio/NXDLio.h:824'
+      - declaration: 'NVC::XvcBase^		LoadFile(String^ strFileName, [OutAttribute] String^% strError, NCC::XSpatialReference^% pInSR, [OutAttribute] bool% bExistAttr, bool bLoadProperty);'
+        source: 'Source/NXDLio/NXDLio.h:834'
+      - declaration: 'NVC::XvcBase^ LoadFile(String^ strFileName, [OutAttribute] String^% strError, NCC::XSpatialReference^% pInSR, XThread^ thd);'
+        source: 'Source/NXDLio/NXDLio.h:842'
+  - symbol: NXImageView.AddImageLayer
+    declaration: 'bool		AddImageLayer(NXImageLayer^% layer);'
+    source: 'Source/NXImage/NXImageView.h:836'
 verification_rules:
   - use_this_workflow_as_primary_path
   - verify_method_vs_property_form
   - verify_ref_out_and_enum_literals_when_signature_matters
   - cross_check_matching_methods_page_before_emitting_code
 ```
-
-## Output Guidance
-- Explanation requests: summarize the ordered call chain, prerequisites, and verified source anchors.
-- Code/sample requests: prefer a focused helper, method, or minimal snippet unless the user explicitly asks for a full app shell.
-- Keep the sample scoped to this workflow and do not mix neighboring subsystems unless the user explicitly asks for them.
-
-## Common Wrong Patterns
-- Do not invent helper methods or short overloads outside the verified symbol set above.
-- Do not convert verified methods into properties, or properties into methods, without source proof.
-- Do not guess `ref`/`out`, enum literals, or return types from naming alone.
-- Do not skip prerequisites implied by the ordered call chain in this workflow.

@@ -1,4 +1,4 @@
-﻿---
+---
 title: Image Composite Manager Workflow
 aliases:
   - Image Composite Manager Workflow
@@ -17,8 +17,6 @@ tags:
 
 # Overview
 - Goal: Manage composites through NXImageLayerComposites and XDMCompManager.
-- Role: normalized workflow file used by the 360-question answer index.
-- Existing curated workflow/example pages should be kept and referenced, not replaced blindly.
 - Core calls:
   - `NXImageLayerComposites.GetXDMCompManager`
   - `NXImageLayerComposites.Lock`
@@ -51,10 +49,16 @@ tags:
   - 캐시/스레드/inspect API를 필요한 만큼 쓴다.
   - ZoomFit 또는 Invalidate로 반영한다.
 
+
 ## Required Facts
 ```yaml
 workflow_family: image_view
-output_shape: view_shell_or_hosted_control
+output_shape: hosted_wpf_shell_by_default
+required_output_files:
+  - MainWindow.xaml
+  - MainWindow.xaml.cs
+  - App.xaml
+  - App.xaml.cs
 required_symbols:
   - NXImageLayerComposites.GetXDMCompManager
   - NXImageLayerComposites.Lock
@@ -68,21 +72,49 @@ required_symbols:
   - XDMCompManager.AddXDMComposite
   - XDMCompManager.RemoveXDMCompositeAll
   - XDMComposite.SetBand
+required_facts:
+  - symbol: NXImageLayerComposites.GetXDMCompManager
+    declaration: 'XDMCompManager^	GetXDMCompManager();'
+    source: 'Source/NXImage/NXImageLayerComposites.h:149'
+  - symbol: NXImageLayerComposites.Lock
+    declaration: 'bool	Lock();'
+    source: 'Source/NXImage/NXImageLayerComposites.h:153'
+  - symbol: NXImageLayerComposites.UnLock
+    declaration: 'bool	UnLock();'
+    source: 'Source/NXImage/NXImageLayerComposites.h:157'
+  - symbol: NXImageLayerComposites.EnableCache
+    declaration: 'void	EnableCache(bool bEnable);'
+    source: 'Source/NXImage/NXImageLayerComposites.h:164'
+  - symbol: NXImageLayerComposites.EnableThread
+    declaration: 'void	EnableThread(bool bEnable);'
+    source: 'Source/NXImage/NXImageLayerComposites.h:168'
+  - symbol: NXImageLayerComposites.SetEnableUpdateAtEnd
+    declaration: 'void	SetEnableUpdateAtEnd(bool bEnable);'
+    source: 'Source/NXImage/NXImageLayerComposites.h:176'
+  - symbol: NXImageLayerComposites.InvalidateCache
+    declaration: 'void	InvalidateCache();'
+    source: 'Source/NXImage/NXImageLayerComposites.h:185'
+  - symbol: NXImageLayerComposites.ReadPixelValues
+    declaration: 'bool ReadPixelValues(int sx, int sy, bool bFirstHit, double% val01, double% val02, double% val03);'
+    source: 'Source/NXImage/NXImageLayerComposites.h:196'
+  - symbol: NXImageLayerComposites.HitTest
+    declaration: 'bool HitTest(XVertex2d^ vWorld, XDMComposite^% pHitComp);'
+    source: 'Source/NXImage/NXImageLayerComposites.h:313'
+  - symbol: XDMCompManager.AddXDMComposite
+    declaration: 'bool		AddXDMComposite(XDMComposite^% Comp);'
+    source: 'Source/NXDLrs/NXDLrs.h:1867'
+  - symbol: XDMCompManager.RemoveXDMCompositeAll
+    declaration: 'void		RemoveXDMCompositeAll();'
+    source: 'Source/NXDLrs/NXDLrs.h:1880'
+  - symbol: XDMComposite.SetBand
+    declaration_candidates:
+      - declaration: 'void		SetBand(XDMBand^% band, int Idx);'
+        source: 'Source/NXDLrs/NXDLrs.h:1423'
+      - declaration: 'void		SetBand(XDMBand^% band, eCompBandIdx Idx);'
+        source: 'Source/NXDLrs/NXDLrs.h:1428'
 verification_rules:
   - use_this_workflow_as_primary_path
   - verify_method_vs_property_form
   - verify_ref_out_and_enum_literals_when_signature_matters
   - cross_check_matching_methods_page_before_emitting_code
 ```
-
-## Output Guidance
-- Explanation requests: summarize the host control, layer attachment order, and the exact display/update path.
-- Code/sample requests: include the host/view/layer wiring first, then the data-load/composite path.
-- If the user asks for WPF, include the XAML shell and code-behind instead of returning only a single `.cs` file.
-
-## Common Wrong Patterns
-- Do not invent helper methods or short overloads outside the verified symbol set above.
-- Do not convert verified methods into properties, or properties into methods, without source proof.
-- Do not guess `ref`/`out`, enum literals, or return types from naming alone.
-- Do not skip prerequisites implied by the ordered call chain in this workflow.
-- Do not return only an isolated view call when the actual workflow depends on layer attachment and display/update steps.

@@ -1,4 +1,4 @@
-﻿---
+---
 title: Image Processing Workflow
 aliases:
   - Image Processing Workflow
@@ -15,8 +15,6 @@ tags:
 
 # Overview
 - Goal: Apply shader or filter processing to NXImageLayer.
-- Role: normalized workflow file used by the 360-question answer index.
-- Existing curated workflow/example pages should be kept and referenced, not replaced blindly.
 - Core calls:
   - `NXImageLayer.EnableShaderAlgorithm`
   - `NXImageLayer.SetShaderAlgorithm`
@@ -45,10 +43,16 @@ tags:
   - 질문한 GenShaderCode 또는 Filter API를 적용한다.
   - 다시 그린다.
 
+
 ## Required Facts
 ```yaml
 workflow_family: image_view
-output_shape: view_shell_or_hosted_control
+output_shape: hosted_wpf_shell_by_default
+required_output_files:
+  - MainWindow.xaml
+  - MainWindow.xaml.cs
+  - App.xaml
+  - App.xaml.cs
 required_symbols:
   - NXImageLayer.EnableShaderAlgorithm
   - NXImageLayer.SetShaderAlgorithm
@@ -60,21 +64,40 @@ required_symbols:
   - NXImageLayer.GenShaderCodeMedian
   - NXImageLayer.SetFilterType
   - NXImageLayer.SetFilterSize
+required_facts:
+  - symbol: NXImageLayer.EnableShaderAlgorithm
+    declaration: 'bool	EnableShaderAlgorithm(bool bEnable);'
+    source: 'Source/NXImage/NXImageLayer.h:101'
+  - symbol: NXImageLayer.SetShaderAlgorithm
+    declaration: 'bool	SetShaderAlgorithm(String^ strCode);'
+    source: 'Source/NXImage/NXImageLayer.h:106'
+  - symbol: NXImageLayer.GenShaderCodeCBS
+    declaration: 'String^	GenShaderCodeCBS();'
+    source: 'Source/NXImage/NXImageLayer.h:119'
+  - symbol: NXImageLayer.GenShaderCodeHDR
+    declaration: 'String^	GenShaderCodeHDR();'
+    source: 'Source/NXImage/NXImageLayer.h:127'
+  - symbol: NXImageLayer.GenShaderCodeEdge
+    declaration: 'String^ GenShaderCodeEdge();'
+    source: 'Source/NXImage/NXImageLayer.h:152'
+  - symbol: NXImageLayer.GenShaderCodeBasso
+    declaration: 'String^ GenShaderCodeBasso();'
+    source: 'Source/NXImage/NXImageLayer.h:177'
+  - symbol: NXImageLayer.GenShaderCodeAverage
+    declaration: 'String^ GenShaderCodeAverage();'
+    source: 'Source/NXImage/NXImageLayer.h:202'
+  - symbol: NXImageLayer.GenShaderCodeMedian
+    declaration: 'String^ GenShaderCodeMedian();'
+    source: 'Source/NXImage/NXImageLayer.h:227'
+  - symbol: NXImageLayer.SetFilterType
+    declaration: 'void	SetFilterType(eImageProcessingFilter type);'
+    source: 'Source/NXImage/NXImageLayer.h:262'
+  - symbol: NXImageLayer.SetFilterSize
+    declaration: 'void	SetFilterSize(int nSize);'
+    source: 'Source/NXImage/NXImageLayer.h:235'
 verification_rules:
   - use_this_workflow_as_primary_path
   - verify_method_vs_property_form
   - verify_ref_out_and_enum_literals_when_signature_matters
   - cross_check_matching_methods_page_before_emitting_code
 ```
-
-## Output Guidance
-- Explanation requests: summarize the host control, layer attachment order, and the exact display/update path.
-- Code/sample requests: include the host/view/layer wiring first, then the data-load/composite path.
-- If the user asks for WPF, include the XAML shell and code-behind instead of returning only a single `.cs` file.
-
-## Common Wrong Patterns
-- Do not invent helper methods or short overloads outside the verified symbol set above.
-- Do not convert verified methods into properties, or properties into methods, without source proof.
-- Do not guess `ref`/`out`, enum literals, or return types from naming alone.
-- Do not skip prerequisites implied by the ordered call chain in this workflow.
-- Do not return only an isolated view call when the actual workflow depends on layer attachment and display/update steps.

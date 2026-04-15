@@ -1,4 +1,4 @@
-﻿---
+---
 title: ImageView XDM Display Workflow
 aliases:
   - ImageView XDM load display
@@ -194,17 +194,73 @@ public sealed class MainForm : Form
 - Do not pass `NXImageLayerComposites` directly to `AddImageLayer(ref ...)` without the verified base-layer pattern. Use `NXImageLayer layer = compositeLayer; imageView.AddImageLayer(ref layer);`.
 - Do not leave a fake path like `C:\\path\\to\\your\\file.xdm` in an auto-executed code path. Either parameterize the path, open a file dialog, or leave the example path in a commented usage snippet instead of calling it automatically.
 - If you define WinForms handlers such as `Form_Load` or `FormClosing`, wire them in `InitializeComponent()` or remove the dead handlers. Unwired handlers are treated as an incomplete interaction path.
-## Structured Page Facts
-```yaml
-page_family: curated_workflow
-role: curated_reference
-verification_rules:
-  - use_this_page_when_the_question_matches_its_scenario_scope
-  - cross_check_methods_pages_before_emitting_exact_call_shapes
-  - keep_output_shape_rules_from_this_page_when_present
-```
 
-## Runtime Usage
-- Use this page as a richer scenario-level reference than the normalized `wf-*.md` pages when the question clearly matches this scenario.
-- If this page defines output-shape constraints such as WPF/XAML delivery, keep those constraints in the final answer.
-- Do not use sample-driven code patterns here to override conflicting exact signatures from methods pages.
+## Required Facts
+```yaml
+workflow_family: image_xdm_display
+output_shape: hosted_wpf_shell_by_default
+required_output_files:
+  - MainWindow.xaml
+  - MainWindow.xaml.cs
+  - App.xaml
+  - App.xaml.cs
+required_symbols:
+  - XRasterIO.Initialize
+  - XRasterIO.LoadFile
+  - XRSLoadFile.GetBandAt
+  - XDMComposite.SetBand
+  - NXImageLayerComposites.GetXDMCompManager
+  - XDMCompManager.AddXDMComposite
+  - NXImageView.AddImageLayer
+  - NXImageLayerComposites.ZoomFit
+  - NXImageLayerComposites.Invalidate
+  - NXImageLayerComposites.Lock
+  - NXImageLayerComposites.UnLock
+required_facts:
+  - symbol: XRasterIO.Initialize
+    declaration: 'bool		Initialize([OutAttribute] String^% strError);'
+    source: 'Source/NXDLio/NXDLio.h:198'
+  - symbol: XRasterIO.LoadFile
+    declaration_candidates:
+      - declaration: 'NRS::XRSLoadFile^	LoadFile(String^ strFileKey, String^ strFileName, [OutAttribute] String^% strError, bool bCalcStatistics , eIOCreateXLDMode CreateXLD);'
+        source: 'Source/NXDLio/NXDLio.h:222'
+      - declaration: 'NRS::XRSLoadFile^	LoadFile(String^ strFileName, [OutAttribute] String^% strError, bool bCalcStatistics, eIOCreateXLDMode CreateXLD);'
+        source: 'Source/NXDLio/NXDLio.h:230'
+      - declaration: 'NRS::XRSLoadFile^	LoadFile(String^ strFileKey, String^ strFileName, [OutAttribute] String^% strError, bool bCalcStatistics , eIOCreateXLDMode CreateXLD, bool bMetaLoad);'
+        source: 'Source/NXDLio/NXDLio.h:240'
+  - symbol: XRSLoadFile.GetBandAt
+    declaration: 'XDMBand^	GetBandAt(int nIndex);'
+    source: 'Source/NXDLrs/XRSFile.h:986'
+  - symbol: XDMComposite.SetBand
+    declaration_candidates:
+      - declaration: 'void		SetBand(XDMBand^% band, int Idx);'
+        source: 'Source/NXDLrs/NXDLrs.h:1423'
+      - declaration: 'void		SetBand(XDMBand^% band, eCompBandIdx Idx);'
+        source: 'Source/NXDLrs/NXDLrs.h:1428'
+  - symbol: NXImageLayerComposites.GetXDMCompManager
+    declaration: 'XDMCompManager^	GetXDMCompManager();'
+    source: 'Source/NXImage/NXImageLayerComposites.h:149'
+  - symbol: XDMCompManager.AddXDMComposite
+    declaration: 'bool		AddXDMComposite(XDMComposite^% Comp);'
+    source: 'Source/NXDLrs/NXDLrs.h:1867'
+  - symbol: NXImageView.AddImageLayer
+    declaration: 'bool		AddImageLayer(NXImageLayer^% layer);'
+    source: 'Source/NXImage/NXImageView.h:836'
+  - symbol: NXImageLayerComposites.ZoomFit
+    declaration: 'bool	ZoomFit();'
+    source: 'Source/NXImage/NXImageLayerComposites.h:142'
+  - symbol: NXImageLayerComposites.Invalidate
+    declaration: 'bool	Invalidate();'
+    source: 'Source/NXImage/NXImageLayerComposites.h:146'
+  - symbol: NXImageLayerComposites.Lock
+    declaration: 'bool	Lock();'
+    source: 'Source/NXImage/NXImageLayerComposites.h:153'
+  - symbol: NXImageLayerComposites.UnLock
+    declaration: 'bool	UnLock();'
+    source: 'Source/NXImage/NXImageLayerComposites.h:157'
+verification_rules:
+  - use_this_workflow_as_primary_path
+  - verify_method_vs_property_form
+  - verify_ref_out_and_enum_literals_when_signature_matters
+  - cross_check_matching_methods_page_before_emitting_code
+```

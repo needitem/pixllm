@@ -1,4 +1,4 @@
-﻿# LLM Wiki
+# LLM Wiki
 
 This engine wiki is the persistent compiled knowledge layer for PIXLLM.
 
@@ -14,11 +14,13 @@ verification_rules:
 
 ## Layers
 - `methods/` holds generated API reference pages with declaration and implementation anchors.
-- `workflows/` holds answer-routing, scenario, and sample workflows.
-- `pages/` holds human-oriented home and future curated synthesis pages.
+- `workflows/wf-*.md` hold canonical atomic workflows with source-backed `required_facts` blocks for signature-sensitive answers.
+- `workflows/imageview-xdm-display-workflow.md` and `workflows/nximageview-wpf-hosting.md` remain as high-signal scenario workflows.
+- `pages/` holds human-oriented coordination pages.
 - `01-method-wiki-index.md` is the generated method catalog.
 
 ## Operating Model
 - Prefer workflow pages first when answering usage and implementation questions.
+- Use workflow `required_facts` to constrain overloads, enum literals, and `ref/out` directions.
 - Use methods pages to verify exact symbol existence, call shape, and source anchors.
-- File useful analyses back into curated pages instead of leaving them only in chat history.
+- Keep duplicated sample/index pages out of the canonical runtime wiki unless they add unique answer constraints.

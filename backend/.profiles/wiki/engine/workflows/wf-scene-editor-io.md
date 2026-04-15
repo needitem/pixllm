@@ -1,4 +1,4 @@
-﻿---
+---
 title: Scene Editor IO Workflow
 aliases:
   - Scene Editor IO Workflow
@@ -16,8 +16,6 @@ tags:
 
 # Overview
 - Goal: Create, open, merge, save, and inspect scenes through NXPlanetLayerSceneEditor.
-- Role: normalized workflow file used by the 360-question answer index.
-- Existing curated workflow/example pages should be kept and referenced, not replaced blindly.
 - Core calls:
   - `NXPlanetLayerSceneEditor.New`
   - `NXPlanetLayerSceneEditor.Clear`
@@ -41,10 +39,11 @@ tags:
   - New/Open/Add/Clear로 내용을 제어한다.
   - GetScene과 CreateNewOBJ를 편집 흐름에 사용한다.
 
+
 ## Required Facts
 ```yaml
 workflow_family: scene_or_vector
-output_shape: focused_workflow_with_host_context
+output_shape: workflow_bound_to_host_context
 required_symbols:
   - NXPlanetLayerSceneEditor.New
   - NXPlanetLayerSceneEditor.Clear
@@ -53,20 +52,37 @@ required_symbols:
   - NXPlanetLayerSceneEditor.Save
   - NXPlanetLayerSceneEditor.GetScene
   - NXPlanetLayerSceneEditor.CreateNewOBJ
+required_facts:
+  - symbol: NXPlanetLayerSceneEditor.New
+    declaration: 'bool New	();'
+    source: 'Source/NXDLscene/NXPlanetLayerSceneEditor.h:74'
+  - symbol: NXPlanetLayerSceneEditor.Clear
+    declaration: 'bool Clear	();'
+    source: 'Source/NXDLscene/NXPlanetLayerSceneEditor.h:78'
+  - symbol: NXPlanetLayerSceneEditor.Open
+    declaration_candidates:
+      - declaration: 'bool Open	(String^ strFile);'
+        source: 'Source/NXDLscene/NXPlanetLayerSceneEditor.h:83'
+      - declaration: 'bool Open	(XScene^ pScene);'
+        source: 'Source/NXDLscene/NXPlanetLayerSceneEditor.h:88'
+  - symbol: NXPlanetLayerSceneEditor.Add
+    declaration_candidates:
+      - declaration: 'bool Add	(String^ strFile, bool bMerge);'
+        source: 'Source/NXDLscene/NXPlanetLayerSceneEditor.h:94'
+      - declaration: 'bool Add	(XScene^ pScene, bool bMerge);'
+        source: 'Source/NXDLscene/NXPlanetLayerSceneEditor.h:100'
+  - symbol: NXPlanetLayerSceneEditor.Save
+    declaration: 'bool Save	(String^ strFile);'
+    source: 'Source/NXDLscene/NXPlanetLayerSceneEditor.h:105'
+  - symbol: NXPlanetLayerSceneEditor.GetScene
+    declaration: 'XScene^		GetScene();'
+    source: 'Source/NXDLscene/NXPlanetLayerSceneEditor.h:109'
+  - symbol: NXPlanetLayerSceneEditor.CreateNewOBJ
+    declaration: 'XscObj^		CreateNewOBJ(String^ strType);'
+    source: 'Source/NXDLscene/NXPlanetLayerSceneEditor.h:139'
 verification_rules:
   - use_this_workflow_as_primary_path
   - verify_method_vs_property_form
   - verify_ref_out_and_enum_literals_when_signature_matters
   - cross_check_matching_methods_page_before_emitting_code
 ```
-
-## Output Guidance
-- Explanation requests: summarize object creation, edit/display ownership, and save/load or hit-test order.
-- Code/sample requests: include the controlling layer/view context before the object-edit sequence.
-- If the workflow is UI-driven, do not return isolated API calls without the layer or view context that owns them.
-
-## Common Wrong Patterns
-- Do not invent helper methods or short overloads outside the verified symbol set above.
-- Do not convert verified methods into properties, or properties into methods, without source proof.
-- Do not guess `ref`/`out`, enum literals, or return types from naming alone.
-- Do not skip prerequisites implied by the ordered call chain in this workflow.

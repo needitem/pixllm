@@ -1,4 +1,4 @@
-﻿---
+---
 title: Coordinate Code Workflow
 aliases:
   - Coordinate Code Workflow
@@ -16,8 +16,6 @@ tags:
 
 # Overview
 - Goal: Convert between WGS84, UTM, MGRS, and GEOREF.
-- Role: normalized workflow file used by the 360-question answer index.
-- Existing curated workflow/example pages should be kept and referenced, not replaced blindly.
 - Core calls:
   - `Xcc.WGP2UTM`
   - `Xcc.UTM2WGP`
@@ -42,6 +40,7 @@ tags:
   - 대상 코드 체계를 고른다.
   - 필요 시 역변환 함수를 사용한다.
 
+
 ## Required Facts
 ```yaml
 workflow_family: coordinate
@@ -54,20 +53,39 @@ required_symbols:
   - Xcc.MGRS2WGP
   - Xcc.WGP2GEOREF
   - Xcc.GEOREF2WGP
+required_facts:
+  - symbol: Xcc.WGP2UTM
+    declaration_candidates:
+      - declaration: 'static bool WGP2UTM(NXDL::XAngle^ lon, NXDL::XAngle^ lat, NXDL::XVertex2d^% pos, int% Zone);'
+        source: 'Source/NXDLcc/NXDLcc.h:344'
+      - declaration: 'static bool WGP2UTM(NXDL::XAngle^ lon, NXDL::XAngle^ lat, NXDL::XVertex2d^% pos, int% Zone, String^% latitudeBand);'
+        source: 'Source/NXDLcc/NXDLcc.h:370'
+      - declaration: 'static bool WGP2UTM(NXDL::XAngle^ lon, NXDL::XAngle^ lat, NXDL::XVertex2d^% pos, int% Zone, bool ForceApplyZone);'
+        source: 'Source/NXDLcc/NXDLcc.h:397'
+  - symbol: Xcc.UTM2WGP
+    declaration: 'static bool UTM2WGP(NXDL::XVertex2d^ pos, int Zone, NXDL::XAngle^% lon, NXDL::XAngle^% lat);'
+    source: 'Source/NXDLcc/NXDLcc.h:464'
+  - symbol: Xcc.WGP2MGRS
+    declaration_candidates:
+      - declaration: 'static bool WGP2MGRS(NXDL::XAngle^ lon, NXDL::XAngle^ lat, String^% strMGRS);'
+        source: 'Source/NXDLcc/NXDLcc.h:419'
+      - declaration: 'static bool WGP2MGRS(NXDL::XAngle^ lon, NXDL::XAngle^ lat, String^% strMGRS, int precision);'
+        source: 'Source/NXDLcc/NXDLcc.h:442'
+  - symbol: Xcc.MGRS2UTM
+    declaration: 'static bool MGRS2UTM(String^ strMGRS, NXDL::XVertex2d^% pos, int% Zone);'
+    source: 'Source/NXDLcc/NXDLcc.h:522'
+  - symbol: Xcc.MGRS2WGP
+    declaration: 'static bool MGRS2WGP(String^ strMGRS, NXDL::XAngle^% lon, NXDL::XAngle^% lat);'
+    source: 'Source/NXDLcc/NXDLcc.h:541'
+  - symbol: Xcc.WGP2GEOREF
+    declaration: 'static bool WGP2GEOREF(NXDL::XAngle^ lon, NXDL::XAngle^ lat, int% numDigit, String^% strGEOREF);'
+    source: 'Source/NXDLcc/NXDLcc.h:587'
+  - symbol: Xcc.GEOREF2WGP
+    declaration: 'static bool GEOREF2WGP(String^ strGEOREF, NXDL::XAngle^% lon, NXDL::XAngle^% lat);'
+    source: 'Source/NXDLcc/NXDLcc.h:605'
 verification_rules:
   - use_this_workflow_as_primary_path
   - verify_method_vs_property_form
   - verify_ref_out_and_enum_literals_when_signature_matters
   - cross_check_matching_methods_page_before_emitting_code
 ```
-
-## Output Guidance
-- Explanation requests: summarize the ordered call chain, prerequisites, and verified source anchors.
-- Code/sample requests: prefer a focused helper, method, or minimal snippet unless the user explicitly asks for a full app shell.
-- Keep the sample scoped to this workflow and do not mix neighboring subsystems unless the user explicitly asks for them.
-
-## Common Wrong Patterns
-- Do not invent helper methods or short overloads outside the verified symbol set above.
-- Do not convert verified methods into properties, or properties into methods, without source proof.
-- Do not guess `ref`/`out`, enum literals, or return types from naming alone.
-- Do not skip prerequisites implied by the ordered call chain in this workflow.

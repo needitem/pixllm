@@ -1,4 +1,4 @@
-﻿---
+---
 title: Geodetic Utility Workflow
 aliases:
   - Geodetic Utility Workflow
@@ -18,8 +18,6 @@ tags:
 
 # Overview
 - Goal: Use geodetic helper functions for distance, angle, area, and geo/ecr conversion.
-- Role: normalized workflow file used by the 360-question answer index.
-- Existing curated workflow/example pages should be kept and referenced, not replaced blindly.
 - Core calls:
   - `Xcc.CalcGeodeticDistance`
   - `Xcc.CalcGeodeticAngle`
@@ -39,6 +37,7 @@ tags:
   - XAngle/XGeoPoint 기준으로 입력을 유지한다.
   - 필요한 지오데틱 유틸을 호출한다.
 
+
 ## Required Facts
 ```yaml
 workflow_family: coordinate
@@ -50,20 +49,28 @@ required_symbols:
   - Xcc.ConvPixelSize
   - Xfn.GeoToEcr
   - Xfn.EcrToGeo
+required_facts:
+  - symbol: Xcc.CalcGeodeticDistance
+    declaration: 'static double CalcGeodeticDistance(NXDL::XAngle^ lon1, NXDL::XAngle^ lat1, NXDL::XAngle^ lon2, NXDL::XAngle^ lat2);'
+    source: 'Source/NXDLcc/NXDLcc.h:551'
+  - symbol: Xcc.CalcGeodeticAngle
+    declaration: 'static double CalcGeodeticAngle(NXDL::XAngle^ lonCenter, NXDL::XAngle^ latCenter, NXDL::XAngle^ lon1, NXDL::XAngle^ lat1, NXDL::XAngle^ lon2, NXDL::XAngle^ lat2);'
+    source: 'Source/NXDLcc/NXDLcc.h:563'
+  - symbol: Xcc.CalcGeodeticArea
+    declaration: 'static double CalcGeodeticArea(cli::array<XGeoPoint^>^ vertArray);'
+    source: 'Source/NXDLcc/NXDLcc.h:640'
+  - symbol: Xcc.ConvPixelSize
+    declaration: 'static void ConvPixelSize(XSpatialReference^ SrIn, XSpatialReference^ SrOut, double latReference, double lonReference, double% pixelSizeX, double% pixelSizeY);'
+    source: 'Source/NXDLcc/NXDLcc.h:635'
+  - symbol: Xfn.GeoToEcr
+    declaration: 'static void		GeoToEcr(XGeoPoint^ geo, XVertex3d^% ecr);'
+    source: 'Source/NXDL/NXDL.h:3658'
+  - symbol: Xfn.EcrToGeo
+    declaration: 'static void		EcrToGeo(XVertex3d^ ecr, XGeoPoint^% geo);'
+    source: 'Source/NXDL/NXDL.h:3675'
 verification_rules:
   - use_this_workflow_as_primary_path
   - verify_method_vs_property_form
   - verify_ref_out_and_enum_literals_when_signature_matters
   - cross_check_matching_methods_page_before_emitting_code
 ```
-
-## Output Guidance
-- Explanation requests: summarize the ordered call chain, prerequisites, and verified source anchors.
-- Code/sample requests: prefer a focused helper, method, or minimal snippet unless the user explicitly asks for a full app shell.
-- Keep the sample scoped to this workflow and do not mix neighboring subsystems unless the user explicitly asks for them.
-
-## Common Wrong Patterns
-- Do not invent helper methods or short overloads outside the verified symbol set above.
-- Do not convert verified methods into properties, or properties into methods, without source proof.
-- Do not guess `ref`/`out`, enum literals, or return types from naming alone.
-- Do not skip prerequisites implied by the ordered call chain in this workflow.
