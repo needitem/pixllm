@@ -2,6 +2,16 @@
 
 This engine wiki is the persistent compiled knowledge layer for PIXLLM.
 
+## Coordination Facts
+```yaml
+page_family: coordination_readme
+role: wiki_overview
+verification_rules:
+  - start_here_for_wiki_scope_and_operating_model
+  - prefer_workflows_for_usage_questions
+  - prefer_methods_for_exact_call_shapes
+```
+
 ## Layers
 - `methods/` holds generated API reference pages with declaration and implementation anchors.
 - `workflows/` holds answer-routing, scenario, and sample workflows.

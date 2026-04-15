@@ -1,5 +1,14 @@
 ﻿# Engine Wiki Schema
 
+## Coordination Facts
+```yaml
+page_family: coordination_schema
+role: canonical_contract
+verification_rules:
+  - use_this_page_for_family_and_role_resolution
+  - keep_runtime_and_wiki_family_names_in_sync
+```
+
 ## Families
 - `README.md`, `SCHEMA.md`, `index.md`, `log.md`, `pages/home.md`: coordination spine.
 - `01-method-wiki-index.md`: generated method catalog.
