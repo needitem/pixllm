@@ -31,26 +31,6 @@ def clamp_int(value: int, low: int, high: int) -> int:
 _USAGE_CODE_RESPONSE_TYPES = {"api_lookup"}
 
 
-def code_match_key(item: Dict[str, str]) -> str:
-    return f"{str(item.get('path') or '').strip()}::{str(item.get('line_range') or '').strip()}"
-
-
-def merge_code_matches(match_groups: Sequence[Sequence[Dict[str, str]]], max_items: int) -> List[Dict[str, str]]:
-    out: List[Dict[str, str]] = []
-    seen = set()
-    capped = clamp_int(max_items, 1, 200)
-    for group in match_groups:
-        for row in group or []:
-            key = code_match_key(row)
-            if key in {"::", ""} or key in seen:
-                continue
-            seen.add(key)
-            out.append(row)
-            if len(out) >= capped:
-                return out
-    return out
-
-
 def _extract_query_terms(query_text: str, limit: int = 8) -> List[str]:
     return extract_query_terms(query_text, limit=limit)
 
@@ -63,27 +43,9 @@ def normalize_usage_path(path: str) -> str:
     return str(path or "").replace("\\", "/").strip()
 
 
-def strip_usage_companion_suffixes(stem: str) -> str:
-    normalized = str(stem or "").strip()
-    lowered = normalized.lower()
-    for suffix in (".generated", ".gen", ".g.i", ".g"):
-        if lowered.endswith(suffix):
-            normalized = normalized[: -len(suffix)]
-            lowered = normalized.lower()
-    return normalized
-
-
-def is_usage_example_path(path: str) -> bool:
-    return False
-
-
 def is_usage_markup_backing_path(path: str) -> bool:
     normalized = normalize_usage_path(path).lower()
     return any(normalized.endswith(suffix) for suffix in _USAGE_MARKUP_BACKING_SUFFIXES)
-
-
-def is_usage_entrypoint_file(path: str) -> bool:
-    return False
 
 
 def _clean_usage_line(text: str) -> str:

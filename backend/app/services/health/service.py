@@ -1,20 +1,8 @@
-import asyncio
 import urllib.request
 import shutil
 import inspect
-from types import SimpleNamespace
 from pathlib import Path
 from datetime import datetime, timezone
-
-import redis
-try:
-    from minio import Minio
-except Exception:  # pragma: no cover - optional in lightweight tests
-    Minio = object
-try:
-    from qdrant_client import QdrantClient
-except Exception:  # pragma: no cover - optional in lightweight tests
-    QdrantClient = object
 
 from ... import config
 from ...utils.health import aggregate_status
@@ -139,24 +127,3 @@ async def build_readiness_response(**kwargs) -> dict:
         **payload,
         "ready": str(payload.get("status") or "") == "ok",
     }
-
-
-def get_health():
-    search_svc = SimpleNamespace(qdrant=QdrantClient(url=config.QDRANT_URL))
-    try:
-        search_svc.qdrant.get_collections = search_svc.qdrant.get_collections
-    except Exception:
-        pass
-
-    return asyncio.run(build_health_response(
-        redis=redis.Redis.from_url(config.REDIS_URL),
-        minio=Minio(
-            config.MINIO_ENDPOINT,
-            access_key=config.MINIO_ACCESS_KEY,
-            secret_key=config.MINIO_SECRET_KEY,
-            secure=False,
-        ),
-        search_svc=search_svc,
-        embed_model=SimpleNamespace(model_name_or_path=config.EMBEDDING_MODEL),
-        code_tools=None,
-    ))

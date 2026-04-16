@@ -1,7 +1,7 @@
 const {
   processUserInput,
 } = require('../../utils/processUserInput/processUserInput.cjs');
-const { createToolResultBlock, toStringValue } = require('../../query.cjs');
+const { createToolResultBlock, toStringValue } = require('../../query/blocks.cjs');
 const { summarizeObservation } = require('../../queryTrace.cjs');
 
 function summarizeToolRequests(toolUses, describeTool = null) {

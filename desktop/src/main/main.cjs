@@ -14,15 +14,12 @@ const { startLocalAgentStream, cancelLocalAgentStream, answerLocalAgentQuestion 
 const { loadBuildInfo } = require('./build_info.cjs');
 const { loadSettings, saveSettings } = require('./settings.cjs');
 const {
-  grepWorkspace,
   listWorkspaceFiles,
   readWorkspaceFile,
-  runBuild,
   selectWorkspace,
   svnDiff,
   svnInfo,
-  svnStatus,
-  writeWorkspaceFile
+  svnStatus
 } = require('./workspace.cjs');
 const {
   listSessions,
@@ -188,9 +185,6 @@ app.whenReady().then(() => {
   ipcMain.handle('workspace:svn-diff', async (_, workspacePath) => svnDiff(workspacePath));
   ipcMain.handle('workspace:list-files', async (_, workspacePath, options) => listWorkspaceFiles(workspacePath, options));
   ipcMain.handle('workspace:read-file', async (_, workspacePath, relativePath, options) => readWorkspaceFile(workspacePath, relativePath, options));
-  ipcMain.handle('workspace:write-file', async (_, workspacePath, relativePath, content) => writeWorkspaceFile(workspacePath, relativePath, content));
-  ipcMain.handle('workspace:grep', async (_, workspacePath, query, limit) => grepWorkspace(workspacePath, query, limit));
-  ipcMain.handle('workspace:run-build', async (_, workspacePath, tool, args) => runBuild(workspacePath, tool, args));
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

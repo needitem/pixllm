@@ -359,7 +359,6 @@ module.exports = {
   readBackendCode,
   readBackendWikiPage,
   rebuildBackendWikiIndex,
-  resolveWikiId,
   searchBackendWiki,
   writebackBackendWikiPage,
   writeBackendWikiPage,

@@ -68,12 +68,6 @@ def parse_allowed_completion_tokens(error_message: str) -> Optional[int]:
     return None
 
 
-def build_chat_template_extra_body(enable_thinking: Optional[bool]) -> Dict[str, Any]:
-    if enable_thinking is None:
-        return {}
-    return {"chat_template_kwargs": {"enable_thinking": bool(enable_thinking)}}
-
-
 def _coerce_stream_text(value: Any) -> str:
     if isinstance(value, str):
         return value

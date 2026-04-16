@@ -4,20 +4,23 @@ const { createLocalToolCollection } = require('./tools.cjs');
 const { streamModelCompletion, countPromptTokens } = require('./services/model/streamModelCompletion.cjs');
 const { ToolRuntime } = require('./services/tools/ToolRuntime.cjs');
 const { StreamingToolExecutor } = require('./services/tools/StreamingToolExecutor.cjs');
-const { loadProjectContext, buildProjectContextPrompt } = require('./utils/projectContext.cjs');
+const { loadProjectContext } = require('./utils/projectContext/loadProjectContext.cjs');
+const { buildProjectContextPrompt } = require('./utils/projectContext/buildProjectContextPrompt.cjs');
 const {
   createTextBlock,
   createToolUseBlock,
   normalizeMessageBlocks,
-  parseAssistantResponse,
-  extractStreamingToolCalls,
   serializeBlocks,
-  flattenMessagesForModel,
   extractTextFromBlocks,
   toolUseBlocks,
-  buildSystemPrompt,
   toStringValue,
-} = require('./query.cjs');
+} = require('./query/blocks.cjs');
+const {
+  parseAssistantResponse,
+  extractStreamingToolCalls,
+  flattenMessagesForModel,
+  buildSystemPrompt,
+} = require('./services/model/QwenAdapter.cjs');
 const { verifyCreateRequestSatisfaction } = require('./query/createRequestCheck.cjs');
 const { evaluateFinalAnswerPolicy } = require('./query/finalizationPolicy.cjs');
 const { findUngroundedSourceMentions } = require('./query/sourceGuard.cjs');

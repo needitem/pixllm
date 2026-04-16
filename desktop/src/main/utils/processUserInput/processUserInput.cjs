@@ -519,7 +519,5 @@ function processUserInput({ prompt = '', workspacePath = '', selectedFilePath = 
 
 module.exports = {
   buildRequestContext,
-  createRunRequestContext,
   processUserInput,
-  summarizeRequestContext,
 };

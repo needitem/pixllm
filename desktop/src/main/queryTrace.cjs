@@ -1,14 +1,3 @@
-const COMMON_CODE_TOKENS = new Set([
-  'class', 'public', 'private', 'protected', 'internal', 'static', 'async', 'void', 'string',
-  'int', 'bool', 'return', 'using', 'namespace', 'true', 'false', 'null', 'this', 'base',
-  'var', 'new', 'get', 'set', 'line', 'path', 'items', 'content', 'query', 'limit',
-  'list', 'ilist', 'ienumerable', 'icollection', 'dictionary', 'idictionary', 'task', 'tuple',
-  'object', 'double', 'float', 'long', 'short', 'byte', 'char', 'decimal',
-]);
-const METHOD_NOISE_NAMES = new Set(['dispose', 'tostring', 'equals', 'gethashcode', 'invoke']);
-const CALL_KEYWORD_TOKENS = new Set(['if', 'for', 'while', 'switch', 'catch', 'foreach', 'return', 'new', 'typeof', 'nameof', 'using', 'lock']);
-const MAX_SNIPPET_CHARS = 280;
-
 function normalizePath(value) {
   return String(value || '').trim().replace(/\\/g, '/');
 }
@@ -457,31 +446,6 @@ function summarizeObservation(toolName, observation, maxChars = 16000) {
     ...payload,
     message: payload.message || '',
   };
-}
-
-function extractIdentifiers(text) {
-  const matches = String(text || '').match(/\b[A-Za-z_][A-Za-z0-9_]{3,}\b/g) || [];
-  const weighted = [];
-  for (const raw of matches) {
-    const token = String(raw || '').trim();
-    const lowered = token.toLowerCase();
-    if (!token || COMMON_CODE_TOKENS.has(lowered) || token.startsWith('_')) continue;
-    let score = token.length;
-    if (/[A-Z]/.test(token)) score += 6;
-    if (/[A-Z][a-z0-9]+[A-Z]/.test(token)) score += 8;
-    weighted.push([score, token]);
-  }
-  weighted.sort((a, b) => b[0] - a[0] || String(a[1]).localeCompare(String(b[1])));
-  const seen = new Set();
-  const out = [];
-  for (const [, token] of weighted) {
-    const lowered = token.toLowerCase();
-    if (seen.has(lowered)) continue;
-    seen.add(lowered);
-    out.push(token);
-    if (out.length >= 12) break;
-  }
-  return out;
 }
 
 module.exports = {

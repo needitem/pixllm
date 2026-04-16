@@ -66,17 +66,6 @@ declare global {
         relativePath: string,
         maxChars?: number
       ) => Promise<{ ok: boolean; path: string; content: string; truncated?: boolean; error?: string }>;
-      writeWorkspaceFile: (
-        workspacePath: string,
-        relativePath: string,
-        content: string
-      ) => Promise<{ ok: boolean; path: string; previousLength?: number; newLength?: number; error?: string }>;
-      grepWorkspace: (
-        workspacePath: string,
-        query: string,
-        limit?: number
-      ) => Promise<{ ok: boolean; query: string; items: Array<{ path: string; line: number; text: string }>; error?: string }>;
-      runBuild: (workspacePath: string, tool: string, args: string[]) => Promise<WorkspaceCommandResult>;
     };
   }
 

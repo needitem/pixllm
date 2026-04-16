@@ -181,5 +181,4 @@ async function analyzePromptSemantics({
 
 module.exports = {
   analyzePromptSemantics,
-  sanitizeRequestContract,
 };

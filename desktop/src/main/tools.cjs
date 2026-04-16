@@ -39,7 +39,7 @@ const {
 } = require('./tools/shared/schema.cjs');
 const { readTodos, writeTodos } = require('./utils/todoStore.cjs');
 const { loadSettings, saveSettings } = require('./settings.cjs');
-const { searchProjectContext } = require('./utils/projectContext.cjs');
+const { searchProjectContext } = require('./utils/projectContext/searchProjectContext.cjs');
 
 const DEFAULT_LIMITS = Object.freeze({
   maxListLimit: 5000,
