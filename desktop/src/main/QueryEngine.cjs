@@ -34,6 +34,7 @@ const {
 } = require('./queryTrace.cjs');
 const { safeResolve } = require('./workspace.cjs');
 const { collectGroundedPaths } = require('./query/groundedPaths.cjs');
+const { summarizeWikiEvidence } = require('./query/referenceEvidence.cjs');
 
 const MAX_TURNS = 14;
 const MAX_CONSECUTIVE_PARSE_ERRORS = 2;
@@ -53,8 +54,14 @@ const MAX_FILE_CACHE_ENTRIES = 24;
 const MAX_PROMPT_TOKEN_CACHE_ENTRIES = 32;
 const MAX_TRANSITIONS = 64;
 const MAX_UNGROUNDED_ANSWER_RETRIES = 2;
+const MAX_FINAL_ANSWER_POLICY_RETRIES = 2;
 const MAX_CREATE_VERIFICATION_RETRIES = 2;
 const MAX_CREATE_VERIFICATION_EXTRA_TURNS = 6;
+const FINAL_ANSWER_POLICY_TOOL_LOCK_NAMES = Object.freeze([
+  'wiki_search',
+  'wiki_read',
+  'wiki_evidence_search',
+]);
 const NO_WORKSPACE_TOOL_NAMES = Object.freeze([
   'todo_read',
   'todo_write',
@@ -73,15 +80,63 @@ const NO_WORKSPACE_TOOL_NAMES = Object.freeze([
 
 function deriveLoopControlState({
   availableToolNames = [],
+  requestContext = {},
   state = {},
+  turn = 1,
 } = {}) {
   const available = new Set((Array.isArray(availableToolNames) ? availableToolNames : []).map((item) => toStringValue(item)).filter(Boolean));
   const verificationLocked = state?.phaseLock?.kind === 'draft_verification';
+  const finalAnswerPolicyLock = state?.finalAnswerPolicyLock && typeof state.finalAnswerPolicyLock === 'object'
+    ? state.finalAnswerPolicyLock
+    : null;
+  const referenceEvidence = summarizeWikiEvidence(Array.isArray(state?.trace) ? state.trace : []);
+  const requestIntent = requestContext?.intent && typeof requestContext.intent === 'object'
+    ? requestContext.intent
+    : {};
+  const requiresWorkspaceArtifact = Boolean(
+    requestIntent.wantsChanges
+    || requestIntent.wantsExecution
+    || requestIntent.createLikely
+    || requestContext?.artifactPlan?.requiresWorkspaceArtifact,
+  );
+  const workflowAnswerLocked = Boolean(
+    !verificationLocked
+    && turn >= 4
+    && !requiresWorkspaceArtifact
+    && requestContext?.workflowPlan?.preferWikiFirst
+    && referenceEvidence.hasWorkflowEvidence
+    && referenceEvidence.hasVerifiedCodeEvidence
+    && (
+      referenceEvidence.hasMethodEvidence
+      || Number(referenceEvidence.apiFactCount || 0) > 0
+      || Number(referenceEvidence.workflowRequiredFactCount || 0) > 0
+    ),
+  );
+  const finalAnswerPolicyLocked = Boolean(
+    !verificationLocked
+    && !requiresWorkspaceArtifact
+    && finalAnswerPolicyLock?.kind === 'answer_only',
+  );
+  const filteredToolNames = finalAnswerPolicyLocked
+    ? Array.from(available).filter((item) => !FINAL_ANSWER_POLICY_TOOL_LOCK_NAMES.includes(toStringValue(item)))
+    : Array.from(available);
 
   return {
-    phase: verificationLocked ? 'draft_verification' : '',
-    activeToolNames: Array.from(available),
+    phase: verificationLocked
+      ? 'draft_verification'
+      : finalAnswerPolicyLocked
+        ? 'final_answer_policy'
+      : workflowAnswerLocked
+        ? 'workflow_answer'
+        : '',
+    activeToolNames: workflowAnswerLocked
+      ? []
+      : finalAnswerPolicyLocked
+        ? []
+        : filteredToolNames,
     verificationLocked,
+    finalAnswerPolicyLocked,
+    workflowAnswerLocked,
   };
 }
 
@@ -214,7 +269,39 @@ function buildFallbackAnswer({ terminalReason = '', failedStep = null } = {}) {
   if (reason === 'parse_error_budget') {
     return 'The desktop agent stopped because the assistant repeatedly returned malformed output.';
   }
+  if (reason === 'final_answer_policy') {
+    return 'The desktop agent stopped because it could not satisfy the final answer grounding policy from the collected evidence.';
+  }
   return 'The desktop agent reached its turn budget before producing a final answer.';
+}
+
+function buildFinalAnswerPolicyRetrySignature(finalAnswerCheck = {}) {
+  const details = finalAnswerCheck?.details && typeof finalAnswerCheck.details === 'object'
+    ? finalAnswerCheck.details
+    : {};
+  const referenceEvidence = details.referenceEvidence && typeof details.referenceEvidence === 'object'
+    ? details.referenceEvidence
+    : {};
+  return hashText(JSON.stringify({
+    reason: toStringValue(finalAnswerCheck?.reason || 'final_answer_policy'),
+    workflowBundleSeen: Boolean(referenceEvidence.workflowBundleSeen),
+    workflowSlotsComplete: Boolean(referenceEvidence.workflowSlotsComplete),
+    workflowMissingSlots: Array.isArray(referenceEvidence.workflowMissingSlots)
+      ? referenceEvidence.workflowMissingSlots.map((item) => toStringValue(item)).filter(Boolean).slice(0, 12)
+      : [],
+    hasWorkflowEvidence: Boolean(referenceEvidence.hasWorkflowEvidence),
+    hasMethodEvidence: Boolean(referenceEvidence.hasMethodEvidence),
+    hasVerifiedCodeEvidence: Boolean(referenceEvidence.hasVerifiedCodeEvidence),
+    apiFactCount: Number(referenceEvidence.apiFactCount || 0),
+    workflowRequiredFactCount: Number(referenceEvidence.workflowRequiredFactCount || 0),
+    searchCount: Number(referenceEvidence.searchCount || 0),
+    candidatePaths: Array.isArray(details.candidatePaths)
+      ? details.candidatePaths.map((item) => toStringValue(item)).filter(Boolean).slice(0, 8)
+      : [],
+    successfulToolNames: Array.isArray(details.successfulToolNames)
+      ? details.successfulToolNames.map((item) => toStringValue(item)).filter(Boolean).slice(0, 8)
+      : [],
+  }));
 }
 
 function mergeBooleanHints(base = {}, incoming = {}) {
@@ -645,6 +732,9 @@ function initialState({ historyMessages = [] } = {}) {
     transitions: [],
     compactBoundaries: [],
     phaseLock: null,
+    finalAnswerPolicyLock: null,
+    finalAnswerPolicyRetries: 0,
+    finalAnswerPolicyRetrySignature: '',
     pendingToolUseSummary: '',
     fileCache: {},
     lastTransition: null,
@@ -767,6 +857,11 @@ class QueryEngine {
       phaseLock: restored.phaseLock && typeof restored.phaseLock === 'object'
         ? restored.phaseLock
         : null,
+      finalAnswerPolicyLock: restored.finalAnswerPolicyLock && typeof restored.finalAnswerPolicyLock === 'object'
+        ? restored.finalAnswerPolicyLock
+        : null,
+      finalAnswerPolicyRetries: Number(restored.finalAnswerPolicyRetries || 0),
+      finalAnswerPolicyRetrySignature: toStringValue(restored.finalAnswerPolicyRetrySignature),
       pendingToolUseSummary: toStringValue(restored.pendingToolUseSummary),
       fileCache: restored.fileCache && typeof restored.fileCache === 'object' && !Array.isArray(restored.fileCache)
         ? restored.fileCache
@@ -804,6 +899,11 @@ class QueryEngine {
       phaseLock: this.state.phaseLock && typeof this.state.phaseLock === 'object'
         ? this.state.phaseLock
         : null,
+      finalAnswerPolicyLock: this.state.finalAnswerPolicyLock && typeof this.state.finalAnswerPolicyLock === 'object'
+        ? this.state.finalAnswerPolicyLock
+        : null,
+      finalAnswerPolicyRetries: Number(this.state.finalAnswerPolicyRetries || 0),
+      finalAnswerPolicyRetrySignature: toStringValue(this.state.finalAnswerPolicyRetrySignature),
       pendingToolUseSummary: toStringValue(this.state.pendingToolUseSummary),
       fileCache: this.state.fileCache && typeof this.state.fileCache === 'object' ? this.state.fileCache : {},
       lastTransition: this.state.lastTransition && typeof this.state.lastTransition === 'object'
@@ -1448,6 +1548,16 @@ class QueryEngine {
       lines.push('Cached file context:');
       lines.push(...cachedEntries);
     }
+    if (controlState.finalAnswerPolicyLocked) {
+      const finalAnswerPolicyLock = this.state.finalAnswerPolicyLock && typeof this.state.finalAnswerPolicyLock === 'object'
+        ? this.state.finalAnswerPolicyLock
+        : {};
+      const reasoning = toStringValue(finalAnswerPolicyLock.blockingMessage || finalAnswerPolicyLock.reason);
+      lines.push('Final-answer policy lock: do not call wiki_search, wiki_read, or wiki_evidence_search again for this question. Revise the answer using the evidence already collected, or explicitly say which detail is unverified.');
+      if (reasoning) {
+        lines.push(`Policy blocker: ${reasoning}`);
+      }
+    }
     if (controlState.verificationLocked) {
       const targets = Array.isArray(this.state.phaseLock.targetPaths) ? this.state.phaseLock.targetPaths : [];
       const requiredChanges = Array.isArray(this.state.phaseLock.requiredChanges) ? this.state.phaseLock.requiredChanges : [];
@@ -1663,21 +1773,35 @@ class QueryEngine {
     });
 
     if (!finalAnswerCheck?.ok && finalAnswerCheck?.type === 'policy') {
+      const retrySignature = buildFinalAnswerPolicyRetrySignature(finalAnswerCheck);
+      if (retrySignature && retrySignature === toStringValue(this.state.finalAnswerPolicyRetrySignature)) {
+        this.state.finalAnswerPolicyRetries = Number(this.state.finalAnswerPolicyRetries || 0) + 1;
+      } else {
+        this.state.finalAnswerPolicyRetries = 1;
+        this.state.finalAnswerPolicyRetrySignature = retrySignature;
+      }
       this.state.totalUsage.stop_hooks += 1;
       this._recordTranscript({
         kind: 'final_answer_policy',
         turn,
         reason: toStringValue(finalAnswerCheck.reason || 'final_answer_policy'),
+        retryCount: Number(this.state.finalAnswerPolicyRetries || 0),
         details: finalAnswerCheck.details || {},
       });
       this._recordTransition('final_answer_policy', {
         turn,
         reason: toStringValue(finalAnswerCheck.reason || 'final_answer_policy'),
+        retryCount: Number(this.state.finalAnswerPolicyRetries || 0),
       });
-      return finalAnswerCheck;
+      return {
+        ...finalAnswerCheck,
+        retryCount: Number(this.state.finalAnswerPolicyRetries || 0),
+        retrySignature,
+      };
     }
 
     if (!finalAnswerCheck?.ok && finalAnswerCheck?.type === 'grounding') {
+      this._resetFinalAnswerPolicyState();
       this.state.ungroundedAnswerRetries = Number(this.state.ungroundedAnswerRetries || 0) + 1;
       this._recordTranscript({
         kind: 'ungrounded_answer_warning',
@@ -1695,6 +1819,7 @@ class QueryEngine {
       };
     }
 
+    this._resetFinalAnswerPolicyState();
     this.state.ungroundedAnswerRetries = 0;
     return finalAnswerCheck;
   }
@@ -1766,19 +1891,74 @@ class QueryEngine {
     this.state.maxOutputTokensOverride = 0;
   }
 
+  _resetFinalAnswerPolicyState() {
+    this.state.finalAnswerPolicyLock = null;
+    this.state.finalAnswerPolicyRetries = 0;
+    this.state.finalAnswerPolicyRetrySignature = '';
+  }
+
   _resetRepairState() {
     this.state.createVerificationRetries = 0;
     this.state.phaseLock = null;
+    this._resetFinalAnswerPolicyState();
   }
 
   _queueFinalAnswerPolicyRetry(finalAnswerCheck, { turn = 0 } = {}) {
     this._resetPendingAnswerState();
+    const referenceEvidence = finalAnswerCheck?.details?.referenceEvidence && typeof finalAnswerCheck.details.referenceEvidence === 'object'
+      ? finalAnswerCheck.details.referenceEvidence
+      : {};
+    const requestContext = this.runtime?.requestContext && typeof this.runtime.requestContext === 'object'
+      ? this.runtime.requestContext
+      : {};
+    const requestIntent = requestContext?.intent && typeof requestContext.intent === 'object'
+      ? requestContext.intent
+      : {};
+    const requiresWorkspaceArtifact = Boolean(
+      requestIntent.wantsChanges
+      || requestIntent.wantsExecution
+      || requestIntent.createLikely
+      || requestContext?.artifactPlan?.requiresWorkspaceArtifact,
+    );
+    const canLockToAnswerOnly = Boolean(
+      !requiresWorkspaceArtifact
+      && (
+        Number(referenceEvidence.searchCount || 0) > 0
+        || Boolean(referenceEvidence.workflowBundleSeen)
+        || Boolean(referenceEvidence.hasWorkflowEvidence)
+        || Boolean(referenceEvidence.hasMethodEvidence)
+        || Boolean(referenceEvidence.hasVerifiedCodeEvidence)
+      ),
+    );
+    const shouldLockToAnswerOnly = Boolean(
+      canLockToAnswerOnly
+      && Number(finalAnswerCheck?.retryCount || 0) > MAX_FINAL_ANSWER_POLICY_RETRIES,
+    );
+    this.state.finalAnswerPolicyLock = shouldLockToAnswerOnly
+      ? {
+        kind: 'answer_only',
+        reason: toStringValue(finalAnswerCheck?.reason || 'final_answer_policy'),
+        blockingMessage: toStringValue(finalAnswerCheck?.blockingMessage),
+        retryCount: Number(finalAnswerCheck?.retryCount || 0),
+      }
+      : null;
     this._pushMetaUserMessage(
-      toStringValue(finalAnswerCheck?.blockingMessage)
-        || 'Do not finalize yet. Inspect the relevant source directly before answering.',
+      shouldLockToAnswerOnly
+        ? [
+          'Stop searching.',
+          'Do not call wiki_search, wiki_read, or wiki_evidence_search again for this question unless the user provides new evidence.',
+          'Revise the answer from the evidence already collected, or explicitly mark the remaining detail as unverified.',
+          toStringValue(finalAnswerCheck?.blockingMessage),
+        ].filter(Boolean).join(' ')
+        : (
+          toStringValue(finalAnswerCheck?.blockingMessage)
+            || 'Do not finalize yet. Inspect the relevant source directly before answering.'
+        ),
       {
         turn,
         hook: toStringValue(finalAnswerCheck?.reason || 'final_answer_policy'),
+        retryCount: Number(finalAnswerCheck?.retryCount || 0),
+        answerOnly: shouldLockToAnswerOnly,
         candidatePaths: Array.isArray(finalAnswerCheck?.details?.candidatePaths)
           ? finalAnswerCheck.details.candidatePaths.slice(0, 6)
           : [],
@@ -1790,6 +1970,8 @@ class QueryEngine {
     this._recordTransition('final_answer_policy_retry', {
       turn,
       reason: toStringValue(finalAnswerCheck?.reason || 'final_answer_policy'),
+      retryCount: Number(finalAnswerCheck?.retryCount || 0),
+      answerOnly: shouldLockToAnswerOnly,
     });
     this._persistState();
   }
@@ -2082,6 +2264,7 @@ class QueryEngine {
         prompt,
         selectedFilePath: this.selectedFilePath,
       });
+      this._resetRepairState();
       runContext = await this._enrichRunContextWithContract(runContext, { signal });
       const userBlocks = buildUserBlocks(
         toStringValue(runContext?.prompt || prompt),
@@ -2323,6 +2506,7 @@ class QueryEngine {
             ? toolUses.filter((item) => !draftVerificationAllowedTools.has(toStringValue(item?.name)))
             : []
         );
+        const finalAnswerPolicyToolLockActive = this.state.finalAnswerPolicyLock?.kind === 'answer_only';
         if (
           this.state.phaseLock?.kind === 'draft_verification'
           && (toolUses.length === 0 || disallowedDraftVerificationTools.length > 0)
@@ -2363,6 +2547,24 @@ class QueryEngine {
               .map((item) => toStringValue(item?.name))
               .filter(Boolean)
               .slice(0, 4),
+          });
+          this._persistState();
+          continue;
+        }
+        if (finalAnswerPolicyToolLockActive && toolUses.length > 0) {
+          this._pushMetaUserMessage(
+            'Do not call tools now. Answer directly from the evidence already collected, or explicitly mark the missing detail as unverified.',
+            {
+              turn,
+              hook: 'final_answer_policy_tool_only',
+              retryCount: Number(this.state.finalAnswerPolicyRetries || 0),
+              disallowedTools: toolUses.map((item) => toStringValue(item?.name)).filter(Boolean).slice(0, 6),
+            },
+          );
+          this._recordTransition('final_answer_policy_tool_only', {
+            turn,
+            retryCount: Number(this.state.finalAnswerPolicyRetries || 0),
+            disallowedTools: toolUses.map((item) => toStringValue(item?.name)).filter(Boolean).slice(0, 6),
           });
           this._persistState();
           continue;
@@ -2514,6 +2716,9 @@ class QueryEngine {
       const readObservations = readObservationsFromTrace(runTrace);
       const primary = readObservations[0] || {};
       const failed = failedSteps(runTrace)[0];
+      if (!toStringValue(this.state.terminalReason) && this.state.finalAnswerPolicyLock?.kind === 'answer_only') {
+        this.state.terminalReason = 'final_answer_policy';
+      }
       const resolvedTerminalReason = resolveFallbackTerminalReason(
         this.state.terminalReason,
         failed,

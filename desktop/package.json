@@ -10,7 +10,7 @@
     "dev": "concurrently -k \"vite --config vite.config.ts --host 127.0.0.1 --port 4173\" \"wait-on tcp:4173 && cross-env PIXLLM_DESKTOP_DEV_SERVER_URL=http://127.0.0.1:4173 electron src/main/main.cjs\"",
     "build": "node scripts/write-build-info.mjs && vite build --config vite.config.ts && node scripts/normalize-dist-html.mjs",
     "check": "svelte-check --tsconfig ./tsconfig.json",
-    "test:main": "node src/main/preload.test.cjs && node src/main/query/referenceEvidence.test.cjs",
+    "test:main": "node src/main/preload.test.cjs && node src/main/query/referenceEvidence.test.cjs && node src/main/QueryEngine.loopControl.test.cjs",
     "dist:win": "npm run build && electron-builder --win portable",
     "dist:portable": "npm run dist:win"
   },

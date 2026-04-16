@@ -289,6 +289,32 @@ def _build_lookup_source_excerpt(record: Dict[str, Any], *, section_index: int) 
     }
 
 
+def _effective_lookup_response_type(
+    *,
+    query: str,
+    response_type: str,
+    workflow_first: bool,
+    wiki_id: str,
+) -> str:
+    normalized_response_type = str(response_type or "").strip().lower()
+    if not workflow_first or normalized_response_type not in {"api_lookup", "exact_api_lookup"}:
+        return normalized_response_type
+
+    methods_bundle = _methods_lookup_bundle(wiki_id)
+    methods_index = methods_bundle.get("records") or []
+    if not methods_index:
+        return normalized_response_type
+
+    query_targets = _extract_lookup_targets(
+        query,
+        methods_index,
+        methods_bundle.get("type_lookup") or {},
+    )
+    if query_targets.get("is_specific_lookup"):
+        return normalized_response_type
+    return "general"
+
+
 def _load_workflow_manifest_index(wiki_id: str = "engine") -> List[Dict[str, Any]]:
     manifest = _load_wiki_manifest(wiki_id)
     records = manifest.get("workflow_index")
@@ -1651,8 +1677,14 @@ async def lookup_sources_and_code(
     code_window_cap = clamp_int(config.CHAT_TOOL_CODE_MAX_WINDOWS, 4, 24)
     active_collection = collection or config.EVIDENCE_DEFAULT_COLLECTION
     normalized_wiki_id = _normalize_wiki_id(str(filters.get("wiki_id") or "").strip() if isinstance(filters, dict) else "engine")
+    effective_response_type = _effective_lookup_response_type(
+        query=query,
+        response_type=response_type,
+        workflow_first=workflow_first,
+        wiki_id=normalized_wiki_id,
+    )
 
-    if str(response_type or "").strip().lower() in {"api_lookup", "exact_api_lookup"}:
+    if effective_response_type in {"api_lookup", "exact_api_lookup"}:
         stage_started_at = perf_counter()
         lookup_summary = build_exact_api_lookup_summary(query, wiki_id=normalized_wiki_id)
         record_timing("exact_lookup_summary", stage_started_at)
@@ -1672,7 +1704,7 @@ async def lookup_sources_and_code(
                 doc_chunks=exact_sources,
                 max_chars=max_chars,
                 max_line_span=max_line_span,
-                response_type=response_type,
+                response_type=effective_response_type,
                 code_window_cap=code_window_cap,
                 search_only=search_only,
             )
@@ -1717,7 +1749,7 @@ async def lookup_sources_and_code(
         max_chars=max_chars,
         active_collection=active_collection,
         search_only=search_only,
-        response_type=response_type,
+        response_type=effective_response_type,
         workflow_first=workflow_first,
         workflow_bundle=workflow_bundle,
     )
@@ -1733,14 +1765,14 @@ async def lookup_sources_and_code(
         doc_chunks=sources,
         max_chars=max_chars,
         max_line_span=max_line_span,
-        response_type=response_type,
+        response_type=effective_response_type,
         code_window_cap=code_window_cap,
         search_only=search_only,
     )
     record_timing("collect_wiki_anchor_code_windows", stage_started_at)
     if should_skip_broad_code_evidence(
         workflow_first=workflow_first,
-        response_type=response_type,
+        response_type=effective_response_type,
         workflow_bundle=workflow_bundle,
         wiki_code_windows=wiki_code_windows,
     ):
@@ -1757,7 +1789,7 @@ async def lookup_sources_and_code(
             capped_limit=capped_limit,
             max_chars=max_chars,
             max_line_span=max_line_span,
-            response_type=response_type,
+            response_type=effective_response_type,
             search_only=search_only,
             code_window_cap=code_window_cap,
         )
@@ -1775,6 +1807,7 @@ async def lookup_sources_and_code(
             extra={
                 "query": query[:200],
                 "response_type": str(response_type or ""),
+                "effective_response_type": effective_response_type,
                 "workflow_first": bool(workflow_first),
                 "timings_ms": timings_ms,
                 "source_count": len(sources),
@@ -1788,5 +1821,6 @@ async def lookup_sources_and_code(
         "code_windows": code_windows,
         "citations": citations,
         "workflow_bundle": workflow_bundle.get("slot_status") if workflow_first else {},
+        "effective_response_type": effective_response_type,
         "timings_ms": timings_ms,
     }

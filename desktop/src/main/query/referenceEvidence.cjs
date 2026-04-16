@@ -59,6 +59,16 @@ function summarizeWikiEvidence(trace = []) {
   const workflowForbiddenAnswerPatterns = [];
 
   for (const step of Array.isArray(trace) ? trace : []) {
+    if (toStringValue(step?.tool) === 'wiki_read' && step?.observation?.ok !== false) {
+      const pathValue = normalizePath(step?.observation?.path);
+      if (pathValue.startsWith('workflows/') || pathValue.includes('/workflows/')) {
+        workflowSourceCount += 1;
+      }
+      if (pathValue.startsWith('methods/') || pathValue.includes('/methods/')) {
+        methodSourceCount += 1;
+      }
+      continue;
+    }
     if (toStringValue(step?.tool) !== 'wiki_evidence_search' || step?.observation?.ok === false) {
       continue;
     }

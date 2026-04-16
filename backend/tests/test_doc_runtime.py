@@ -157,6 +157,36 @@ class DocRuntimeLookupTargetTests(unittest.TestCase):
         self.assertIn("GetBandAt", targets.get("member_candidates") or [])
         self.assertNotIn("C", targets.get("member_candidates") or [])
 
+    def test_effective_lookup_response_type_downgrades_non_specific_workflow_guidance(self):
+        methods_bundle = {
+            "records": [
+                {
+                    "type_name": "NXImageView",
+                    "qualified_type": "Pixoneer.NXDL.NXImage.NXImageView",
+                    "member_name": "AddImageLayer",
+                    "qualified_symbol": "Pixoneer.NXDL.NXImage.NXImageView.AddImageLayer",
+                }
+            ],
+            "type_lookup": {
+                "nximageview": "NXImageView",
+                "pixoneernxdlnximagenximageview": "Pixoneer.NXDL.NXImage.NXImageView",
+            },
+            "record_lookup": {},
+        }
+
+        with patch(
+            "backend.app.services.tools.doc_runtime._methods_lookup_bundle",
+            return_value=methods_bundle,
+        ):
+            effective = doc_runtime._effective_lookup_response_type(
+                query="c#에서 ImageView를 이용하여 XDM 파일 로드하여 화면에 도시하는 방법 알려줘",
+                response_type="api_lookup",
+                workflow_first=True,
+                wiki_id="engine",
+            )
+
+        self.assertEqual(effective, "general")
+
 
 class ToolRuntimeCodeEvidenceTests(unittest.IsolatedAsyncioTestCase):
     async def test_collect_code_evidence_stops_after_enough_matches(self):
@@ -350,6 +380,86 @@ class DocRuntimeLookupTimingTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["code_windows"], wiki_windows)
         self.assertEqual(result["timings_ms"]["collect_code_evidence"], 0.0)
+
+    async def test_lookup_sources_and_code_downgrades_non_specific_api_lookup_for_workflow_guidance(self):
+        workflow_bundle = {
+            "sources": [
+                {
+                    "file_path": "workflows/imageview-xdm-display-workflow.md",
+                    "chunk_id": "wiki:engine:workflows/imageview-xdm-display-workflow.md#manifest",
+                }
+            ],
+            "slot_status": {"slots_complete": True},
+        }
+        wiki_windows = [
+            {"path": f"file{i}.cs", "line_range": f"{i}-{i}"}
+            for i in range(1, 7)
+        ]
+        collect_sources_mock = AsyncMock(return_value=workflow_bundle["sources"])
+        collect_wiki_windows_mock = AsyncMock(return_value=wiki_windows)
+        collect_code_evidence_mock = AsyncMock(side_effect=AssertionError("broad code evidence should be skipped"))
+
+        with patch(
+            "backend.app.services.tools.doc_runtime.resolve_tool_user_context",
+            AsyncMock(return_value={}),
+        ), patch(
+            "backend.app.services.tools.doc_runtime._build_workflow_first_bundle",
+            return_value=workflow_bundle,
+        ), patch(
+            "backend.app.services.tools.doc_runtime.collect_sources",
+            collect_sources_mock,
+        ), patch(
+            "backend.app.services.tools.doc_runtime.collect_wiki_anchor_code_windows",
+            collect_wiki_windows_mock,
+        ), patch(
+            "backend.app.services.tools.doc_runtime.extract_doc_symbol_candidates",
+            return_value=["NXImageView", "XRasterIO"],
+        ), patch(
+            "backend.app.services.tools.doc_runtime.build_citations",
+            return_value=[],
+        ), patch(
+            "backend.app.services.tools.doc_runtime._methods_lookup_bundle",
+            return_value={
+                "records": [
+                    {
+                        "type_name": "NXImageView",
+                        "qualified_type": "Pixoneer.NXDL.NXImage.NXImageView",
+                        "member_name": "AddImageLayer",
+                        "qualified_symbol": "Pixoneer.NXDL.NXImage.NXImageView.AddImageLayer",
+                    }
+                ],
+                "type_lookup": {
+                    "nximageview": "NXImageView",
+                    "pixoneernxdlnximagenximageview": "Pixoneer.NXDL.NXImage.NXImageView",
+                },
+                "record_lookup": {},
+            },
+        ):
+            result = await doc_runtime.lookup_sources_and_code(
+                redis=None,
+                search_svc=None,
+                embed_model=None,
+                code_tools=None,
+                session_id="session-1",
+                user_id="user-1",
+                query="c#에서 ImageView를 이용하여 XDM 파일 로드하여 화면에 도시하는 방법 알려줘",
+                filters={"wiki_id": "engine"},
+                top_k=8,
+                limit=8,
+                max_chars=4000,
+                max_line_span=120,
+                response_type="api_lookup",
+                workflow_first=True,
+                search_only=False,
+                collection="documents",
+                collect_code_evidence_async=collect_code_evidence_mock,
+            )
+
+        self.assertEqual(result["effective_response_type"], "general")
+        self.assertEqual(result["code_windows"], wiki_windows)
+        self.assertEqual(result["timings_ms"]["collect_code_evidence"], 0.0)
+        self.assertEqual(collect_sources_mock.await_args.kwargs["response_type"], "general")
+        self.assertEqual(collect_wiki_windows_mock.await_args.kwargs["response_type"], "general")
 
     def test_build_workflow_first_bundle_skips_method_matching_for_non_specific_lookup(self):
         workflow_bundle = {

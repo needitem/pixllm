@@ -888,6 +888,9 @@ function buildSystemPrompt({
     prefersWorkflowFirst
       ? '- Workflow-first guidance requests must follow this order: (1) search wiki workflow pages, (2) read the best matching workflow page, (3) inspect the implementation or methods pages referenced by that workflow, (4) gather verified API facts with wiki_evidence_search before emitting code or concrete signatures, and only then (5) use broader reference search if necessary.'
       : '',
+    prefersWorkflowFirst && prefersDirectChatGuidance
+      ? '- For broad workflow guidance, converge once a workflow page and verified code facts are available. Prefer one short explanation path, at most one compact code sketch, and stop searching instead of expanding into every related API.'
+      : '',
     '- When a workflow page or workflow_bundle exposes Required Facts, verification rules, or verified API facts, treat them as an allowlist for example code. Do not invent overloads, namespaces, convenience properties, short static helpers, or direct object relationships that are not present in the verified facts.',
     '- If a workflow describes a non-obvious enum or integer mapping, prefer named enum members in code examples. If you must use integers, state the verified mapping explicitly instead of implying a conventional order.',
     '- If a wiki_evidence_search result says `search_status: no_exact_match`, do not claim that the queried API exists. Use the reported `negative_evidence`, and mention `related_apis` only as possible alternatives.',

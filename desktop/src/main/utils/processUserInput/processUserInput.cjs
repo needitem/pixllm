@@ -298,7 +298,9 @@ function deriveInitialToolNames({
   if (shouldPreferWorkflowWiki || focus.mentionsWiki) {
     addTools(names, TOOL_GROUPS.wiki);
   }
-  addTools(names, TOOL_GROUPS.reference);
+  if (shouldPreferWorkflowWiki || focus.mentionsWiki) {
+    addTools(names, TOOL_GROUPS.reference);
+  }
 
   if (focus.mentionsWiki && hasWorkspacePath) {
     addTools(names, TOOL_GROUPS.workspace_discovery);

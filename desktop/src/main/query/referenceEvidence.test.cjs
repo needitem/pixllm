@@ -56,3 +56,32 @@ test('summarizeWikiEvidence keeps the strongest workflow bundle across searches'
   assert.equal(summary.workflowRequiredFactCount, 1);
   assert.deepEqual(summary.workflowForbiddenAnswerPatterns, ['GetBandCount\\s*\\(']);
 });
+
+test('summarizeWikiEvidence counts workflow pages read directly through wiki_read', () => {
+  const summary = summarizeWikiEvidence([
+    {
+      tool: 'wiki_read',
+      observation: {
+        ok: true,
+        path: 'workflows/imageview-xdm-display-workflow.md',
+      },
+    },
+    {
+      tool: 'wiki_evidence_search',
+      observation: {
+        ok: true,
+        sources: [
+          { file_path: 'methods/Methods_T_Pixoneer_NXDL_NIO_XRasterIO.md' },
+        ],
+        windows: [
+          { path: 'Source/NXDLio/XRasterIO.cpp', evidenceType: 'implementation' },
+        ],
+      },
+    },
+  ]);
+
+  assert.equal(summary.hasWorkflowEvidence, true);
+  assert.equal(summary.workflowSourceCount, 1);
+  assert.equal(summary.hasMethodEvidence, true);
+  assert.equal(summary.hasVerifiedCodeEvidence, true);
+});
