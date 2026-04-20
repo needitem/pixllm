@@ -56,14 +56,18 @@ function wildcardToRegExp(pattern) {
   return new RegExp(`^${escaped}$`, 'i');
 }
 
-function getAllLocalBaseTools(limits = {}) {
-  const resolved = { ...DEFAULT_LIMITS, ...(limits || {}) };
+function getWikiBaseTools() {
   return [
     WikiSearchTool(),
     WikiReadTool(),
+  ];
+}
+
+function getLocalBaseTools(limits = {}) {
+  const resolved = { ...DEFAULT_LIMITS, ...(limits || {}) };
+  return [
     defineLocalTool({
       name: 'list_files',
-      aliases: ['list_directory', 'ls', 'dir'],
       kind: 'list',
       inputSchema: objectSchema({
         limit: integerSchema('Maximum number of files to list', { minimum: 1 }),
@@ -114,7 +118,7 @@ function getAllLocalBaseTools(limits = {}) {
     }),
     defineLocalTool({
       name: 'grep',
-      aliases: ['search', 'rgrep', 'ripgrep', 'search_code'],
+      aliases: ['search', 'rgrep'],
       kind: 'search',
       inputSchema: objectSchema({
         query: stringSchema('Search string or simple regex-like pattern'),
@@ -138,7 +142,6 @@ function getAllLocalBaseTools(limits = {}) {
     }),
     defineLocalTool({
       name: 'find_symbol',
-      aliases: ['search_symbol', 'find_definition'],
       kind: 'search',
       inputSchema: objectSchema({
         symbol: stringSchema('Symbol name to locate'),
@@ -298,10 +301,10 @@ function getAllLocalBaseTools(limits = {}) {
   ];
 }
 
-function createLocalToolCollection({
+function createToolCollectionFromTools({
+  tools = [],
   workspacePath = '',
   sessionId = '',
-  limits = {},
   runtimeBridge = {},
   getBackendConfig = null,
   allowedToolNames = null,
@@ -311,7 +314,7 @@ function createLocalToolCollection({
   const allowedNameSet = Array.isArray(allowedToolNames)
     ? new Set(allowedToolNames.map((item) => toStringValue(item)).filter(Boolean))
     : null;
-  const tools = getAllLocalBaseTools(limits).filter((tool) =>
+  const activeTools = (Array.isArray(tools) ? tools : []).filter((tool) =>
     tool.isEnabled() && (!allowedNameSet || allowedNameSet.has(toStringValue(tool?.name)))
   );
   const context = {
@@ -319,23 +322,23 @@ function createLocalToolCollection({
     sessionId: normalizedSessionId,
     runtimeBridge: runtimeBridge && typeof runtimeBridge === 'object' ? runtimeBridge : {},
     getBackendConfig: typeof getBackendConfig === 'function' ? getBackendConfig : null,
-    tools,
+    tools: activeTools,
   };
 
   return {
     workspacePath: normalizedWorkspacePath,
     sessionId: normalizedSessionId,
-    tools,
-    toolNames: tools.map((tool) => tool.name),
+    tools: activeTools,
+    toolNames: activeTools.map((tool) => tool.name),
     has(toolName) {
-      return Boolean(findToolByName(tools, toStringValue(toolName)));
+      return Boolean(findToolByName(activeTools, toStringValue(toolName)));
     },
     describe(toolName) {
-      return findToolByName(tools, toStringValue(toolName)) || null;
+      return findToolByName(activeTools, toStringValue(toolName)) || null;
     },
     async call(toolName, input = {}, runtimeContext = {}) {
       const normalizedToolName = toStringValue(toolName);
-      const tool = findToolByName(tools, normalizedToolName);
+      const tool = findToolByName(activeTools, normalizedToolName);
       if (!tool) {
         return { ok: false, error: `tool_not_registered:${normalizedToolName}` };
       }
@@ -399,6 +402,42 @@ function createLocalToolCollection({
   };
 }
 
+function createWikiToolCollection({
+  workspacePath = '',
+  sessionId = '',
+  runtimeBridge = {},
+  getBackendConfig = null,
+  allowedToolNames = null,
+} = {}) {
+  return createToolCollectionFromTools({
+    tools: getWikiBaseTools(),
+    workspacePath,
+    sessionId,
+    runtimeBridge,
+    getBackendConfig,
+    allowedToolNames,
+  });
+}
+
+function createLocalToolCollection({
+  workspacePath = '',
+  sessionId = '',
+  limits = {},
+  runtimeBridge = {},
+  getBackendConfig = null,
+  allowedToolNames = null,
+} = {}) {
+  return createToolCollectionFromTools({
+    tools: getLocalBaseTools(limits),
+    workspacePath,
+    sessionId,
+    runtimeBridge,
+    getBackendConfig,
+    allowedToolNames,
+  });
+}
+
 module.exports = {
+  createWikiToolCollection,
   createLocalToolCollection,
 };

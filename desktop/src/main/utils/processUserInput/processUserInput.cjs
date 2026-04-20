@@ -137,19 +137,6 @@ function analyzeIntent(prompt = '') {
   };
 }
 
-function analyzeFocus(prompt = '') {
-  const source = toStringValue(prompt);
-  return {
-    mentionsConfig: false,
-    mentionsTodo: false,
-    mentionsRuntimeTask: false,
-    mentionsWiki: Boolean(
-      /\b(wiki|obsidian|backlink|knowledge ?base|index\.md|log\.md|schema\.md|vault)\b/i.test(source)
-      || /위키|옵시디언|백링크|지식\s*베이스|볼트/.test(source),
-    ),
-  };
-}
-
 function deriveMode({
   hasWorkspacePath = false,
   engineQuestionOverride = null,
@@ -236,14 +223,6 @@ function buildRequestContext(context = {}) {
         compareLikely: false,
       }
     : analyzeIntent(prompt);
-  const focus = context.focus && typeof context.focus === 'object'
-    ? {
-        mentionsConfig: false,
-        mentionsTodo: false,
-        mentionsRuntimeTask: false,
-        mentionsWiki: Boolean(context.focus.mentionsWiki),
-      }
-    : analyzeFocus(prompt);
   const explicitPaths = uniq(
     (Array.isArray(context.explicitPaths) ? context.explicitPaths : extractPathCandidates(prompt))
       .map((candidate) => toWorkspaceRelativePath(workspacePath, candidate) || normalizePath(candidate))
@@ -254,7 +233,6 @@ function buildRequestContext(context = {}) {
     ...extractIdentifierHints(prompt),
     ...(Array.isArray(context.symbolHints) ? context.symbolHints : []),
   ], 6);
-  const searchTerms = uniqStrings(Array.isArray(context.searchTerms) ? context.searchTerms : [], 6);
   const hasWorkspacePath = Boolean(workspacePath);
   const engineQuestionOverride = typeof context.engineQuestionOverride === 'boolean'
     ? context.engineQuestionOverride
@@ -263,6 +241,8 @@ function buildRequestContext(context = {}) {
     hasWorkspacePath,
     engineQuestionOverride,
   });
+  const scopedExplicitPaths = mode === 'wiki' ? [] : explicitPaths;
+  const scopedSelectedFilePath = mode === 'wiki' ? '' : selectedFilePath;
   const initialToolNames = deriveInitialToolNames({
     mode,
     wantsChanges: intent.wantsChanges,
@@ -272,20 +252,13 @@ function buildRequestContext(context = {}) {
   const requestContext = {
     prompt,
     workspacePath,
-    selectedFilePath,
-    explicitPaths,
-    allowedDirectPaths: uniq([selectedFilePath, ...explicitPaths]),
+    selectedFilePath: scopedSelectedFilePath,
+    explicitPaths: scopedExplicitPaths,
+    allowedDirectPaths: uniq([scopedSelectedFilePath, ...scopedExplicitPaths]),
     intent,
-    focus,
     directives: {},
     languageProfile,
-    narrowingPreferred: false,
     symbolHints,
-    searchTerms,
-    artifactPlan: {
-      requiresWorkspaceArtifact: false,
-      likelyPaths: [],
-    },
     workflowPlan: {
       preferWikiFirst: mode === 'wiki',
     },
@@ -298,15 +271,20 @@ function buildRequestContext(context = {}) {
   return requestContext;
 }
 
-function processUserInput({ prompt = '', workspacePath = '', selectedFilePath = '' } = {}) {
+function processUserInput({
+  prompt = '',
+  workspacePath = '',
+  selectedFilePath = '',
+  engineQuestionOverride = null,
+} = {}) {
   return buildRequestContext({
     prompt,
     workspacePath,
     selectedFilePath,
+    engineQuestionOverride,
   });
 }
 
 module.exports = {
-  buildRequestContext,
   processUserInput,
 };

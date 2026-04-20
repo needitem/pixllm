@@ -202,7 +202,7 @@ function summarizeObservationForModel(toolName, observation = {}) {
     return lines.join('\n').trim();
   }
 
-  if (['write', 'write_file', 'edit', 'replace_in_file'].includes(name)) {
+  if (['edit', 'replace_in_file'].includes(name)) {
     if (Number.isFinite(Number(payload.added)) || Number.isFinite(Number(payload.removed))) {
       lines.push(`diff: +${Number(payload.added || 0)} -${Number(payload.removed || 0)}`);
     }
@@ -210,23 +210,6 @@ function summarizeObservationForModel(toolName, observation = {}) {
     if (diff) {
       lines.push('patch:');
       lines.push(diff);
-    }
-    return lines.join('\n').trim();
-  }
-
-  if (['run_build', 'bash', 'powershell'].includes(name)) {
-    if (Number.isFinite(Number(payload.code))) {
-      lines.push(`code: ${Number(payload.code || 0)}`);
-    }
-    const stdout = clipModelText(payload.stdout || '', 1600);
-    const stderr = clipModelText(payload.stderr || '', 1200);
-    if (stdout) {
-      lines.push('stdout:');
-      lines.push(stdout);
-    }
-    if (stderr) {
-      lines.push('stderr:');
-      lines.push(stderr);
     }
     return lines.join('\n').trim();
   }

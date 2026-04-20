@@ -1,4 +1,5 @@
 import time
+from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
 from ... import config
@@ -14,6 +15,34 @@ from .wiki_runtime import (
     wiki_parent_root,
 )
 
+_PAGE_LIST_CACHE: Dict[str, Dict[str, object]] = {}
+_MARKDOWN_INVENTORY_CACHE: Dict[str, Dict[str, object]] = {}
+_MARKDOWN_INVENTORY_TTL_SECONDS = 1.0
+
+
+def _markdown_inventory(root: Path) -> Dict[str, object]:
+    cache_key = str(root.resolve())
+    now = time.monotonic()
+    cached = _MARKDOWN_INVENTORY_CACHE.get(cache_key)
+    if cached and (now - float(cached.get("cached_at") or 0.0)) < _MARKDOWN_INVENTORY_TTL_SECONDS:
+        return {
+            "files": list(cached.get("files") or []),
+            "count": int(cached.get("count") or 0),
+            "latest_mtime": float(cached.get("latest_mtime") or 0.0),
+        }
+    files = sorted(root.rglob("*.md")) if root.exists() else []
+    latest_mtime = max((item.stat().st_mtime for item in files), default=0.0)
+    payload = {
+        "files": files,
+        "count": len(files),
+        "latest_mtime": latest_mtime,
+    }
+    _MARKDOWN_INVENTORY_CACHE[cache_key] = {
+        **payload,
+        "cached_at": now,
+    }
+    return payload
+
 
 class WikiServiceCatalogMixin:
     def _required_coordination_paths(self) -> List[str]:
@@ -25,12 +54,13 @@ class WikiServiceCatalogMixin:
     def _meta(self, wiki_id: str) -> Dict[str, object]:
         normalized_wiki_id = _slugify(wiki_id, "engine")
         root = self._root(normalized_wiki_id)
-        pages = list(root.rglob("*.md")) if root.exists() else []
+        inventory = _markdown_inventory(root)
+        pages = inventory["files"] if isinstance(inventory.get("files"), list) else []
         updated_at = None
         if pages:
             updated_at = time.strftime(
                 "%Y-%m-%dT%H:%M:%SZ",
-                time.gmtime(max(item.stat().st_mtime for item in pages)),
+                time.gmtime(float(inventory.get("latest_mtime") or 0.0)),
             )
         description = ""
         readme = root / "README.md"
@@ -41,7 +71,7 @@ class WikiServiceCatalogMixin:
             "name": normalized_wiki_id,
             "description": description,
             "root_path": root.relative_to(_BACKEND_ROOT).as_posix() if root.exists() else root.relative_to(_BACKEND_ROOT).as_posix(),
-            "page_count": len(pages),
+            "page_count": int(inventory.get("count") or 0),
             "updated_at": updated_at or now_iso(),
             "answer_mode": str(config.ANSWER_MODE or "wiki-only").strip() or "wiki-only",
             "raw_source_root": _raw_source_root_text(),
@@ -92,7 +122,24 @@ class WikiServiceCatalogMixin:
         root = self._root(wiki_id)
         if not root.exists():
             return []
-        return [_page_payload(root, file_path) for file_path in sorted(root.rglob("*.md"))]
+        inventory = _markdown_inventory(root)
+        cache_key = str(root.resolve())
+        cache_entry = _PAGE_LIST_CACHE.get(cache_key)
+        file_count = int(inventory.get("count") or 0)
+        latest_mtime = float(inventory.get("latest_mtime") or 0.0)
+        if (
+            cache_entry
+            and int(cache_entry.get("count") or 0) == file_count
+            and float(cache_entry.get("latest_mtime") or 0.0) == latest_mtime
+        ):
+            return list(cache_entry.get("pages") or [])
+        pages = [_page_payload(root, file_path) for file_path in inventory.get("files") or []]
+        _PAGE_LIST_CACHE[cache_key] = {
+            "count": file_count,
+            "latest_mtime": latest_mtime,
+            "pages": pages,
+        }
+        return list(pages)
 
     async def get_page(self, wiki_id: str, page_path: str) -> Optional[Dict[str, object]]:
         file_path = self._page_file(wiki_id, page_path)

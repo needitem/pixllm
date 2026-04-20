@@ -211,15 +211,6 @@ function summarizeObservation(toolName, observation, maxChars = 16000) {
       message: payload.message || '',
     };
   }
-  if (toolName === 'todo_read' || toolName === 'todo_write') {
-    return {
-      ok: Boolean(payload.ok),
-      total: Number(payload.total || 0),
-      items: Array.isArray(payload.items) ? payload.items.slice(0, 100) : [],
-      error: payload.error || '',
-      message: payload.message || '',
-    };
-  }
   if (toolName === 'grep') {
     return {
       ok: Boolean(payload.ok),
@@ -260,20 +251,6 @@ function summarizeObservation(toolName, observation, maxChars = 16000) {
       matchKind: String(payload.matchKind || payload.match_kind || ''),
     };
   }
-  if (toolName === 'write' || toolName === 'write_file') {
-    const diffText = String(payload.diff || '');
-    return {
-      ok: Boolean(payload.ok),
-      path: payload.path || '',
-      bytes: Number(payload.bytes || 0),
-      added: Number(payload.added || 0),
-      removed: Number(payload.removed || 0),
-      diff: diffText.slice(0, maxChars),
-      diff_truncated: Boolean(payload.diff_truncated) || diffText.length > maxChars,
-      error: payload.error || '',
-      message: payload.message || '',
-    };
-  }
   if (toolName === 'edit' || toolName === 'replace_in_file') {
     const diffText = String(payload.diff || '');
     return {
@@ -285,28 +262,6 @@ function summarizeObservation(toolName, observation, maxChars = 16000) {
       removed: Number(payload.removed || 0),
       diff: diffText.slice(0, maxChars),
       diff_truncated: Boolean(payload.diff_truncated) || diffText.length > maxChars,
-      error: payload.error || '',
-      message: payload.message || '',
-    };
-  }
-  if (toolName === 'run_build') {
-    return {
-      ok: Boolean(payload.ok),
-      tool: payload.tool || '',
-      code: Number(payload.code || 0),
-      stdout: String(payload.stdout || '').slice(0, maxChars),
-      stderr: String(payload.stderr || '').slice(0, maxChars),
-      error: payload.error || '',
-      message: payload.message || '',
-    };
-  }
-  if (toolName === 'bash' || toolName === 'run_shell' || toolName === 'powershell') {
-    return {
-      ok: Boolean(payload.ok),
-      command: payload.command || '',
-      code: Number(payload.code || 0),
-      stdout: String(payload.stdout || '').slice(0, maxChars),
-      stderr: String(payload.stderr || '').slice(0, maxChars),
       error: payload.error || '',
       message: payload.message || '',
     };

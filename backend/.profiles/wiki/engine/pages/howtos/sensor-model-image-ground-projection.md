@@ -11,13 +11,19 @@ sources:
 
 # Sensor Model Projection Recipes
 
-## Covers
+## What This Recipe Covers
 - Explain image-to-ground and ground-to-image projection flows.
 - Clarify when the user needs a sensor model rather than only a coordinate transform.
 
-## Reach For This Page When
+## Use This Recipe For
 - The user asks how to project image points to ground coordinates.
 - The user asks how sensor geometry participates in positioning or view alignment.
+
+
+## Answering Guidance
+- Start from the owning workflow, then use this page to turn that family-level context into ordered task steps.
+- Prefer step-oriented answers that name the concrete API surface already verified by the workflow page.
+- If the task crosses families, say which dependency workflow should be read next instead of guessing from this page alone.
 
 ## Related Pages
 - [Sensor Model API Workflow](../../workflows/wf-api-sensor-model.md)

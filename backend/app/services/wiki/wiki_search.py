@@ -17,6 +17,19 @@ _EXPLICIT_FAMILY_HINT_PATTERNS: Sequence[Tuple[str, Sequence[str]]] = (
     ("api_uspaceview", ("uspaceview", "uspace view")),
     ("api_core", ("license", "라이선스", "config path", "설정 경로")),
 )
+_QUERY_ROUTER_TOKEN_CACHE: Dict[str, Dict[str, Any]] = {}
+_QUERY_ROUTER_TOKEN_CACHE_LIMIT = 128
+_EXPLICIT_FAMILY_HINT_CACHE: Dict[str, List[str]] = {}
+_PRIORITY_FAMILY_HINT_CACHE: Dict[str, List[str]] = {}
+_QUERY_HINT_CACHE_LIMIT = 128
+
+
+def _store_hint_cache(cache: Dict[str, List[str]], key: str, value: List[str]) -> List[str]:
+    cache[key] = list(value)
+    while len(cache) > _QUERY_HINT_CACHE_LIMIT:
+        oldest_key = next(iter(cache))
+        cache.pop(oldest_key, None)
+    return list(value)
 
 def _build_excerpt(content: str, query: str, limit: int = 420) -> str:
     source = str(content or "")
@@ -58,12 +71,15 @@ def _expand_manifest_match_tokens(values: Iterable[str]) -> List[str]:
 
 def _query_router_tokens(query: str) -> Dict[str, Any]:
     raw_query = str(query or "").strip()
+    cached = _QUERY_ROUTER_TOKEN_CACHE.get(raw_query)
+    if cached is not None:
+        return cached
     query_compacts = _compact_values(extract_query_compacts(raw_query, limit=24))
     query_terms = _compact_values(extract_query_terms(raw_query, limit=24))
     query_symbols = _compact_values(extract_symbol_query_candidates(raw_query, max_candidates=8))
     query_blob = compact_token(raw_query)
     semantic_tokens = _compact_values([*query_compacts, *query_terms])
-    return {
+    payload = {
         "raw": raw_query,
         "blob": query_blob,
         "compacts": query_compacts,
@@ -71,23 +87,34 @@ def _query_router_tokens(query: str) -> Dict[str, Any]:
         "symbols": query_symbols,
         "semantic_tokens": semantic_tokens,
     }
+    _QUERY_ROUTER_TOKEN_CACHE[raw_query] = payload
+    while len(_QUERY_ROUTER_TOKEN_CACHE) > _QUERY_ROUTER_TOKEN_CACHE_LIMIT:
+        oldest_key = next(iter(_QUERY_ROUTER_TOKEN_CACHE))
+        _QUERY_ROUTER_TOKEN_CACHE.pop(oldest_key, None)
+    return payload
 
 
 def _query_explicit_family_hints(query: str) -> List[str]:
     lowered = str(query or "").strip().lower()
     if not lowered:
         return []
+    cached = _EXPLICIT_FAMILY_HINT_CACHE.get(lowered)
+    if cached is not None:
+        return list(cached)
     hints: List[str] = []
     for family, patterns in _EXPLICIT_FAMILY_HINT_PATTERNS:
         if any(pattern in lowered for pattern in patterns):
             hints.append(family)
-    return hints
+    return _store_hint_cache(_EXPLICIT_FAMILY_HINT_CACHE, lowered, hints)
 
 
 def _query_priority_family_hints(query: str) -> List[str]:
     lowered = str(query or "").strip().lower()
     if not lowered:
         return []
+    cached = _PRIORITY_FAMILY_HINT_CACHE.get(lowered)
+    if cached is not None:
+        return list(cached)
 
     def has_any(*parts: str) -> bool:
         return any(part in lowered for part in parts)
@@ -103,89 +130,33 @@ def _query_priority_family_hints(query: str) -> List[str]:
             families.append("api_milmapview")
         if has_any("planetview"):
             families.append("api_planetview")
-        return families
+        return _store_hint_cache(_PRIORITY_FAMILY_HINT_CACHE, lowered, families)
 
     if has_any("scene") and has_any("선택", "편집을 종료", "select none", "select all", "hit test", "scene object"):
-        return ["api_scene_editor"]
+        return _store_hint_cache(_PRIORITY_FAMILY_HINT_CACHE, lowered, ["api_scene_editor"])
 
     if has_any("dfs") and has_any("export", "진행률", "cancel"):
-        return ["api_dfs"]
+        return _store_hint_cache(_PRIORITY_FAMILY_HINT_CACHE, lowered, ["api_dfs"])
 
     if has_any("dfs", "provider group") and has_any("xdmcompmanager", "xdm comp manager", "xdmcompmanager를"):
-        return ["api_dfs"]
+        return _store_hint_cache(_PRIORITY_FAMILY_HINT_CACHE, lowered, ["api_dfs"])
 
     if has_any("합성 관리자", "comp manager", "compmanager", "합성 1 front", "합성 2 front"):
-        return ["api_imageview", "api_raster"]
+        return _store_hint_cache(_PRIORITY_FAMILY_HINT_CACHE, lowered, ["api_imageview", "api_raster"])
 
     if has_any("planetview", "planet 엔진") and has_any("shader", "cartoon", "sun follow"):
-        return ["api_planetview"]
+        return _store_hint_cache(_PRIORITY_FAMILY_HINT_CACHE, lowered, ["api_planetview"])
 
     if has_any("milmapview") and has_any("shader", "cartoon"):
-        return ["api_milmapview"]
+        return _store_hint_cache(_PRIORITY_FAMILY_HINT_CACHE, lowered, ["api_milmapview"])
 
     if has_any("공간 좌표") and has_any("world 좌표", "화면 좌표", "screen 좌표"):
-        return ["api_uspaceview", "api_coordinate"]
+        return _store_hint_cache(_PRIORITY_FAMILY_HINT_CACHE, lowered, ["api_uspaceview", "api_coordinate"])
 
     if has_any("영상 중심점") and has_any("지도 좌표", "map coord"):
-        return ["api_sensor_model", "api_coordinate"]
+        return _store_hint_cache(_PRIORITY_FAMILY_HINT_CACHE, lowered, ["api_sensor_model", "api_coordinate"])
 
-    return []
-
-
-def _manifest_preferred_families(
-    root: Path,
-    *,
-    query: str,
-    limit: int = 6,
-) -> List[str]:
-    manifest = _load_runtime_manifest_for_root(root)
-    workflow_index = manifest.get("workflow_index") if isinstance(manifest.get("workflow_index"), list) else []
-    if not workflow_index:
-        return []
-
-    query_info = _query_router_tokens(query)
-    ranked: List[Tuple[Tuple[int, int, int, int, int, str], str]] = []
-    for entry in workflow_index:
-        if not isinstance(entry, dict):
-            continue
-        family = str(entry.get("workflow_family") or "").strip()
-        if not family:
-            continue
-        flags = _workflow_router_match_flags(entry, query_info)
-        if not (
-            bool(flags.get("exact_name_match"))
-            or bool(flags.get("route_term_match"))
-            or bool(flags.get("symbol_match"))
-            or bool(flags.get("bundle_match"))
-            or bool(flags.get("semantic_match"))
-            or int(flags.get("routing_hint_match_count") or 0) > 0
-        ):
-            continue
-        ranked.append(
-            (
-                (
-                    -int(flags.get("routing_hint_match_count") or 0),
-                    -int(flags.get("exact_name_match_count") or 0),
-                    -int(flags.get("exact_route_match_count") or 0),
-                    -int(flags.get("longest_exact_route_match") or 0),
-                    -int(flags.get("bundle_overlap_count") or 0),
-                    -int(flags.get("semantic_overlap_count") or 0),
-                    str(entry.get("path") or ""),
-                ),
-                family,
-            )
-        )
-
-    ordered: List[str] = []
-    seen = set()
-    for _rank, family in sorted(ranked, key=lambda item: item[0]):
-        if family in seen:
-            continue
-        seen.add(family)
-        ordered.append(family)
-        if len(ordered) >= max(1, int(limit or 6)):
-            break
-    return ordered
+    return _store_hint_cache(_PRIORITY_FAMILY_HINT_CACHE, lowered, [])
 
 
 def _compact_query_matches(query_blob: str, query_compacts: Sequence[str], candidate: str) -> bool:
@@ -301,9 +272,11 @@ def _workflow_results_for_families(
     include_content: bool,
     query: str,
     limit: int,
+    workflow_index: Optional[Sequence[Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
-    manifest = _load_runtime_manifest_for_root(root)
-    workflow_index = manifest.get("workflow_index") if isinstance(manifest.get("workflow_index"), list) else []
+    if not isinstance(workflow_index, Sequence):
+        manifest = _load_runtime_manifest_for_root(root)
+        workflow_index = manifest.get("workflow_index") if isinstance(manifest.get("workflow_index"), list) else []
     if not workflow_index:
         return []
     family_order = [str(item or "").strip() for item in families if str(item or "").strip()]
@@ -329,6 +302,7 @@ def _preferred_workflow_paths(
     root: Path,
     *,
     families: Sequence[str],
+    workflow_index: Optional[Sequence[Dict[str, Any]]] = None,
 ) -> List[str]:
     items = _workflow_results_for_families(
         root,
@@ -336,6 +310,7 @@ def _preferred_workflow_paths(
         include_content=False,
         query="",
         limit=50,
+        workflow_index=workflow_index,
     )
     return [str(item.get("path") or "").strip().lower() for item in items if str(item.get("path") or "").strip()]
 
@@ -360,10 +335,11 @@ def _route_workflow_results(
         include_content=include_content,
         query=query,
         limit=limit,
+        workflow_index=workflow_index,
     )
-    preferred_paths = _preferred_workflow_paths(root, families=preferred_families or [])
+    preferred_paths = _preferred_workflow_paths(root, families=preferred_families or [], workflow_index=workflow_index)
     preferred_priority = {path_value: index for index, path_value in enumerate(preferred_paths)}
-    priority_paths = _preferred_workflow_paths(root, families=priority_families or [])
+    priority_paths = _preferred_workflow_paths(root, families=priority_families or [], workflow_index=workflow_index)
     priority_path_set = set(priority_paths)
     priority_rank = {path_value: index for index, path_value in enumerate(priority_paths)}
 

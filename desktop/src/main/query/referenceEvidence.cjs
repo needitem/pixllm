@@ -33,7 +33,7 @@ function unquoteYamlScalar(value = '') {
 }
 
 function extractRequiredFactsYaml(content = '') {
-  const match = String(content || '').match(/##\s*Required Facts\s*```ya?ml\s*([\s\S]*?)```/i);
+  const match = String(content || '').match(/##\s*Verified Facts\s*```ya?ml\s*([\s\S]*?)```/i);
   return match ? toStringValue(match[1]) : '';
 }
 

@@ -30,7 +30,7 @@ function normalizeReplacementInput(input = {}, context = {}) {
 function FileEditTool() {
   return defineLocalTool({
     name: 'edit',
-    aliases: ['replace_in_file', 'Edit'],
+    aliases: ['replace_in_file'],
     kind: 'write',
     workspaceRelativePaths: ['path'],
     inputSchema: objectSchema({

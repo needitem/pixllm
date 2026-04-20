@@ -36,6 +36,56 @@
     type WikiSearchResult
   } from './lib/api';
   import { desktop } from './lib/bridge';
+  import { deserializeConversation, serializeConversation } from './lib/conversation';
+  import {
+    diffViewsFromUnknown,
+    extractEditSummaries,
+    type DiffFileView,
+    type DiffLineView
+  } from './lib/diff';
+  import {
+    buildExecutionInspectorItems,
+    buildRunSnapshot,
+    defaultExecutionItemId,
+    executionDetailList,
+    executionDetailMessage,
+    executionDetailValue,
+    executionInputDetail,
+    executionItemHasOutput,
+    executionResultDetail,
+    getActiveExecutionMessage,
+    modelDetailLabel,
+    modelDetailPayload,
+    outputPreviewDetail,
+    showRawPayloadFallback,
+    summarizeExecutionMessage,
+    upsertTranscriptEntry,
+    executionInputLabel,
+    executionResultLabel,
+    compactInputSummary,
+    normalizeLocalTracePayload,
+    type ConversationMessage,
+    type ExecutionInspectorItem,
+    type LocalToolTraceEntry
+  } from './lib/execution';
+  import {
+    buildWorkspaceOptions,
+    compactEndpoint,
+    formatDateTime,
+    getPathTail,
+    getWorkspaceName,
+    resolveWikiId,
+    summarizeWorkspaceState,
+    toneClass,
+    truncateText
+  } from './lib/ui';
+  import {
+    diffLineNumber,
+    diffMarker,
+    stringifyDetail,
+    summarizeTerminal,
+    summarizeTransition
+  } from './lib/format';
   import { desktopSettings } from './lib/store';
 
   type WorkspaceFileEntry = {
@@ -44,102 +94,12 @@
     size: number;
   };
 
-  type WorkspaceSearchEntry = {
-    path: string;
-    line: number;
-    text: string;
-  };
-
-  type DiffLineView = {
-    type: 'context' | 'add' | 'remove';
-    oldNumber?: number;
-    newNumber?: number;
-    text: string;
-  };
-
-  type DiffHunkView = {
-    header: string;
-    oldStart: number;
-    oldLines: number;
-    newStart: number;
-    newLines: number;
-    lines: DiffLineView[];
-  };
-
-  type DiffFileView = {
-    file: string;
-    added: number;
-    removed: number;
-    diff: string;
-    hunks: DiffHunkView[];
-    truncated?: boolean;
-  };
-
-  type LocalToolTraceEntry = {
-    round: number;
-    thought: string;
-    tool: string;
-    input: Record<string, unknown>;
-    observation: unknown;
-  };
-
-  type ConversationMessage = {
-    id: string;
-    role: 'user' | 'assistant';
-    content: string;
-    timestamp: Date;
-    status?: string;
-    state?: 'streaming' | 'done' | 'error' | 'cancelled';
-    runId?: string;
-    statusEvents?: Array<{
-      id: string;
-      key?: string;
-      message: string;
-      phase?: string;
-      tool?: string;
-      note?: string;
-      detail?: unknown;
-      timestamp: Date;
-    }>;
-    localTranscript?: Array<Record<string, unknown>>;
-    localTrace?: LocalToolTraceEntry[];
-    localSummary?: string;
-    localError?: string;
-    runSnapshot?: {
-      runId: string;
-      status?: string;
-      responseType?: string;
-      tasks: RunTask[];
-      approvals: RunApproval[];
-      artifacts: RunArtifact[];
-      metadata?: Record<string, unknown>;
-      editSummaries: DiffFileView[];
-    };
-    reasoningSummary?: Record<string, unknown>;
-    reasoningTrace?: Array<Record<string, unknown>>;
-    reasoningNarrative?: string[];
-    layerManifest?: Record<string, unknown>;
-    localOverlay?: Record<string, unknown>;
-  };
-
   type SessionListItem = {
     id: string;
     workspacePath: string;
     title: string;
     createdAt: string;
     updatedAt: string;
-  };
-
-  type ExecutionInspectorItem = {
-    id: string;
-    title: string;
-    subtitle: string;
-    badge: string;
-    tone: string;
-    detailTitle: string;
-    detail: unknown;
-    diffs?: DiffFileView[];
-    note?: string;
   };
 
   type DesktopAppInfo = {
@@ -179,21 +139,16 @@
   let runApprovals: RunApproval[] = [];
   let runEditSummaries: DiffFileView[] = [];
 
-  let workspaceInfo = '';
   let workspaceStatus = '';
   let workspaceDiff = '';
 
   let workspaceFiles: WorkspaceFileEntry[] = [];
   let selectedFilePath = '';
-  let selectedFileContent = '';
-  let workspaceSearchResults: WorkspaceSearchEntry[] = [];
   let activeWorkspacePath = '';
   let workspaceRefreshToken = 0;
 
   let localToolTrace: LocalToolTraceEntry[] = [];
   let localToolSummary = '';
-  let localToolContext = '';
-  let localToolError = '';
   let localPrimaryFilePath = '';
   let localPrimaryFileContent = '';
   let wikiQuery = '';
@@ -214,7 +169,6 @@
 
   let chatInput = '';
   let engineQuestionChecked = DEFAULT_SETTINGS.engineQuestionDefault;
-  const includeWorkspaceContext = true;
   let activeStreamCancel: null | (() => Promise<{ ok: boolean; requestId: string }>) = null;
   let activeStreamUnsubscribe: null | (() => void) = null;
   let busy = false;
@@ -229,15 +183,13 @@
   let selectedExecutionItemId = '';
   let expandedExecutionMessageIds: string[] = [];
   let lastAutoExpandedExecutionMessageId = '';
-  let runDetailPollTimer: number | null = null;
-  let runDetailPollMessageId = '';
-  let runDetailPollRunId = '';
-  let runDetailPollInFlight = false;
   let windowWidth = 0;
   let sidebarOpen = true;
   let compactLayoutActive = false;
-  const RUN_DETAIL_POLL_MS = 1800;
   const SIDEBAR_OVERLAY_BREAKPOINT = 1360;
+  const changedPathsCache = new Map<string, string[]>();
+  const executionItemsCache = new Map<string, { key: string; items: ExecutionInspectorItem[] }>();
+  const visibleExecutionItemsCache = new Map<string, { key: string; items: ExecutionInspectorItem[] }>();
 
   $: selectedRun = runs.find((run) => run.run_id === selectedRunId) ?? null;
   $: if (selectedRunId) {
@@ -255,9 +207,11 @@
   $: workspaceOptions = buildWorkspaceOptions(settings.workspacePath, settings.recentWorkspaces);
   $: selectedSession = sessions.find((session) => session.id === selectedSessionId) || null;
   $: workspaceFileCount = workspaceFiles.length;
-  $: workspaceDirtyCount = extractChangedPaths(workspaceStatus).length;
-  $: workspaceDiffCount = extractChangedPaths(workspaceDiff).length;
-  $: changedWorkspacePaths = extractChangedPaths(workspaceStatus).slice(0, 5);
+  $: workspaceStatusPaths = extractChangedPathsCached(workspaceStatus);
+  $: workspaceDiffPaths = extractChangedPathsCached(workspaceDiff);
+  $: workspaceDirtyCount = workspaceStatusPaths.length;
+  $: workspaceDiffCount = workspaceDiffPaths.length;
+  $: changedWorkspacePaths = workspaceStatusPaths.slice(0, 5);
   $: selectedSessionTimestamp = formatDateTime(
     selectedSession?.updatedAt || selectedSession?.createdAt || ''
   );
@@ -329,89 +283,6 @@
     void refreshWikiContext();
   }
 
-  function getWorkspaceName(workspacePath: string): string {
-    if (!workspacePath) return 'Reference mode';
-    const parts = workspacePath.replace(/\\/g, '/').split('/').filter(Boolean);
-    return parts[parts.length - 1] || workspacePath;
-  }
-
-  function getPathTail(pathValue: string, segments = 2): string {
-    const parts = String(pathValue || '')
-      .replace(/\\/g, '/')
-      .split('/')
-      .filter(Boolean);
-    if (parts.length <= segments) return parts.join('/');
-    return `.../${parts.slice(-segments).join('/')}`;
-  }
-
-  function compactEndpoint(value: string): string {
-    return String(value || '')
-      .replace(/^https?:\/\//i, '')
-      .replace(/\/api\/?$/i, '')
-      .trim();
-  }
-
-  function resolveWikiId(value: string): string {
-    const normalized = String(value || '').trim().toLowerCase();
-    return normalized || 'engine';
-  }
-
-  function formatDateTime(value: string | Date | null | undefined): string {
-    if (!value) return 'Not available';
-    const date = value instanceof Date ? value : new Date(value);
-    if (Number.isNaN(date.getTime())) {
-      return String(value);
-    }
-    return `${date.toLocaleDateString([], {
-      month: 'short',
-      day: 'numeric'
-    })} ${date.toLocaleTimeString([], {
-      hour: '2-digit',
-      minute: '2-digit'
-    })}`;
-  }
-
-  function summarizeWorkspaceState(
-    workspacePath: string,
-    dirtyCount: number,
-    diffCount: number
-  ): string {
-    if (!workspacePath) return 'Backend reference mode is active. Searches run against the server on 192.168.2.238.';
-    if (dirtyCount === 0 && diffCount === 0) return 'Workspace is clean and ready for a new run.';
-    if (dirtyCount > 0 && diffCount > 0) {
-      return `${dirtyCount} tracked changes across ${diffCount} files.`;
-    }
-    if (dirtyCount > 0) return `${dirtyCount} tracked changes detected.`;
-    return `${diffCount} files included in the latest diff snapshot.`;
-  }
-
-  function buildWorkspaceOptions(currentWorkspace: string, recentWorkspaces: string[]): string[] {
-    const items = [currentWorkspace, ...(Array.isArray(recentWorkspaces) ? recentWorkspaces : [])];
-    const unique = [];
-    const seen = new Set();
-    for (const item of items) {
-      const value = String(item || '').trim();
-      if (!value || seen.has(value)) continue;
-      seen.add(value);
-      unique.push(value);
-    }
-    return unique;
-  }
-
-  function toneClass(value: string | null | undefined): string {
-    const normalized = String(value || '').toLowerCase();
-    if (/ok|healthy|success|complete|approved|done/.test(normalized)) return 'success';
-    if (/running|pending|queued|progress|active/.test(normalized)) return 'accent';
-    if (/error|fail|reject|cancel|denied/.test(normalized)) return 'danger';
-    return 'neutral';
-  }
-
-  function truncateText(value: string | null | undefined, limit = 150): string {
-    const text = String(value || '').trim();
-    if (!text) return 'No prompt recorded.';
-    return text.length > limit ? `${text.slice(0, limit - 3)}...` : text;
-  }
-
   function applyWikiPage(page: WikiPage | null | undefined) {
     wikiSelectedPath = String(page?.path || '').trim();
     wikiPageTitle = String(page?.title || '').trim();
@@ -440,28 +311,6 @@
       output.push(item);
     }
     return output;
-  }
-
-  function latestAssistantMessage(): ConversationMessage | null {
-    for (let index = conversation.length - 1; index >= 0; index -= 1) {
-      const message = conversation[index];
-      if (message.role === 'assistant' && String(message.content || '').trim()) {
-        return message;
-      }
-    }
-    return null;
-  }
-
-  function latestUserPromptBefore(messageId: string): string {
-    const targetIndex = conversation.findIndex((message) => message.id === messageId);
-    if (targetIndex < 0) return '';
-    for (let index = targetIndex - 1; index >= 0; index -= 1) {
-      const message = conversation[index];
-      if (message.role === 'user' && String(message.content || '').trim()) {
-        return String(message.content || '').trim();
-      }
-    }
-    return '';
   }
 
   async function openWikiPage(pathValue: string, options?: { preserveStatus?: boolean }) {
@@ -546,57 +395,6 @@
     }
   }
 
-  function summarizeTransition(payload?: StreamTransitionPayload): string {
-    const reason = String(payload?.reason || '').trim();
-    if (!reason) return 'Runtime transition';
-    const labels: Record<string, string> = {
-      message_budget_compaction: 'Transcript compacted for message budget',
-      tool_result_budget_compaction: 'Older tool results compacted',
-      approx_token_budget_compaction: 'Approximate token budget compaction',
-      reactive_compact_retry: 'Reactive compaction retry',
-      max_output_tokens_escalate: 'Raised model output budget',
-      truncated_assistant_recovery: 'Recovering from truncated assistant output',
-      max_output_tokens_recovery: 'Continuing after output cutoff',
-      repeated_tool_batch_recovery: 'Blocked repeated tool batch',
-      tool_failure_recovery: 'Recovering after tool failures',
-      next_turn: 'Continuing to next reasoning turn',
-      next_speaker_check: 'Checking whether the draft can finalize',
-      reference_search_needs_code_grounding: 'Company reference search needs real code grounding',
-      reference_search_saturated: 'Company reference search saturated for code change',
-      reference_search_answer_saturated: 'Company reference search saturated for answer',
-      ungrounded_answer: 'Draft answer failed grounding check',
-      ungrounded_answer_retry: 'Retrying after grounding failure',
-      ungrounded_answer_warning: 'Final answer kept with grounding warning',
-      final_answer: 'Final answer produced',
-      fallback: 'Fallback answer produced',
-      assistant_parse_retry: 'Retrying after malformed assistant output',
-      missing_tool_use_or_answer: 'Assistant produced neither answer nor tool request',
-      model_retry: 'Retrying model request',
-      cancelled: 'Run cancelled'
-    };
-    const base = labels[reason] || reason.replace(/_/g, ' ');
-    const count = Number(payload?.count || 0);
-    if ((reason === 'ungrounded_answer' || reason === 'ungrounded_answer_retry' || reason === 'ungrounded_answer_warning') && count > 0) {
-      return `${base} (${count} reference${count === 1 ? '' : 's'})`;
-    }
-    return base;
-  }
-
-  function summarizeTerminal(payload?: StreamTerminalPayload): string {
-    const reason = String(payload?.reason || '').trim();
-    if (!reason) return 'Run completed';
-    const labels: Record<string, string> = {
-      tool_failure: 'Run stopped after tool failure',
-      no_progress: 'Run stopped after making no progress',
-      repeated_tool_batch: 'Run stopped after repeating the same tool batch',
-      ungrounded_answer: 'Run stopped because the answer could not be grounded',
-      parse_error_budget: 'Run stopped after repeated malformed assistant output',
-      turn_budget: 'Run stopped after reaching the turn budget',
-      cancelled: 'Run cancelled'
-    };
-    return labels[reason] || reason.replace(/_/g, ' ');
-  }
-
   function createMessageId() {
     if (globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function') {
       return globalThis.crypto.randomUUID();
@@ -672,251 +470,6 @@
     activeStreamCancel = null;
   }
 
-  function stringifyDetail(value: unknown): string {
-    if (typeof value === 'string') return value;
-    try {
-      return JSON.stringify(value, null, 2);
-    } catch {
-      return String(value ?? '');
-    }
-  }
-
-  function isRecord(value: unknown): value is Record<string, unknown> {
-    return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
-  }
-
-  function toNonEmptyString(value: unknown): string {
-    return typeof value === 'string' ? value.trim() : '';
-  }
-
-  function firstDetailRecord(detail: unknown): Record<string, unknown> | null {
-    if (!isRecord(detail)) return null;
-    if (isRecord(detail.detail)) return detail.detail;
-    if (isRecord(detail.result)) return detail.result;
-    return detail;
-  }
-
-  function executionInputDetail(detail: unknown): unknown {
-    const record = isRecord(detail) ? detail : null;
-    if (!record || record.input === undefined) return null;
-    return record.input;
-  }
-
-  function executionResultDetail(detail: unknown): unknown {
-    const record = isRecord(detail) ? detail : null;
-    if (!record) return null;
-    if (record.detail !== undefined) return record.detail;
-    if (record.result !== undefined) return record.result;
-    return null;
-  }
-
-  function modelDetailPayload(item: ExecutionInspectorItem): unknown {
-    if (item.title === 'Raw assistant output') {
-      const record = isRecord(item.detail) ? item.detail : null;
-      if (!record) return item.detail;
-      const rawText = toNonEmptyString(record.text);
-      return rawText || record;
-    }
-    if (item.title === 'Model request payload') {
-      return item.detail;
-    }
-    if (item.title === 'Model response') {
-      const record = isRecord(item.detail) ? item.detail : null;
-      if (!record) return item.detail;
-      const rawText = toNonEmptyString(record.rawText);
-      return rawText || record.payload || record;
-    }
-    if (item.title === 'Model error') {
-      return item.detail;
-    }
-    return null;
-  }
-
-  function transcriptItemTitle(kind: string): string | null {
-    switch (String(kind || '').trim()) {
-      case 'raw_assistant_output':
-        return 'Raw assistant output';
-      case 'model_request':
-        return 'Model request payload';
-      case 'model_response':
-        return 'Model response';
-      case 'model_error':
-        return 'Model error';
-      case 'model_budget':
-        return 'Model budget';
-      case 'model_transport':
-        return 'Model transport';
-      case 'model_tool_calls':
-        return 'Model tool calls';
-      case 'model_retry':
-        return 'Model retry';
-      case 'model_reasoning':
-        return 'Model reasoning';
-      case 'prompt_token_count':
-        return 'Prompt token count';
-      case 'prompt_token_cache_hit':
-        return 'Prompt token cache';
-      case 'prompt_token_fallback':
-        return 'Prompt token fallback';
-      default:
-        return null;
-    }
-  }
-
-  function transcriptItemDetailTitle(kind: string): string {
-    switch (String(kind || '').trim()) {
-      case 'raw_assistant_output':
-        return 'Raw assistant output';
-      case 'model_request':
-        return 'Raw model request';
-      case 'model_response':
-        return 'Raw model response';
-      case 'model_error':
-        return 'Model request error';
-      default:
-        return transcriptItemTitle(kind) || 'Transcript detail';
-    }
-  }
-
-  function transcriptItemTone(kind: string): string {
-    switch (String(kind || '').trim()) {
-      case 'model_error':
-      case 'prompt_token_fallback':
-        return 'danger';
-      case 'model_retry':
-        return 'accent';
-      default:
-        return 'neutral';
-    }
-  }
-
-  function upsertTranscriptEntry(
-    items: Array<Record<string, unknown>> = [],
-    nextEntry: Record<string, unknown>,
-    matcher: (entry: Record<string, unknown>) => boolean
-  ): Array<Record<string, unknown>> {
-    const filtered = (Array.isArray(items) ? items : []).filter((entry) => !matcher(entry));
-    return [...filtered, nextEntry];
-  }
-
-  function modelDetailLabel(item: ExecutionInspectorItem): string {
-    if (item.title === 'Raw assistant output') return 'Raw assistant output';
-    if (item.title === 'Model request payload') return 'Request payload';
-    if (item.title === 'Model response') return 'Model response';
-    if (item.title === 'Model error') return 'Model error';
-    return 'Detail';
-  }
-
-  function executionInputLabel(item: ExecutionInspectorItem): string {
-    return item.title === 'Model request payload' ? 'Request payload' : 'Execution input';
-  }
-
-  function executionResultLabel(item: ExecutionInspectorItem): string {
-    if (item.title === 'Model response') return 'Model response';
-    if (item.title === 'Model error') return 'Model error';
-    return 'Execution detail';
-  }
-
-  function outputPreviewDetail(detail: unknown): string {
-    return executionDetailValue(detail, 'output_preview');
-  }
-
-  function executionItemHasOutput(item: ExecutionInspectorItem): boolean {
-    if (item.title !== 'Model request payload' && modelDetailPayload(item) != null) {
-      return true;
-    }
-    if (executionResultDetail(item.detail) !== null) {
-      return true;
-    }
-    if (toNonEmptyString(outputPreviewDetail(item.detail))) {
-      return true;
-    }
-    if (Array.isArray(item.diffs) && item.diffs.length > 0) {
-      return true;
-    }
-    if (toNonEmptyString(item.note) && item.note !== item.title && item.note !== item.subtitle) {
-      return true;
-    }
-    return false;
-  }
-
-  function showRawPayloadFallback(item: ExecutionInspectorItem): boolean {
-    return !['Raw assistant output', 'Model request payload', 'Model response', 'Model error'].includes(item.title);
-  }
-
-  function runTranscriptEntries(message: ConversationMessage): Array<Record<string, unknown>> {
-    if (Array.isArray(message.localTranscript) && message.localTranscript.length > 0) {
-      return message.localTranscript;
-    }
-    return [];
-  }
-
-  function executionDetailMessage(detail: unknown): string {
-    const items = new Set<string>();
-    const root = isRecord(detail) ? detail : null;
-    const nested = firstDetailRecord(detail);
-    for (const value of [
-      root?.message,
-      root?.error,
-      nested?.message,
-      nested?.error,
-      root?.blockingMessage,
-    ]) {
-      const text = toNonEmptyString(value);
-      if (text) items.add(text);
-    }
-    return Array.from(items).join('\n');
-  }
-
-  function executionDetailList(detail: unknown, key: string): string[] {
-    const root = isRecord(detail) ? detail : null;
-    const nested = firstDetailRecord(detail);
-    const candidates = [root?.[key], nested?.[key]];
-    for (const value of candidates) {
-      if (!Array.isArray(value)) continue;
-      return value
-        .map((item) => String(item || '').trim())
-        .filter(Boolean)
-        .slice(0, 12);
-    }
-    return [];
-  }
-
-  function executionDetailValue(detail: unknown, key: string): string {
-    const root = isRecord(detail) ? detail : null;
-    const nested = firstDetailRecord(detail);
-    return toNonEmptyString(root?.[key]) || toNonEmptyString(nested?.[key]);
-  }
-
-  function compactInputSummary(value: unknown): string {
-    if (!value || typeof value !== 'object') {
-      return '';
-    }
-    const entries = Object.entries(value as Record<string, unknown>)
-      .filter(([, item]) => item !== undefined && item !== null && String(item) !== '')
-      .slice(0, 4)
-      .map(([key, item]) => {
-        const rendered =
-          typeof item === 'string'
-            ? item
-            : typeof item === 'number' || typeof item === 'boolean'
-              ? String(item)
-              : JSON.stringify(item);
-        return `${key}=${rendered}`;
-      });
-    return entries.join(' ');
-  }
-
-  function diffMarker(type: DiffLineView['type']) {
-    if (type === 'add') return '+';
-    if (type === 'remove') return '-';
-    return ' ';
-  }
-
-  function diffLineNumber(value?: number) {
-    return Number.isInteger(value) ? String(value) : '';
-  }
-
   function extractChangedPaths(text: string): string[] {
     const seen = new Set<string>();
     const paths: string[] = [];
@@ -933,390 +486,76 @@
     return paths;
   }
 
-  function extractPromptSearchTokens(prompt: string): string[] {
-    const source = String(prompt || '').trim();
-    const tokens = new Set<string>();
-    for (const raw of source.match(/[A-Za-z_][A-Za-z0-9_]{2,}/g) ?? []) {
-      const rawToken = String(raw || '').trim();
-      const token = rawToken.toLowerCase();
-      if (!token) continue;
-      tokens.add(token);
-      for (const part of rawToken.split(/_|(?=[A-Z])/)) {
-        const normalized = String(part || '').trim().toLowerCase();
-        if (normalized.length >= 3) tokens.add(normalized);
-      }
+  function extractChangedPathsCached(text: string): string[] {
+    const source = String(text || '');
+    const cached = changedPathsCache.get(source);
+    if (cached) {
+      return cached;
     }
-    for (const raw of source.match(/[\uAC00-\uD7A3]{2,}/g) ?? []) {
-      const token = String(raw || '').trim();
-      if (token.length >= 2) tokens.add(token);
+    const next = extractChangedPaths(source);
+    changedPathsCache.set(source, next);
+    if (changedPathsCache.size > 24) {
+      const oldestKey = changedPathsCache.keys().next().value;
+      if (oldestKey !== undefined) changedPathsCache.delete(oldestKey);
     }
-    return Array.from(tokens);
-  }
-
-  function scoreWorkspaceCandidate(pathValue: string, prompt: string): number {
-    const normalized = String(pathValue || '').replace(/\\/g, '/');
-    const lowered = normalized.toLowerCase();
-    const fileName = normalized.split('/').pop() || normalized;
-    const tokens = extractPromptSearchTokens(prompt);
-    let score = 0;
-    for (const token of tokens) {
-      if (lowered.includes(token)) score += Math.max(8, Math.min(token.length, 18));
-      if (fileName.toLowerCase().includes(token)) score += 6;
-    }
-    if (/\/(?:obj|bin|dist|build|out|node_modules)\//i.test(normalized) || /\.(?:g|gen|generated)\.[^.]+$/i.test(normalized)) score -= 30;
-    return score;
-  }
-
-  async function recoverLocalEvidenceFromWorkspace(prompt: string) {
-    let fallbackStatus = workspaceStatus;
-    let fallbackDiff = workspaceDiff;
-    let fallbackFiles = workspaceFiles;
-
-    if (settings.workspacePath) {
-      if (!fallbackStatus.trim()) {
-        const status = await desktop.svnStatus(settings.workspacePath);
-        fallbackStatus = status.stdout || status.stderr || status.error || '';
-      }
-      if (!fallbackDiff.trim()) {
-        const diff = await desktop.svnDiff(settings.workspacePath);
-        fallbackDiff = diff.stdout || diff.stderr || diff.error || '';
-      }
-      if (!Array.isArray(fallbackFiles) || fallbackFiles.length === 0) {
-        const files = await desktop.listWorkspaceFiles(settings.workspacePath, { limit: 5000 });
-        fallbackFiles = Array.isArray(files.items) ? files.items : [];
-      }
-    }
-
-    const candidates = [
-      ...extractChangedPaths(fallbackDiff),
-      ...extractChangedPaths(fallbackStatus),
-      ...fallbackFiles.map((item) => item.path)
-    ];
-    const unique = Array.from(new Set(candidates.map((item) => String(item || '').replace(/\\/g, '/').trim()).filter(Boolean)));
-    const ranked = unique
-      .map((item) => ({ path: item, score: scoreWorkspaceCandidate(item, prompt) }))
-      .filter((item) => item.score > 0)
-      .sort((a, b) => b.score - a.score || a.path.localeCompare(b.path))
-      .slice(0, 6);
-
-    const traces: LocalToolTraceEntry[] = [];
-    let primaryPath = '';
-    let primaryContent = '';
-    for (const [index, candidate] of ranked.entries()) {
-      const read = await desktop.readWorkspaceFile(settings.workspacePath, candidate.path, 16000);
-      traces.push({
-        round: index + 1,
-        thought: 'renderer fallback read',
-        tool: 'read_file',
-        input: { path: candidate.path, max_chars: 16000 },
-        observation: read
-      });
-      if (read.ok && !primaryPath && String(read.content || '').trim()) {
-        primaryPath = candidate.path;
-        primaryContent = read.content;
-      }
-    }
-
-    if (!primaryPath || !primaryContent.trim()) {
-      return {
-        trace: traces,
-        summary: '',
-        contextText: '',
-        error: '',
-        workflowLane: {},
-        workspaceGraph: {}
-      };
-    }
-
-    const relatedFiles = ranked.map((item) => item.path).slice(0, 4);
-    const workflowLane =
-      /\.(cs|vb|c|cc|cpp|cxx|h|hh|hpp|hxx|py|js|cjs|mjs|ts|tsx|jsx)$/i.test(primaryPath)
-        ? {
-            name: 'read',
-            source: 'renderer_fallback',
-            reasons: ['selected_path_is_executable']
-          }
-        : {
-            name: 'read',
-            source: 'renderer_fallback',
-            reasons: ['renderer_recovery']
-          };
-    const summary = `Renderer fallback recovered local evidence. Primary file: ${primaryPath}`;
-    const contextText = [
-      '[Local Flow Summary]',
-      summary,
-      '',
-      '[Primary File Excerpt]',
-      `Path=${primaryPath}`,
-      primaryContent.slice(0, 3000),
-      '',
-      '[Related Files]',
-      relatedFiles.join('\n')
-    ].join('\n');
-
-    return {
-      trace: traces,
-      summary,
-      contextText,
-      error: '',
-      primaryFilePath: primaryPath,
-      primaryFileContent: primaryContent,
-      workflowLane,
-      workspaceGraph: {
-        version: 1,
-        question: prompt,
-        focus_file: primaryPath,
-        core_files: relatedFiles.slice(0, 3),
-        supporting_files: relatedFiles.slice(3),
-        nodes: relatedFiles.map((pathValue, index) => ({
-          id: pathValue,
-          path: pathValue,
-          role: index === 0 ? 'focus' : index < 3 ? 'core' : 'support',
-          representative_evidence: index === 0 ? primaryContent.slice(0, 220) : '',
-          reasons: [],
-        })),
-        edges: [],
-      }
-    };
-  }
-
-  function describeRunStep(step: RunStep) {
-    const toolName =
-      typeof step?.metadata?.tool === 'string'
-        ? step.metadata.tool
-        : step?.kind === 'tool'
-          ? step.title.replace(/^Tool:\s*/i, '')
-          : step?.title || step?.step_key || 'step';
-    const inputText = compactInputSummary(step?.input);
-    return inputText ? `${toolName} ${inputText}` : toolName;
-  }
-
-  function toolSourceLabel(toolName: string, scope: 'local' | 'server'): string {
-    if (scope === 'local') {
-      return 'Local workspace';
-    }
-    const normalized = String(toolName || '').toLowerCase();
-    if (normalized === 'doc_search' || normalized === 'doc_read') {
-      return 'Server docs/embedding';
-    }
-    return 'Server code search';
-  }
-
-  function parseUnifiedDiffBlock(file: string, diff: string): DiffFileView | null {
-    const lines = String(diff || '').split(/\r?\n/);
-    const hunks: DiffHunkView[] = [];
-    let current: DiffHunkView | null = null;
-    let oldLine = 0;
-    let newLine = 0;
-    let added = 0;
-    let removed = 0;
-
-    const flush = () => {
-      if (current && current.lines.length > 0) {
-        hunks.push(current);
-      }
-      current = null;
-    };
-
-    for (const line of lines) {
-      if (!line) continue;
-      if (line.startsWith('@@ ')) {
-        flush();
-        const match = line.match(/^@@\s+\-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?\s+@@/);
-        if (!match) continue;
-        current = {
-          header: line,
-          oldStart: Number(match[1] || 0),
-          oldLines: Number(match[2] || 1),
-          newStart: Number(match[3] || 0),
-          newLines: Number(match[4] || 1),
-          lines: [],
-        };
-        oldLine = current.oldStart;
-        newLine = current.newStart;
-        continue;
-      }
-      if (!current) continue;
-      if (line.startsWith('+') && !line.startsWith('+++')) {
-        current.lines.push({ type: 'add', newNumber: newLine, text: line.slice(1) });
-        newLine += 1;
-        added += 1;
-        continue;
-      }
-      if (line.startsWith('-') && !line.startsWith('---')) {
-        current.lines.push({ type: 'remove', oldNumber: oldLine, text: line.slice(1) });
-        oldLine += 1;
-        removed += 1;
-        continue;
-      }
-      if (line.startsWith(' ')) {
-        current.lines.push({
-          type: 'context',
-          oldNumber: oldLine,
-          newNumber: newLine,
-          text: line.slice(1),
-        });
-        oldLine += 1;
-        newLine += 1;
-      }
-    }
-
-    flush();
-    if (hunks.length === 0) return null;
-    return {
-      file: String(file || 'unknown'),
-      added,
-      removed,
-      diff: String(diff || ''),
-      hunks,
-    };
-  }
-
-  function uniqueDiffViews(items: DiffFileView[]) {
-    const unique = new Map<string, DiffFileView>();
-    for (const item of items) {
-      const key = `${item.file}::${item.diff}`;
-      if (!unique.has(key)) unique.set(key, item);
-    }
-    return Array.from(unique.values());
-  }
-
-  function diffViewsFromUnknown(value: unknown): DiffFileView[] {
-    if (!value) return [];
-    if (typeof value === 'string') return extractUnifiedDiffs(value);
-    if (Array.isArray(value)) {
-      return uniqueDiffViews(value.flatMap((item) => diffViewsFromUnknown(item)));
-    }
-    if (!isRecord(value)) return [];
-
-    const results: DiffFileView[] = [];
-    if (typeof value.diff === 'string' && value.diff.trim()) {
-      const file = typeof value.file === 'string'
-        ? value.file
-        : typeof value.path === 'string'
-          ? value.path
-          : 'unknown';
-      const parsed = parseUnifiedDiffBlock(file, value.diff);
-      if (parsed) {
-        parsed.added = Number(value.added ?? parsed.added);
-        parsed.removed = Number(value.removed ?? parsed.removed);
-        parsed.truncated = Boolean(value.diff_truncated ?? value.truncated);
-        results.push(parsed);
-      }
-    }
-    if (Array.isArray(value.edit_summaries)) {
-      results.push(...value.edit_summaries.flatMap((item) => diffViewsFromUnknown(item)));
-    }
-    if (typeof value.output_preview === 'string') {
-      results.push(...extractUnifiedDiffs(value.output_preview));
-    }
-    if (typeof value.content === 'string') {
-      results.push(...extractUnifiedDiffs(value.content));
-    }
-    if (isRecord(value.result)) {
-      results.push(...diffViewsFromUnknown(value.result));
-    }
-
-    return uniqueDiffViews(results);
-  }
-
-  function extractUnifiedDiffs(text: string) {
-    const lines = String(text || '').split(/\r?\n/);
-    const results: DiffFileView[] = [];
-    let current: { file: string; diffLines: string[] } | null = null;
-
-    const flush = () => {
-      if (!current || current.diffLines.length === 0) return;
-      const parsed = parseUnifiedDiffBlock(current.file, current.diffLines.join('\n'));
-      if (parsed) results.push(parsed);
-      current = null;
-    };
-
-    for (const line of lines) {
-      if (line.startsWith('diff --git ')) {
-        flush();
-        const match = line.match(/ b\/(.+)$/);
-        current = {
-          file: match?.[1] || 'unknown',
-          diffLines: [line]
-        };
-        continue;
-      }
-      if (!current && line.startsWith('+++ b/')) {
-        flush();
-        current = {
-          file: line.slice(6).trim() || 'unknown',
-          diffLines: [line]
-        };
-        continue;
-      }
-      if (!current) continue;
-      current.diffLines.push(line);
-    }
-
-    flush();
-    return results;
-  }
-
-  function extractEditSummaries(runDetail: ExecutionRun) {
-    const texts: string[] = [];
-    for (const artifact of Array.isArray(runDetail.artifacts) ? runDetail.artifacts : []) {
-      if (typeof artifact.content === 'string') {
-        texts.push(artifact.content);
-      }
-    }
-    for (const task of Array.isArray(runDetail.tasks) ? runDetail.tasks : []) {
-      for (const step of Array.isArray(task.steps) ? task.steps : []) {
-        if (typeof step.output_preview === 'string') {
-          texts.push(step.output_preview);
-        }
-      }
-    }
-
-    const parsed = texts.flatMap((text) => extractUnifiedDiffs(text));
-    const unique = new Map<string, DiffFileView>();
-    for (const item of parsed) {
-      const key = `${item.file}::${item.diff}`;
-      if (!unique.has(key)) unique.set(key, item);
-    }
-    return Array.from(unique.values());
-  }
-
-  function hasExecutionData(message: ConversationMessage | null | undefined): boolean {
-    if (!message || message.role !== 'assistant') return false;
-    return Boolean(
-      (message.statusEvents?.length ?? 0) > 0 ||
-        (message.localTrace?.length ?? 0) > 0 ||
-        (message.localTranscript?.length ?? 0) > 0 ||
-        message.localSummary ||
-        message.localError ||
-        message.runSnapshot
-    );
-  }
-
-  function getActiveExecutionMessage(messages: ConversationMessage[]): ConversationMessage | null {
-    for (let index = messages.length - 1; index >= 0; index -= 1) {
-      const message = messages[index];
-      if (message.role !== 'assistant') continue;
-      if (message.state !== 'streaming') continue;
-      if (!hasExecutionData(message)) continue;
-      return message;
-    }
-    return null;
+    return next;
   }
 
   function selectExecutionMessage(messageId: string) {
     selectedExecutionMessageId = messageId;
     const message = conversation.find((entry) => entry.id === messageId);
-    const items = message ? buildExecutionInspectorItems(message) : [];
+    const items = message ? getExecutionInspectorItems(message) : [];
     selectedExecutionItemId = defaultExecutionItemId(items);
     if (messageId && !expandedExecutionMessageIds.includes(messageId)) {
       expandedExecutionMessageIds = [...expandedExecutionMessageIds, messageId];
     }
   }
 
+  function executionCacheKey(message: ConversationMessage): string {
+    const runSnapshot = message.runSnapshot;
+    return [
+      message.id,
+      message.state || '',
+      message.statusEvents?.length ?? 0,
+      message.localTrace?.length ?? 0,
+      message.localTranscript?.length ?? 0,
+      message.localSummary || '',
+      message.localError || '',
+      runSnapshot?.tasks.length ?? 0,
+      runSnapshot?.approvals.length ?? 0,
+      runSnapshot?.artifacts.length ?? 0,
+      runSnapshot?.editSummaries?.length ?? 0
+    ].join('|');
+  }
+
+  function getExecutionInspectorItems(message: ConversationMessage): ExecutionInspectorItem[] {
+    const cacheKey = executionCacheKey(message);
+    const cached = executionItemsCache.get(message.id);
+    if (cached && cached.key === cacheKey) {
+      return cached.items;
+    }
+    const items = buildExecutionInspectorItems(message);
+    executionItemsCache.set(message.id, { key: cacheKey, items });
+    if (executionItemsCache.size > 64) {
+      const oldestKey = executionItemsCache.keys().next().value;
+      if (oldestKey !== undefined) executionItemsCache.delete(oldestKey);
+    }
+    return items;
+  }
+
   function getVisibleExecutionItems(message: ConversationMessage): ExecutionInspectorItem[] {
-    return buildExecutionInspectorItems(message).filter((item) => executionItemHasOutput(item));
+    const cacheKey = executionCacheKey(message);
+    const cached = visibleExecutionItemsCache.get(message.id);
+    if (cached && cached.key === cacheKey) {
+      return cached.items;
+    }
+    const items = getExecutionInspectorItems(message).filter((item) => executionItemHasOutput(item));
+    visibleExecutionItemsCache.set(message.id, { key: cacheKey, items });
+    if (visibleExecutionItemsCache.size > 64) {
+      const oldestKey = visibleExecutionItemsCache.keys().next().value;
+      if (oldestKey !== undefined) visibleExecutionItemsCache.delete(oldestKey);
+    }
+    return items;
   }
 
   function hasVisibleExecutionItems(message: ConversationMessage): boolean {
@@ -1354,290 +593,6 @@
     if (isCompactLayout) {
       sidebarOpen = false;
     }
-  }
-
-  function serverToolStepCount(message: ConversationMessage): number {
-    if (!message.runSnapshot) return 0;
-    return message.runSnapshot.tasks.reduce((count, task) => {
-      const steps = Array.isArray(task.steps) ? task.steps : [];
-      return count + steps.filter((step) => step.kind === 'tool').length;
-    }, 0);
-  }
-
-  function executionItemCount(message: ConversationMessage): number {
-    return buildExecutionInspectorItems(message).length;
-  }
-
-  function summarizeExecutionMessage(message: ConversationMessage): string {
-    const total = executionItemCount(message);
-    if (!total) return 'No execution trace recorded';
-    const parts = [];
-    if ((message.statusEvents?.length ?? 0) > 0) {
-      parts.push(`${message.statusEvents?.length ?? 0} updates`);
-    }
-    if ((message.localTrace?.length ?? 0) > 0) {
-      parts.push(`${message.localTrace?.length ?? 0} local tools`);
-    }
-    if (serverToolStepCount(message) > 0) {
-      parts.push(`${serverToolStepCount(message)} server tools`);
-    }
-    return parts.join(' / ') || `${total} execution items`;
-  }
-
-  function defaultExecutionItemId(items: ExecutionInspectorItem[]): string {
-    const preferred =
-      items.find((item) => item.title === 'Raw assistant output')
-      || items.find((item) => item.title === 'Model response')
-      || items.find((item) => item.title === 'Model error')
-      || items[items.length - 1];
-    return preferred?.id || '';
-  }
-
-  function shouldHideExecutionUpdate(event: { phase?: string; tool?: string }): boolean {
-    const phase = String(event?.phase || '').trim().toLowerCase();
-    return [
-      'tool_use',
-      'tool_result',
-      'assistant_message',
-      'tool_batch_start',
-      'tool_batch_end',
-      'transition',
-    ].includes(phase);
-  }
-
-  function buildExecutionInspectorItems(message: ConversationMessage): ExecutionInspectorItem[] {
-    if (!hasExecutionData(message)) {
-      return [];
-    }
-
-    const items: ExecutionInspectorItem[] = [];
-
-    for (const [index, event] of (message.statusEvents ?? []).entries()) {
-      if (shouldHideExecutionUpdate(event)) {
-        continue;
-      }
-      const subtitleParts = [
-        event.phase,
-        event.tool,
-        event.timestamp.toLocaleTimeString()
-      ].filter(Boolean);
-      items.push({
-        id: `${message.id}-status-${event.id || index + 1}`,
-        title: event.message || `Update ${index + 1}`,
-        subtitle: subtitleParts.join(' / ') || 'Execution update',
-        badge: 'update',
-        tone: toneClass(event.phase || message.state || 'active'),
-        detailTitle: `Execution update ${index + 1}`,
-        detail: event.detail ?? null,
-        note: ''
-      });
-    }
-
-    if (message.localSummary || message.localError) {
-      items.push({
-        id: `${message.id}-local-summary`,
-        title: 'Workspace context',
-        subtitle: message.localError ? 'Local loop ended with warnings' : 'Local loop completed',
-        badge: 'local',
-        tone: message.localError ? 'danger' : 'success',
-        detailTitle: 'Local context pass',
-        detail: {
-          summary: message.localSummary || '',
-          error: message.localError || ''
-        },
-        note: message.localSummary || message.localError || ''
-      });
-    }
-
-    for (const step of message.localTrace ?? []) {
-      const detail = {
-        round: step.round,
-        thought: step.thought,
-        tool: step.tool,
-        input: step.input,
-        result: step.observation
-      };
-      items.push({
-        id: `${message.id}-local-step-${step.round}`,
-        title: step.tool || `Local step ${step.round}`,
-        subtitle: compactInputSummary(step.input) || step.thought || 'Open local tool result',
-        badge: 'local',
-        tone: 'accent',
-        detailTitle: `Local tool round ${step.round}`,
-        detail,
-        diffs: diffViewsFromUnknown(detail),
-        note: step.thought || ''
-      });
-    }
-
-    for (const [index, entry] of runTranscriptEntries(message).entries()) {
-      const kind = String(entry?.kind || '');
-      const title = transcriptItemTitle(kind);
-      if (!title) {
-        continue;
-      }
-      const payload = entry?.payload !== undefined ? entry.payload : entry;
-      const attempt = Number(entry?.attempt || 0);
-      const subtitleParts = [
-        kind.replace(/_/g, ' '),
-        attempt > 0 ? `attempt ${attempt}` : '',
-        typeof entry?.turn === 'number' ? `turn ${entry.turn}` : ''
-      ].filter(Boolean);
-      items.push({
-        id: `${message.id}-transcript-${kind}-${index + 1}`,
-        title,
-        subtitle: subtitleParts.join(' / '),
-        badge: 'model',
-        tone: transcriptItemTone(kind),
-        detailTitle: transcriptItemDetailTitle(kind),
-        detail: payload,
-        note: toNonEmptyString(entry?.preview) || toNonEmptyString(entry?.message)
-      });
-    }
-
-    if (message.runSnapshot) {
-      const detail = {
-        run_id: message.runSnapshot.runId,
-        status: message.runSnapshot.status || '',
-        response_type: message.runSnapshot.responseType || '',
-        task_count: message.runSnapshot.tasks.length,
-        approval_count: message.runSnapshot.approvals.length,
-        artifact_count: message.runSnapshot.artifacts.length,
-        approvals: message.runSnapshot.approvals,
-        edit_summaries: message.runSnapshot.editSummaries
-      };
-      items.push({
-        id: `${message.id}-run-summary`,
-        title: 'Run snapshot',
-        subtitle: `${message.runSnapshot.status || 'unknown'} / ${message.runSnapshot.responseType || 'general'}`,
-        badge: 'run',
-        tone: toneClass(message.runSnapshot.status),
-        detailTitle: 'Server run snapshot',
-        detail,
-        diffs: diffViewsFromUnknown(detail)
-      });
-
-      for (const task of message.runSnapshot.tasks) {
-        for (const step of (task.steps ?? []).filter((entry) => entry.kind === 'tool')) {
-          const detail = {
-            task_key: task.task_key,
-            task_title: task.title,
-            task_status: task.status,
-            step_key: step.step_key,
-            step_title: step.title,
-            step_status: step.status,
-            input: step.input,
-            output_preview: step.output_preview || '',
-            metadata: step.metadata || {}
-          };
-          items.push({
-            id: `${message.id}-server-step-${task.task_id}-${step.step_id}`,
-            title: describeRunStep(step),
-            subtitle: step.output_preview
-              ? truncateText(step.output_preview, 72)
-              : step.status || task.title,
-            badge: step.status || 'server',
-            tone: toneClass(step.status),
-            detailTitle: task.title || 'Server tool step',
-            detail,
-            diffs: diffViewsFromUnknown(detail),
-            note: step.output_preview || ''
-          });
-        }
-      }
-    }
-
-    return items;
-  }
-
-  function deserializeConversation(rawMessages: Array<Record<string, unknown>> = []): ConversationMessage[] {
-    return rawMessages.map((item) => ({
-      id: String(item.id || createMessageId()),
-      role: item.role === 'assistant' ? 'assistant' : 'user',
-      content: String(item.content || ''),
-      timestamp: new Date(String(item.timestamp || new Date().toISOString())),
-      status: typeof item.status === 'string' ? item.status : undefined,
-      state:
-        item.state === 'streaming' || item.state === 'error' || item.state === 'cancelled' || item.state === 'done'
-          ? item.state
-          : 'done',
-      runId: typeof item.runId === 'string' ? item.runId : undefined,
-      statusEvents: Array.isArray(item.statusEvents)
-        ? item.statusEvents.map((event) => ({
-            id: String(event?.id || createMessageId()),
-            key: typeof event?.key === 'string' ? event.key : undefined,
-            message: String(event?.message || ''),
-            phase: typeof event?.phase === 'string' ? event.phase : undefined,
-            tool: typeof event?.tool === 'string' ? event.tool : undefined,
-            note: typeof event?.note === 'string' ? event.note : undefined,
-            detail: event?.detail,
-            timestamp: new Date(String(event?.timestamp || new Date().toISOString()))
-          }))
-        : [],
-      localTrace: Array.isArray(item.localTrace)
-        ? item.localTrace.map((step, index) => ({
-            round: Number(step?.round || index + 1),
-            thought: String(step?.thought || ''),
-            tool: String(step?.tool || ''),
-            input: step?.input && typeof step.input === 'object' ? step.input : {},
-            observation: step?.observation ?? null
-          }))
-        : [],
-      localTranscript: Array.isArray(item.localTranscript)
-        ? item.localTranscript.filter((entry) => entry && typeof entry === 'object') as Array<Record<string, unknown>>
-        : [],
-      localSummary: typeof item.localSummary === 'string' ? item.localSummary : undefined,
-      localError: typeof item.localError === 'string' ? item.localError : undefined,
-      reasoningSummary:
-        item.reasoningSummary && typeof item.reasoningSummary === 'object' && !Array.isArray(item.reasoningSummary)
-          ? (item.reasoningSummary as Record<string, unknown>)
-          : undefined,
-      reasoningTrace: Array.isArray(item.reasoningTrace)
-        ? item.reasoningTrace.filter((entry) => entry && typeof entry === 'object') as Array<Record<string, unknown>>
-        : undefined,
-      reasoningNarrative: Array.isArray(item.reasoningNarrative)
-        ? item.reasoningNarrative.map((entry) => String(entry))
-        : undefined,
-      layerManifest:
-        item.layerManifest && typeof item.layerManifest === 'object' && !Array.isArray(item.layerManifest)
-          ? (item.layerManifest as Record<string, unknown>)
-          : undefined,
-      localOverlay:
-        item.localOverlay && typeof item.localOverlay === 'object' && !Array.isArray(item.localOverlay)
-          ? (item.localOverlay as Record<string, unknown>)
-          : undefined,
-      runSnapshot: item.runSnapshot && typeof item.runSnapshot === 'object'
-        ? {
-            runId: String((item.runSnapshot as any).runId || ''),
-            status: typeof (item.runSnapshot as any).status === 'string' ? (item.runSnapshot as any).status : undefined,
-            responseType:
-              typeof (item.runSnapshot as any).responseType === 'string'
-                ? (item.runSnapshot as any).responseType
-                : undefined,
-            tasks: Array.isArray((item.runSnapshot as any).tasks) ? (item.runSnapshot as any).tasks : [],
-            approvals: Array.isArray((item.runSnapshot as any).approvals) ? (item.runSnapshot as any).approvals : [],
-            artifacts: Array.isArray((item.runSnapshot as any).artifacts) ? (item.runSnapshot as any).artifacts : [],
-            metadata:
-              (item.runSnapshot as any).metadata && typeof (item.runSnapshot as any).metadata === 'object'
-                ? (item.runSnapshot as any).metadata
-                : undefined,
-            editSummaries: Array.isArray((item.runSnapshot as any).editSummaries)
-              ? (item.runSnapshot as any).editSummaries
-              : []
-          }
-        : undefined
-    }));
-  }
-
-  function serializeConversation(messages: ConversationMessage[]) {
-    return messages.map((message) => ({
-      ...message,
-      timestamp: message.timestamp.toISOString(),
-      statusEvents: (message.statusEvents ?? []).map((event) => ({
-        ...event,
-        timestamp: event.timestamp.toISOString()
-      }))
-    }));
   }
 
   async function loadSessionsForWorkspace(workspacePath: string) {
@@ -1696,7 +651,7 @@
     selectedExecutionItemId = '';
     expandedExecutionMessageIds = [];
     lastAutoExpandedExecutionMessageId = '';
-    conversation = deserializeConversation(session.messages || []);
+    conversation = deserializeConversation(session.messages || [], createMessageId);
     void hydrateConversationRunSnapshots(conversation);
     closeSidebar();
   }
@@ -1785,19 +740,14 @@
   }
 
   function clearWorkspaceScopedState() {
-    workspaceInfo = '';
     workspaceStatus = '';
     workspaceDiff = '';
     workspaceFiles = [];
     selectedFilePath = '';
-    selectedFileContent = '';
     localPrimaryFilePath = '';
     localPrimaryFileContent = '';
-    workspaceSearchResults = [];
     localToolTrace = [];
     localToolSummary = '';
-    localToolContext = '';
-    localToolError = '';
   }
 
   async function saveConnectionSettings() {
@@ -1872,77 +822,12 @@
     }
   }
 
-  function stopRunDetailPolling(runId = '') {
-    if (runId && runDetailPollRunId && runId !== runDetailPollRunId) {
-      return;
-    }
-    if (runDetailPollTimer !== null) {
-      window.clearInterval(runDetailPollTimer);
-      runDetailPollTimer = null;
-    }
-    runDetailPollMessageId = '';
-    runDetailPollRunId = '';
-    runDetailPollInFlight = false;
-  }
-
   function updateRunSnapshotMessage(messageId: string, detail: ExecutionRun) {
     updateConversationMessage(messageId, (message) => ({
       ...message,
       runId: detail.run_id || message.runId,
-      runSnapshot: {
-        runId: detail.run_id,
-        status: detail.status,
-        responseType: detail.response_type,
-        tasks: Array.isArray(detail.tasks) ? detail.tasks : [],
-        approvals: Array.isArray(detail.approvals) ? detail.approvals : [],
-        artifacts: Array.isArray(detail.artifacts) ? detail.artifacts : [],
-        metadata: detail.metadata && typeof detail.metadata === 'object' ? detail.metadata : undefined,
-        editSummaries: extractEditSummaries(detail)
-      }
+      runSnapshot: buildRunSnapshot(detail)
     }));
-  }
-
-  async function syncRunDetailToMessage(messageId: string, runId: string) {
-    if (!runId || runDetailPollInFlight) return;
-    runDetailPollInFlight = true;
-    try {
-      const detail = await fetchRun(settings.serverBaseUrl, runId);
-      updateRunSnapshotMessage(messageId, detail);
-      if (selectedRunId === runId) {
-        runTasks = Array.isArray(detail.tasks) ? detail.tasks : [];
-        runArtifacts = Array.isArray(detail.artifacts) ? detail.artifacts : [];
-        runApprovals = Array.isArray(detail.approvals) ? detail.approvals : [];
-      }
-      runs = runs.some((run) => run.run_id === detail.run_id)
-        ? runs.map((run) => (run.run_id === detail.run_id ? { ...run, ...detail } : run))
-        : [detail, ...runs].slice(0, 20);
-      const normalizedStatus = String(detail.status || '').toLowerCase();
-      if (/complete|completed|done|error|failed|cancelled|canceled/.test(normalizedStatus)) {
-        stopRunDetailPolling(runId);
-      }
-    } catch {
-      // Keep the last known trace visible even when a live sync tick fails.
-    } finally {
-      runDetailPollInFlight = false;
-    }
-  }
-
-  function startRunDetailPolling(messageId: string, runId: string) {
-    if (!runId) return;
-    if (
-      runDetailPollTimer !== null &&
-      runDetailPollMessageId === messageId &&
-      runDetailPollRunId === runId
-    ) {
-      return;
-    }
-    stopRunDetailPolling();
-    runDetailPollMessageId = messageId;
-    runDetailPollRunId = runId;
-    void syncRunDetailToMessage(messageId, runId);
-    runDetailPollTimer = window.setInterval(() => {
-      void syncRunDetailToMessage(messageId, runId);
-    }, RUN_DETAIL_POLL_MS);
   }
 
   async function refreshWorkspace() {
@@ -1970,7 +855,6 @@
       return;
     }
 
-    workspaceInfo = info.stdout || info.stderr || info.error || '';
     workspaceStatus = status.stdout || status.stderr || status.error || '';
     workspaceDiff = diff.stdout || diff.stderr || diff.error || '';
     workspaceFiles = Array.isArray(files.items) ? files.items : [];
@@ -2009,40 +893,17 @@
     await activateWorkspace(picked.path);
   }
 
-  function hasUsableLocalOverlayEvidence(): boolean {
-    const selectedPath = selectedFilePath.trim() ? selectedFilePath : localPrimaryFilePath;
-    const selectedContent = selectedFileContent.trim() ? selectedFileContent : localPrimaryFileContent;
-    if (selectedPath.trim() && selectedContent.trim()) {
-      return true;
-    }
-    return (localToolTrace ?? []).some((step) => {
-      const observation = step?.observation as Record<string, unknown> | undefined;
-      return (
-        step?.tool === 'read_file' &&
-        observation &&
-        observation.ok === true &&
-        typeof observation.path === 'string' &&
-        typeof observation.content === 'string' &&
-        String(observation.path).trim().length > 0 &&
-        String(observation.content).trim().length > 0
-      );
-    });
-  }
-
   async function submitChat() {
     if (!chatInput.trim()) return;
     const prompt = chatInput.trim();
     const userMessageId = createMessageId();
     const assistantMessageId = createMessageId();
 
-    stopRunDetailPolling();
     clearActiveStreamHooks();
     busy = true;
     chatInput = '';
     localToolTrace = [];
     localToolSummary = '';
-    localToolContext = '';
-    localToolError = '';
     localPrimaryFilePath = '';
     localPrimaryFileContent = '';
     selectedExecutionMessageId = assistantMessageId;
@@ -2262,19 +1123,7 @@
             void persistCurrentSession({ titleHint: prompt });
           },
           onDone: async (payload?: StreamDonePayload) => {
-            localToolTrace = Array.isArray(payload?.local_trace)
-              ? payload.local_trace.map((step, index) => ({
-                  round: Number((step as Record<string, unknown>)?.round || index + 1),
-                  thought: String((step as Record<string, unknown>)?.thought || ''),
-                  tool: String((step as Record<string, unknown>)?.tool || ''),
-                  input:
-                    (step as Record<string, unknown>)?.input &&
-                    typeof (step as Record<string, unknown>).input === 'object'
-                      ? ((step as Record<string, unknown>).input as Record<string, unknown>)
-                      : {},
-                  observation: (step as Record<string, unknown>)?.observation ?? null
-                }))
-              : [];
+            localToolTrace = normalizeLocalTracePayload(payload?.local_trace);
             localToolSummary = typeof payload?.local_summary === 'string' ? payload.local_summary : '';
             localPrimaryFilePath =
               typeof payload?.primary_file_path === 'string' ? payload.primary_file_path : '';
@@ -2307,26 +1156,13 @@
                   ? payload.local_overlay
                   : undefined
             }));
-            stopRunDetailPolling();
             clearActiveStreamHooks();
             busy = false;
             await persistCurrentSession({ titleHint: prompt });
           },
           onCancelled: (payload?: StreamCancelledPayload) => {
             const cancelledMessage = payload?.message || 'Cancelled';
-            const cancelledTrace = Array.isArray(payload?.local_trace)
-              ? payload.local_trace.map((step, index) => ({
-                  round: Number((step as Record<string, unknown>)?.round || index + 1),
-                  thought: String((step as Record<string, unknown>)?.thought || ''),
-                  tool: String((step as Record<string, unknown>)?.tool || ''),
-                  input:
-                    (step as Record<string, unknown>)?.input &&
-                    typeof (step as Record<string, unknown>).input === 'object'
-                      ? ((step as Record<string, unknown>).input as Record<string, unknown>)
-                      : {},
-                  observation: (step as Record<string, unknown>)?.observation ?? null
-                }))
-              : [];
+            const cancelledTrace = normalizeLocalTracePayload(payload?.local_trace);
             updateConversationMessage(assistantMessageId, (message) => ({
               ...message,
               content: message.content || `${cancelledMessage}.`,
@@ -2337,7 +1173,6 @@
               localSummary: typeof payload?.local_summary === 'string' ? payload.local_summary : message.localSummary,
             }));
             appendStatusEvent(assistantMessageId, { message: cancelledMessage });
-            stopRunDetailPolling();
             clearActiveStreamHooks();
             busy = false;
             void persistCurrentSession({ titleHint: prompt });
@@ -2350,19 +1185,7 @@
             const message = typeof payload === 'string'
               ? payload
               : String(errorPayload?.message || 'Unknown stream error');
-            const errorTrace = Array.isArray(errorPayload?.local_trace)
-              ? errorPayload.local_trace.map((step, index) => ({
-                  round: Number((step as Record<string, unknown>)?.round || index + 1),
-                  thought: String((step as Record<string, unknown>)?.thought || ''),
-                  tool: String((step as Record<string, unknown>)?.tool || ''),
-                  input:
-                    (step as Record<string, unknown>)?.input &&
-                    typeof (step as Record<string, unknown>).input === 'object'
-                      ? ((step as Record<string, unknown>).input as Record<string, unknown>)
-                      : {},
-                  observation: (step as Record<string, unknown>)?.observation ?? null
-                }))
-              : [];
+            const errorTrace = normalizeLocalTracePayload(errorPayload?.local_trace);
             updateConversationMessage(assistantMessageId, (entry) => ({
               ...entry,
               content: entry.content || message,
@@ -2379,7 +1202,6 @@
                     : entry.localSummary,
             }));
             appendStatusEvent(assistantMessageId, { message });
-            stopRunDetailPolling();
             clearActiveStreamHooks();
             busy = false;
             void persistCurrentSession({ titleHint: prompt });
@@ -2397,7 +1219,6 @@
         state: 'error'
       }));
       appendStatusEvent(assistantMessageId, { message: messageText });
-      stopRunDetailPolling();
       clearActiveStreamHooks();
       busy = false;
       await persistCurrentSession({ titleHint: prompt });
@@ -2434,7 +1255,6 @@
       if (changed) {
         conversation = nextConversation;
       }
-      stopRunDetailPolling();
       activeStreamCancel = null;
       busy = false;
       await persistCurrentSession();
@@ -2504,7 +1324,6 @@
   });
 
   onDestroy(() => {
-    stopRunDetailPolling();
     if (activeStreamCancel) {
       void activeStreamCancel();
     }

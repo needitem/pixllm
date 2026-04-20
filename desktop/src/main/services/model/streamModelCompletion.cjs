@@ -108,6 +108,14 @@ function shouldRetryWithFallback(status, payload, rawText = '') {
   return /not found|no route|unsupported|unavailable/i.test(String(detail || ''));
 }
 
+function shouldFallbackAfterCaughtError(error) {
+  const message = String(error instanceof Error ? error.message : error || '').toLowerCase();
+  if (!message) {
+    return false;
+  }
+  return /econnrefused|enotfound|networkerror|fetch failed|connection refused|no route|unsupported|unavailable|not found|http 404|http 405|http 501|http 502|http 503|http 504/.test(message);
+}
+
 function extractErrorMessage(payload, rawText = '') {
   if (typeof payload === 'string') {
     return payload;
@@ -322,7 +330,7 @@ async function countPromptTokens({
       return normalizeTokenizePayload(payload || {});
     } catch (error) {
       lastError = error;
-      if (!hasFallback) {
+      if (!hasFallback || !shouldFallbackAfterCaughtError(error)) {
         throw error;
       }
     }
@@ -635,7 +643,7 @@ async function callModelCompletion({
         if (error && typeof error === 'object') {
           error.debugMeta = sanitizeDebugValue({ attempts: debugAttempts });
         }
-        if (!hasFallback) {
+        if (!hasFallback || !shouldFallbackAfterCaughtError(error)) {
           throw error;
         }
         break;
@@ -916,7 +924,7 @@ async function streamModelCompletion({
         if (error && typeof error === 'object') {
           error.debugMeta = sanitizeDebugValue({ attempts: debugAttempts });
         }
-        if (!hasFallback) {
+        if (!hasFallback || !shouldFallbackAfterCaughtError(error)) {
           throw error;
         }
         break;

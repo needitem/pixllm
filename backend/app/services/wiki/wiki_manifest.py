@@ -69,7 +69,7 @@ def _build_workflow_manifest_entry(
     content = str(page.get("content") or "")
     current_path = str(page.get("path") or "").strip()
     meta, _body = _read_frontmatter(content)
-    required_section = _extract_section_yaml(content, "Required Facts")
+    required_section = _extract_section_yaml(content, "Verified Facts")
     knowledge_bundle = _extract_knowledge_bundle(content)
     resolved_bundle_pages = _resolve_bundle_page_descriptors(
         root,
@@ -235,7 +235,7 @@ def _sync_workflow_runtime_status(
     generated_at = str(source_manifest.get("generated_at") or now_iso())
     for file_path in sorted((root / "workflows").glob("*.md")):
         raw_text = file_path.read_text(encoding="utf-8")
-        required_section = _extract_section_yaml(raw_text, "Required Facts")
+        required_section = _extract_section_yaml(raw_text, "Verified Facts")
         required_symbols = _normalize_string_list(required_section.get("required_symbols"), limit=64)
         linked_records = _resolve_method_records_for_symbols(required_symbols, methods_index)
         missing_required_symbols = [

@@ -1,5 +1,6 @@
----
+﻿---
 title: DFS Export API Workflow
+description: Build DFS provider groups, run PBI/PBE exports, and track export progress or cancellation.
 aliases:
   - dfs api
   - pbi export
@@ -29,6 +30,20 @@ tags:
 - Goal: register DFS providers and build PBI/PBE outputs.
 - Prefer this family for DFS provider-group registration, PBI/PBE export, export progress polling, and export cancel flows.
 
+## Primary Usage Buckets
+- `provider group 구성`: `AddPBIFile`, `AddXDMCompManager`, `AddXNS`, `Clear`
+- `PBI export`: `SetSource`, `Export2PBI`, `GetPercent`, `Cancel`
+- `PBE export`: `SetSource`, `Export2PBE`, `GetPercent`, `Cancel`
+- `결과 상태 확인`: `GetPercent`와 `Cancel`을 짝으로 설명해 장시간 export 제어 흐름을 답합니다.
+- `view와의 경계`: 데이터셋을 어떤 view에 보여줄지는 `PlanetView` 또는 `MilmapView`, provider/export 파이프라인은 `DFS`로 분리합니다.
+
+
+## Answering Guidance
+- Start with this workflow to confirm the question belongs to this API family before writing code or steps.
+- Use the usage buckets and boundary notes to narrow the task to the smallest relevant slice.
+- Read the linked howto, concept, and source pages from the Knowledge Bundle before giving a procedural answer.
+- Use `Verified Facts` for exact method names and declarations; if this page is overview-only, say that and lean on the related pages for concrete steps.
+
 ## Knowledge Bundle
 ```yaml
 concept_terms:
@@ -53,13 +68,13 @@ bundle_pages:
 
 <!-- GENERATED:RUNTIME_STATUS:START -->
 ## Runtime Ingest Status
-- Auto-generated from raw source ingest at `2026-04-20T00:52:13Z`.
+- Auto-generated from raw source ingest at `2026-04-20T02:38:44Z`.
 - Resolved required symbols: `9/9`
 - Linked modules:
   - `NXDLdfs`
 - Missing required symbols: `0`
 <!-- GENERATED:RUNTIME_STATUS:END -->
-## Required Facts
+## Verified Facts
 ```yaml
 workflow_family: api_dfs
 output_shape: focused_snippet_or_helper
@@ -95,4 +110,5 @@ verification_rules:
   - verify_ref_out_and_enum_literals_when_signature_matters
   - cross_check_runtime_methods_index_before_emitting_code
 ```
+
 

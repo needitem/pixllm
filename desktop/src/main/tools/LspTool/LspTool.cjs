@@ -26,7 +26,6 @@ function LspTool(options = {}) {
   const limits = resolveLimits(options);
   return defineLocalTool({
     name: 'lsp',
-    aliases: ['LSP'],
     kind: 'read',
     workspaceRelativePaths: ['path'],
     inputSchema: objectSchema({

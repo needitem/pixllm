@@ -19,9 +19,6 @@ function backendWikiContext(context = {}) {
   return {
     baseUrl: toStringValue(backendConfig?.baseUrl || backendConfig?.serverBaseUrl),
     wikiId: toStringValue(backendConfig?.wikiId),
-    llmBaseUrl: toStringValue(backendConfig?.llmBaseUrl || backendConfig?.baseUrl || backendConfig?.serverBaseUrl),
-    fallbackBaseUrl: toStringValue(backendConfig?.serverBaseUrl || backendConfig?.baseUrl),
-    model: toStringValue(backendConfig?.model),
   };
 }
 
@@ -46,25 +43,6 @@ function normalizeSearchResult(item = {}) {
   };
 }
 
-function uniqStrings(items = [], limit = 8) {
-  const seen = new Set();
-  const output = [];
-  for (const item of Array.isArray(items) ? items : []) {
-    const normalized = toStringValue(item);
-    if (!normalized) continue;
-    const key = normalized.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    output.push(normalized);
-    if (output.length >= limit) break;
-  }
-  return output;
-}
-
-function hasHangul(value = '') {
-  return /[\u3131-\u318E\uAC00-\uD7A3]/.test(String(value || ''));
-}
-
 function normalizeReadPage(item = {}) {
   return {
     path: toStringValue(item?.path),
@@ -80,7 +58,6 @@ function normalizeReadPage(item = {}) {
 function WikiSearchTool() {
   return defineLocalTool({
     name: 'wiki_search',
-    aliases: ['shared_wiki_search', 'WikiSearch'],
     kind: 'read',
     inputSchema: objectSchema({
       wiki_id: stringSchema('Optional wiki id override'),
@@ -183,7 +160,6 @@ function WikiSearchTool() {
 function WikiReadTool() {
   return defineLocalTool({
     name: 'wiki_read',
-    aliases: ['shared_wiki_read', 'wiki_open', 'WikiRead'],
     kind: 'read',
     inputSchema: objectSchema({
       wiki_id: stringSchema('Optional wiki id override'),

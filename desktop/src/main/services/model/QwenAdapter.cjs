@@ -859,9 +859,12 @@ function buildSystemPrompt({
   );
   const prefersWorkflowFirst = Boolean(requestContext?.workflowPlan?.preferWikiFirst);
   const requestMode = toStringValue(requestContext?.mode || (prefersWorkflowFirst ? 'wiki' : 'local'));
+  const isWikiMode = requestMode === 'wiki';
   return [
     'You are the desktop coding engine for a Qwen-based local coding agent.',
-    'This desktop agent supports only two request lanes: backend wiki guidance and local code review/explanation.',
+    isWikiMode
+      ? 'Current lane: backend wiki guidance only.'
+      : 'Current lane: local code review and explanation only.',
     'Decide whether to answer directly or call tools.',
     'The user may write in Korean. Answer in the user language when possible and translate Korean technical phrases into likely English code terms yourself when searching.',
     '# Enabled tools',
@@ -881,22 +884,34 @@ function buildSystemPrompt({
       ? '- Local-code requests use the workspace for review, explanation, and limited comment-oriented edits on existing files. Do not create new files.'
       : '- Wiki requests use backend wiki/reference evidence to explain usage. Do not edit local workspace files in wiki mode.',
     prefersDirectChatGuidance
-      ? '- For explanation-style requests, prefer verified reference/wiki evidence over pre-existing workspace samples. Do not treat an existing workspace example as authoritative unless the user explicitly asked about that file or path.'
+      ? isWikiMode
+        ? '- For explanation-style requests, prefer verified reference/wiki evidence over pre-existing workspace samples. Do not treat an existing workspace example as authoritative unless the user explicitly asked about that file or path.'
+        : '- For explanation-style local requests, prefer direct workspace inspection over assumptions or remembered examples.'
       : '',
     prefersWorkflowFirst
-      ? '- Workflow-first guidance requests must follow this order: (1) search wiki workflow pages, (2) read the best matching workflow page, (3) search and read any directly referenced workflow or methods pages needed for the answer, (4) extract Required Facts, verified declarations, and verification rules from the pages you read before emitting code or concrete signatures, and only then (5) use broader wiki search if necessary.'
+      ? '- Workflow-first guidance requests must follow this order: (1) search wiki workflow pages, (2) read the best matching workflow page, (3) search and read any directly referenced workflow or methods pages needed for the answer, (4) extract the verified declarations, structured fact lists, and verification rules from the pages you read before emitting code or concrete signatures, and only then (5) use broader wiki search if necessary.'
       : '',
     prefersWorkflowFirst && prefersDirectChatGuidance
       ? '- For broad workflow guidance, converge once a workflow page and verified code facts are available. Prefer one short explanation path, at most one compact code sketch, and stop searching instead of expanding into every related API.'
       : '',
-    '- When a workflow page exposes Required Facts, verification rules, or verified declarations, treat them as an allowlist for example code. Do not invent overloads, namespaces, convenience properties, short static helpers, or direct object relationships that are not present in the verified facts.',
-    '- If a workflow describes a non-obvious enum or integer mapping, prefer named enum members in code examples. If you must use integers, state the verified mapping explicitly instead of implying a conventional order.',
-    '- For technical guidance, workflow Required Facts and methods pages are more authoritative than sample snippets or inferred usage patterns. If signatures disagree, follow the verified declarations or say the detail is unverified.',
-    '- Do not create new files. The only allowed local mutation is editing an existing file when the user explicitly asks for comment-style or explanatory edits.',
-    '- Wiki page paths belong to the backend-managed reference corpus, not the local workspace. Do not pass wiki paths to local file tools or shell commands.',
+    prefersWorkflowFirst
+      ? '- When a workflow page exposes structured fact lists, verification rules, or verified declarations, treat them as an allowlist for example code. Do not invent overloads, namespaces, convenience properties, short static helpers, or direct object relationships that are not present in the verified facts.'
+      : '',
+    prefersWorkflowFirst
+      ? '- If a workflow describes a non-obvious enum or integer mapping, prefer named enum members in code examples. If you must use integers, state the verified mapping explicitly instead of implying a conventional order.'
+      : '',
+    prefersWorkflowFirst
+      ? '- For technical guidance, workflow fact blocks and methods pages are more authoritative than sample snippets or inferred usage patterns. If signatures disagree, follow the verified declarations or say the detail is unverified.'
+      : '',
+    !isWikiMode
+      ? '- Do not create new files. The only allowed local mutation is editing an existing file when the user explicitly asks for comment-style or explanatory edits.'
+      : '',
+    isWikiMode
+      ? '- Wiki page paths belong to the backend-managed reference corpus, not the local workspace. Do not pass wiki paths to local file tools or shell commands.'
+      : '',
     '- Ground claims in tool responses already shown in the transcript. If a tool fails, report the exact blocker from that response.',
-    workspacePath ? `Workspace: ${workspacePath}` : '',
-    selectedFilePath ? `Selected file: ${selectedFilePath}` : '',
+    !isWikiMode && workspacePath ? `Workspace: ${workspacePath}` : '',
+    !isWikiMode && selectedFilePath ? `Selected file: ${selectedFilePath}` : '',
   ].filter(Boolean).join('\n');
 }
 

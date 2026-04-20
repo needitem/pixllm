@@ -71,15 +71,17 @@ def _collect_related_page_refs(
         refs.append({"path": normalized_target, "relation": relation})
 
     knowledge_bundle = _extract_knowledge_bundle(content)
+    has_curated_bundle = bool(knowledge_bundle.get("bundle_pages"))
     for item in knowledge_bundle.get("bundle_pages") if isinstance(knowledge_bundle.get("bundle_pages"), list) else []:
         if not isinstance(item, dict):
             continue
         append_target(str(item.get("path") or "").strip(), str(item.get("relation") or "").strip() or "bundle_page")
 
-    for raw_target in _link_targets(content):
-        append_target(raw_target, "markdown_link")
-    for raw_target in _inline_page_targets(content):
-        append_target(raw_target, "inline_reference")
+    if not has_curated_bundle:
+        for raw_target in _link_targets(content):
+            append_target(raw_target, "markdown_link")
+        for raw_target in _inline_page_targets(content):
+            append_target(raw_target, "inline_reference")
 
     for module_name in _module_names_from_source_anchors(_SOURCE_ANCHOR_RE.findall(content)):
         source_page = source_page_path_for_module(module_name)

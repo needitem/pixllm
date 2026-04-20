@@ -237,7 +237,7 @@ function evaluateFinalAnswerPolicy({
     return {
       ok: false,
       reason: 'workflow_forbidden_pattern_detected',
-      blockingMessage: `The draft answer used workflow-forbidden code patterns: ${matchedForbiddenAnswerPatterns.slice(0, 4).join(', ')}. Rewrite the snippet strictly from the workflow Required Facts and Common Pitfalls.`,
+      blockingMessage: `The draft answer used workflow-forbidden code patterns: ${matchedForbiddenAnswerPatterns.slice(0, 4).join(', ')}. Rewrite the snippet strictly from the workflow's verified declarations and common pitfalls.`,
       details: {
         turn,
         finalAnswerPreview: toStringValue(finalAnswer).slice(0, 240),
@@ -260,7 +260,7 @@ function evaluateFinalAnswerPolicy({
     return {
       ok: false,
       reason: 'verified_workflow_facts_required',
-      blockingMessage: 'Do not finalize a workflow-first guidance answer that includes code until the read workflow or methods pages expose Required Facts or verified declarations. Read the relevant wiki pages first and ground the snippet in those declarations instead of inventing APIs.',
+      blockingMessage: 'Do not finalize a workflow-first guidance answer that includes code until the read workflow or methods pages expose verified declarations or a structured fact block. Read the relevant wiki pages first and ground the snippet in those declarations instead of inventing APIs.',
       details: {
         turn,
         finalAnswerPreview: toStringValue(finalAnswer).slice(0, 240),

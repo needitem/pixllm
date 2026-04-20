@@ -1,5 +1,4 @@
-const { createHash } = require('node:crypto');
-const { createLocalToolCollection } = require('./tools.cjs');
+const { createLocalToolCollection, createWikiToolCollection } = require('./tools.cjs');
 const { streamModelCompletion, countPromptTokens } = require('./services/model/streamModelCompletion.cjs');
 const { ToolRuntime } = require('./services/tools/ToolRuntime.cjs');
 const { StreamingToolExecutor } = require('./services/tools/StreamingToolExecutor.cjs');
@@ -20,9 +19,6 @@ const {
   flattenMessagesForModel,
   buildSystemPrompt,
 } = require('./services/model/QwenAdapter.cjs');
-const { evaluateFinalAnswerPolicy } = require('./query/finalizationPolicy.cjs');
-const { findUngroundedSourceMentions } = require('./query/sourceGuard.cjs');
-const { buildRequestContext } = require('./utils/processUserInput/processUserInput.cjs');
 const { loadAgentState, saveAgentState } = require('./state/agentStateStore.cjs');
 const { listTasks, listTerminalCaptures } = require('./tasks/taskRuntime.cjs');
 const {
@@ -30,361 +26,44 @@ const {
   failedSteps,
 } = require('./queryTrace.cjs');
 const { collectGroundedPaths } = require('./query/groundedPaths.cjs');
-const { summarizeWikiEvidence } = require('./query/referenceEvidence.cjs');
+const {
+  buildFallbackAnswer,
+  buildFinalAnswerPolicyRetrySignature,
+  buildUserBlocks,
+  describeTools,
+  deriveLoopControlState,
+  evaluateFinalAnswerState,
+  hasSubstantiveUserQueryMessage,
+  hashText,
+  initialState,
+  isLengthFinishReason,
+  joinAnswerFragments,
+  normalizeUsage,
+  previewText,
+  resolveFallbackTerminalReason,
+  resolveModelContextWindow,
+  safeJsonParseObject,
+  toolUseCacheKey,
+  toSerializableTraceStep,
+} = require('./queryEngineSupport.cjs');
 
 const MAX_TURNS = 14;
 const MAX_CONSECUTIVE_PARSE_ERRORS = 2;
 const MAX_MODEL_RETRIES = 2;
 const MAX_OUTPUT_TOKENS_RECOVERY_LIMIT = 3;
 const ESCALATED_MAX_TOKENS = 6400;
-const DEFAULT_MODEL_CONTEXT_WINDOW = 16384;
 const DEFAULT_MODEL_OUTPUT_TOKENS = 1600;
 const MIN_DYNAMIC_OUTPUT_TOKENS = 64;
 const REQUEST_TOKEN_SAFETY_MARGIN = 64;
-const MODEL_PREVIEW_LIMIT = 180;
 const MAX_FILE_CACHE_ENTRIES = 24;
 const MAX_PROMPT_TOKEN_CACHE_ENTRIES = 32;
 const MAX_TRANSITIONS = 64;
 const MAX_UNGROUNDED_ANSWER_RETRIES = 2;
 const MAX_FINAL_ANSWER_POLICY_RETRIES = 2;
-const FINAL_ANSWER_POLICY_TOOL_LOCK_NAMES = Object.freeze([
-  'wiki_search',
-  'wiki_read',
-]);
 const NO_WORKSPACE_TOOL_NAMES = Object.freeze([
   'wiki_search',
   'wiki_read',
 ]);
-
-function deriveLoopControlState({
-  availableToolNames = [],
-  requestContext = {},
-  state = {},
-  turn = 1,
-} = {}) {
-  const available = new Set((Array.isArray(availableToolNames) ? availableToolNames : []).map((item) => toStringValue(item)).filter(Boolean));
-  const finalAnswerPolicyLock = state?.finalAnswerPolicyLock && typeof state.finalAnswerPolicyLock === 'object'
-    ? state.finalAnswerPolicyLock
-    : null;
-  const referenceEvidence = summarizeWikiEvidence(Array.isArray(state?.trace) ? state.trace : []);
-  const requestIntent = requestContext?.intent && typeof requestContext.intent === 'object'
-    ? requestContext.intent
-    : {};
-  const requiresWorkspaceArtifact = Boolean(requestIntent.wantsChanges);
-  const workflowAnswerLocked = Boolean(
-    turn >= 4
-    && !requiresWorkspaceArtifact
-    && requestContext?.workflowPlan?.preferWikiFirst
-    && referenceEvidence.hasWorkflowEvidence
-    && referenceEvidence.hasVerifiedCodeEvidence
-    && (
-      referenceEvidence.hasMethodEvidence
-      || Number(referenceEvidence.apiFactCount || 0) > 0
-      || Number(referenceEvidence.workflowRequiredFactCount || 0) > 0
-    ),
-  );
-  const finalAnswerPolicyLocked = Boolean(
-    !requiresWorkspaceArtifact
-    && finalAnswerPolicyLock?.kind === 'answer_only',
-  );
-  const filteredToolNames = finalAnswerPolicyLocked
-    ? Array.from(available).filter((item) => !FINAL_ANSWER_POLICY_TOOL_LOCK_NAMES.includes(toStringValue(item)))
-    : Array.from(available);
-
-  return {
-    phase: finalAnswerPolicyLocked
-        ? 'final_answer_policy'
-      : workflowAnswerLocked
-        ? 'workflow_answer'
-        : '',
-    activeToolNames: workflowAnswerLocked
-      ? []
-      : finalAnswerPolicyLocked
-        ? []
-        : filteredToolNames,
-    finalAnswerPolicyLocked,
-    workflowAnswerLocked,
-  };
-}
-
-function evaluateFinalAnswerState({
-  requestContext = {},
-  trace = [],
-  finalAnswer = '',
-  groundedPaths = [],
-  describeTool = () => null,
-} = {}) {
-  const policyResult = evaluateFinalAnswerPolicy({
-    requestContext,
-    trace,
-    finalAnswer,
-    describeTool,
-  });
-  if (!policyResult?.ok) {
-    return {
-      ok: false,
-      type: 'policy',
-      reason: toStringValue(policyResult.reason || 'final_answer_policy'),
-      blockingMessage: toStringValue(policyResult.blockingMessage),
-      details: policyResult.details || {},
-    };
-  }
-
-  const unknownMentions = findUngroundedSourceMentions(finalAnswer, groundedPaths);
-  if (unknownMentions.length > 0) {
-    return {
-      ok: false,
-      type: 'grounding',
-      mentions: unknownMentions.slice(0, 8),
-      details: {
-        ...(policyResult.details || {}),
-        groundingWarnings: [{
-          type: 'grounding',
-          mentions: unknownMentions.slice(0, 8),
-          count: unknownMentions.length,
-        }],
-      },
-    };
-  }
-
-  return {
-    ok: true,
-    type: 'final',
-    details: {
-      ...(policyResult.details || {}),
-      groundingWarnings: [],
-    },
-  };
-}
-function toSerializableTraceStep(step = {}) {
-  return {
-    round: Number(step?.round || 0),
-    thought: toStringValue(step?.thought),
-    tool: toStringValue(step?.tool),
-    toolUseId: toStringValue(step?.toolUseId),
-    input: step?.input && typeof step.input === 'object' && !Array.isArray(step.input) ? step.input : {},
-    observation: step?.observation ?? null,
-  };
-}
-
-function normalizeUsage(value = {}) {
-  const payload = value && typeof value === 'object' ? value : {};
-  return {
-    prompt_tokens: Number(payload.prompt_tokens || 0),
-    completion_tokens: Number(payload.completion_tokens || 0),
-    total_tokens: Number(payload.total_tokens || 0),
-    completion_calls: Number(payload.completion_calls || 0),
-    streamed_completion_calls: Number(payload.streamed_completion_calls || 0),
-    tool_calls: Number(payload.tool_calls || 0),
-    parse_retries: Number(payload.parse_retries || 0),
-    model_retries: Number(payload.model_retries || 0),
-    resumed_sessions: Number(payload.resumed_sessions || 0),
-    streamed_chars: Number(payload.streamed_chars || 0),
-    background_tasks_started: Number(payload.background_tasks_started || 0),
-    stop_hooks: Number(payload.stop_hooks || 0),
-    user_questions: Number(payload.user_questions || 0),
-  };
-}
-
-function estimateTokens(text) {
-  return Math.max(1, Math.ceil(String(text || '').length / 4));
-}
-
-function resolveModelContextWindow(model = '') {
-  const explicit = Number(process.env.PIXLLM_MODEL_CONTEXT_WINDOW || process.env.PIXLLM_CONTEXT_WINDOW || 0);
-  if (Number.isFinite(explicit) && explicit > 1024) {
-    return Math.floor(explicit);
-  }
-  const normalized = toStringValue(model).toLowerCase();
-  if (!normalized) return DEFAULT_MODEL_CONTEXT_WINDOW;
-  if (/\b(?:128k|131072)\b/.test(normalized)) return 131072;
-  if (/\b(?:64k|65536)\b/.test(normalized)) return 65536;
-  if (/\b(?:32k|32768)\b/.test(normalized)) return 32768;
-  if (/\b(?:16k|16384)\b/.test(normalized)) return 16384;
-  return DEFAULT_MODEL_CONTEXT_WINDOW;
-}
-
-function previewText(text) {
-  return toStringValue(String(text || '').replace(/\s+/g, ' ')).slice(-MODEL_PREVIEW_LIMIT);
-}
-
-function hashText(text) {
-  return createHash('sha1').update(String(text || ''), 'utf8').digest('hex');
-}
-
-function resolveFallbackTerminalReason(terminalReason = '', failedStep = null, lastStep = null) {
-  const reason = toStringValue(terminalReason);
-  if (reason) return reason;
-  const failedRound = Math.max(0, Number(failedStep?.round || 0));
-  const lastRound = Math.max(0, Number(lastStep?.round || 0));
-  return failedStep && failedRound >= lastRound ? 'tool_failure' : 'turn_budget';
-}
-
-function buildFallbackAnswer({ terminalReason = '', failedStep = null } = {}) {
-  const reason = resolveFallbackTerminalReason(terminalReason, failedStep);
-  if (reason === 'tool_failure') {
-    return failedStep
-      ? `The desktop agent stopped after tool failures. Last error: ${toStringValue(failedStep?.observation?.error)}`
-      : 'The desktop agent stopped after tool failures.';
-  }
-  if (reason === 'ungrounded_answer') {
-    return 'The desktop agent stopped because it could not produce a grounded final answer from the collected evidence.';
-  }
-  if (reason === 'parse_error_budget') {
-    return 'The desktop agent stopped because the assistant repeatedly returned malformed output.';
-  }
-  if (reason === 'final_answer_policy') {
-    return 'The desktop agent stopped because it could not satisfy the final answer grounding policy from the collected evidence.';
-  }
-  return 'The desktop agent reached its turn budget before producing a final answer.';
-}
-
-function buildFinalAnswerPolicyRetrySignature(finalAnswerCheck = {}) {
-  const details = finalAnswerCheck?.details && typeof finalAnswerCheck.details === 'object'
-    ? finalAnswerCheck.details
-    : {};
-  const referenceEvidence = details.referenceEvidence && typeof details.referenceEvidence === 'object'
-    ? details.referenceEvidence
-    : {};
-  return hashText(JSON.stringify({
-    reason: toStringValue(finalAnswerCheck?.reason || 'final_answer_policy'),
-    workflowBundleSeen: Boolean(referenceEvidence.workflowBundleSeen),
-    workflowSlotsComplete: Boolean(referenceEvidence.workflowSlotsComplete),
-    workflowMissingSlots: Array.isArray(referenceEvidence.workflowMissingSlots)
-      ? referenceEvidence.workflowMissingSlots.map((item) => toStringValue(item)).filter(Boolean).slice(0, 12)
-      : [],
-    hasWorkflowEvidence: Boolean(referenceEvidence.hasWorkflowEvidence),
-    hasMethodEvidence: Boolean(referenceEvidence.hasMethodEvidence),
-    hasVerifiedCodeEvidence: Boolean(referenceEvidence.hasVerifiedCodeEvidence),
-    apiFactCount: Number(referenceEvidence.apiFactCount || 0),
-    workflowRequiredFactCount: Number(referenceEvidence.workflowRequiredFactCount || 0),
-    searchCount: Number(referenceEvidence.searchCount || 0),
-    candidatePaths: Array.isArray(details.candidatePaths)
-      ? details.candidatePaths.map((item) => toStringValue(item)).filter(Boolean).slice(0, 8)
-      : [],
-    successfulToolNames: Array.isArray(details.successfulToolNames)
-      ? details.successfulToolNames.map((item) => toStringValue(item)).filter(Boolean).slice(0, 8)
-      : [],
-  }));
-}
-
-function contentWithoutToolResponses(content = '') {
-  return toStringValue(String(content || '').replace(/<tool_response>\s*[\s\S]*?<\/tool_response>/gi, ' '));
-}
-
-function hasSubstantiveUserQueryMessage(messages = []) {
-  return (Array.isArray(messages) ? messages : []).some((message) => {
-    if (toStringValue(message?.role).toLowerCase() !== 'user') {
-      return false;
-    }
-    const content = contentWithoutToolResponses(toStringValue(message?.content));
-    return Boolean(content);
-  });
-}
-
-function stableSerialize(value) {
-  if (Array.isArray(value)) {
-    return `[${value.map((item) => stableSerialize(item)).join(',')}]`;
-  }
-  if (value && typeof value === 'object') {
-    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableSerialize(value[key])}`).join(',')}}`;
-  }
-  return JSON.stringify(value ?? null);
-}
-
-function isLengthFinishReason(reason) {
-  return /length|max_tokens|max_output_tokens/i.test(toStringValue(reason));
-}
-
-function safeJsonParseObject(text) {
-  const raw = toStringValue(text);
-  if (!raw) return null;
-  try {
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
-function joinAnswerFragments(existingText, nextText) {
-  const left = String(existingText || '').trim();
-  const right = String(nextText || '').trim();
-  if (!left) return right;
-  if (!right) return left;
-  if (left.endsWith(right) || right.startsWith(left)) {
-    return left.length >= right.length ? left : right;
-  }
-  return `${left}\n\n${right}`.trim();
-}
-
-function toolUseCacheKey(toolUse = {}) {
-  const identifier = toStringValue(toolUse?.id);
-  if (identifier) return identifier;
-  return `${toStringValue(toolUse?.name)}:${stableSerialize(toolUse?.input || {})}`;
-}
-
-async function describeTools(toolCollection, allowedToolNames = []) {
-  const allowed = new Set((Array.isArray(allowedToolNames) ? allowedToolNames : []).map((item) => toStringValue(item)));
-  const items = [];
-  for (const tool of Array.isArray(toolCollection?.tools) ? toolCollection.tools : []) {
-    if (allowed.size > 0 && !allowed.has(toStringValue(tool?.name))) continue;
-    const description = await tool.description();
-    items.push({
-      name: toStringValue(tool?.name),
-      description: toStringValue(description),
-      parameters: tool?.inputSchema && typeof tool.inputSchema === 'object' && !Array.isArray(tool.inputSchema)
-        ? tool.inputSchema
-        : {
-            type: 'object',
-            properties: {},
-            additionalProperties: false,
-          },
-    });
-  }
-  return items;
-}
-
-function buildUserBlocks(prompt, selectedFilePath = '') {
-  const parts = [`User request:\n${toStringValue(prompt)}`];
-  if (selectedFilePath) {
-    parts.push(`Current selected file: ${toStringValue(selectedFilePath)}`);
-  }
-  return [createTextBlock(parts.join('\n\n'))];
-}
-
-function initialState({ historyMessages = [] } = {}) {
-  const messages = [];
-  for (const item of Array.isArray(historyMessages) ? historyMessages : []) {
-    const role = toStringValue(item?.role).toLowerCase();
-    if (role !== 'user' && role !== 'assistant') continue;
-    const content = toStringValue(item?.content);
-    if (!content) continue;
-    messages.push({
-      role,
-      content: [createTextBlock(content)],
-    });
-  }
-  return {
-    messages,
-    trace: [],
-    transcript: [],
-    transitions: [],
-    finalAnswerPolicyLock: null,
-    finalAnswerPolicyRetries: 0,
-    finalAnswerPolicyRetrySignature: '',
-    pendingToolUseSummary: '',
-    fileCache: {},
-    lastTransition: null,
-    maxOutputTokensRecoveryCount: 0,
-    maxOutputTokensOverride: 0,
-    pendingAssistantContinuation: '',
-    ungroundedAnswerRetries: 0,
-    terminalReason: '',
-    currentTurn: 0,
-    totalUsage: normalizeUsage(),
-  };
-}
 
 class QueryEngine {
   constructor({
@@ -422,17 +101,8 @@ class QueryEngine {
       persistState: () => this._persistState(),
       updateFileCache: (toolName, observation) => this._updateFileCache(toolName, observation),
     });
-    this.tools = createLocalToolCollection({
-      workspacePath: this.workspacePath,
-      sessionId: this.sessionId,
-      runtimeBridge: this.runtimeBridge,
-      getBackendConfig: () => ({
-        baseUrl: this.serverBaseUrl,
-        wikiId: this.wikiId,
-        llmBaseUrl: this.llmBaseUrl || this.baseUrl || this.serverBaseUrl,
-        serverBaseUrl: this.serverBaseUrl,
-        model: this.model,
-      }),
+    this.tools = this._createToolCollection({
+      mode: this.workspacePath ? 'local' : 'wiki',
       allowedToolNames: this.workspacePath ? null : NO_WORKSPACE_TOOL_NAMES,
     });
     this.runtime.setTools(this.tools);
@@ -466,6 +136,43 @@ class QueryEngine {
     if (this.runtime) {
       this.runtime.selectedFilePath = this.selectedFilePath;
     }
+  }
+
+  _createToolCollection({ mode = 'local', allowedToolNames = null } = {}) {
+    const commonOptions = {
+      workspacePath: this.workspacePath,
+      sessionId: this.sessionId,
+      runtimeBridge: this.runtimeBridge,
+      getBackendConfig: () => ({
+        baseUrl: this.serverBaseUrl,
+        wikiId: this.wikiId,
+        llmBaseUrl: this.llmBaseUrl || this.baseUrl || this.serverBaseUrl,
+        serverBaseUrl: this.serverBaseUrl,
+        model: this.model,
+      }),
+      allowedToolNames,
+    };
+    return mode === 'wiki'
+      ? createWikiToolCollection(commonOptions)
+      : createLocalToolCollection(commonOptions);
+  }
+
+  _configureToolsForRequest(requestContext = {}) {
+    const requestMode = toStringValue(requestContext?.mode || (this.workspacePath ? 'local' : 'wiki'));
+    const requestedToolNames = Array.isArray(requestContext?.initialToolNames)
+      ? requestContext.initialToolNames.map((item) => toStringValue(item)).filter(Boolean)
+      : [];
+    const allowedToolNames = requestedToolNames.length > 0
+      ? requestedToolNames
+      : requestMode === 'local'
+        ? null
+        : NO_WORKSPACE_TOOL_NAMES;
+    this.tools = this._createToolCollection({
+      mode: requestMode,
+      allowedToolNames,
+    });
+    this.runtime.setTools(this.tools);
+    this.toolDescriptionCache.clear();
   }
 
   _restoreState(historyMessages) {
@@ -903,7 +610,7 @@ class QueryEngine {
   _updateFileCache(toolName, observation) {
     if (!observation) return;
     const normalizedToolName = toStringValue(toolName);
-    if (['write', 'write_file', 'edit', 'replace_in_file'].includes(normalizedToolName)) {
+    if (['edit', 'replace_in_file'].includes(normalizedToolName)) {
       const pathValue = toStringValue(observation.path);
       if (!pathValue) return;
       const nextCache = { ...(this.state.fileCache && typeof this.state.fileCache === 'object' ? this.state.fileCache : {}) };
@@ -929,10 +636,6 @@ class QueryEngine {
       mtimeMs: Number(observation.mtimeMs || 0),
     };
     this.state.fileCache = nextCache;
-  }
-
-  _messageBudgetState(systemPrompt = '') {
-    return this._messageBudgetStateForMessages(this._modelMessages(systemPrompt));
   }
 
   _messageBudgetStateForMessages(messages = []) {
@@ -1002,17 +705,12 @@ class QueryEngine {
         exact: exactPromptTokens > 0,
         contextWindow: Number(payload?.maxModelLen || 0) || resolveModelContextWindow(this.model),
       };
-      const entries = Array.from(this.promptTokenCountCache.entries());
-      while (entries.length >= MAX_PROMPT_TOKEN_CACHE_ENTRIES) {
-        const oldest = entries.shift();
-        if (!oldest) break;
-        this.promptTokenCountCache.delete(oldest[0]);
+      while (this.promptTokenCountCache.size >= MAX_PROMPT_TOKEN_CACHE_ENTRIES) {
+        const oldestKey = this.promptTokenCountCache.keys().next().value;
+        if (!oldestKey) break;
+        this.promptTokenCountCache.delete(oldestKey);
       }
       this.promptTokenCountCache.set(cacheKey, resolvedState);
-      return {
-        ...approxState,
-        ...resolvedState,
-      };
       this._recordTranscript({
         kind: 'prompt_token_count',
         promptTokens: Number(resolvedState?.promptTokens || 0),
@@ -1021,6 +719,10 @@ class QueryEngine {
         contextWindow: Number(resolvedState?.contextWindow || 0),
         approxTokens: Number(approxState?.approxTokens || 0),
       });
+      return {
+        ...approxState,
+        ...resolvedState,
+      };
     } catch (error) {
       this._recordTranscript({
         kind: 'prompt_token_fallback',
@@ -1058,15 +760,19 @@ class QueryEngine {
     return requested;
   }
 
-  _runtimeContextMessage() {
+  _runtimeContextMessage(controlState = null) {
     const lines = [];
     if (toStringValue(this.runtime?.contextSummary())) {
       lines.push(toStringValue(this.runtime.contextSummary()));
     }
-    const controlState = this._loopControlState(Number(this.state.currentTurn || 1));
-    const activeToolNames = controlState.activeToolNames;
-    if (toStringValue(controlState.phase)) {
-      lines.push(`Current loop phase: ${toStringValue(controlState.phase)}`);
+    const resolvedControlState = controlState && typeof controlState === 'object'
+      ? controlState
+      : this._loopControlState(Number(this.state.currentTurn || 1));
+    const activeToolNames = Array.isArray(resolvedControlState.activeToolNames)
+      ? resolvedControlState.activeToolNames
+      : [];
+    if (toStringValue(resolvedControlState.phase)) {
+      lines.push(`Current loop phase: ${toStringValue(resolvedControlState.phase)}`);
     }
     if (activeToolNames.length > 0) {
       lines.push(`Enabled tools this turn: ${activeToolNames.slice(0, 16).join(', ')}`);
@@ -1084,7 +790,7 @@ class QueryEngine {
       lines.push('Cached file context:');
       lines.push(...cachedEntries);
     }
-    if (controlState.finalAnswerPolicyLocked) {
+    if (resolvedControlState.finalAnswerPolicyLocked) {
       const finalAnswerPolicyLock = this.state.finalAnswerPolicyLock && typeof this.state.finalAnswerPolicyLock === 'object'
         ? this.state.finalAnswerPolicyLock
         : {};
@@ -1097,8 +803,8 @@ class QueryEngine {
     return lines.join('\n').trim();
   }
 
-  _modelMessages(systemPrompt) {
-    const runtimeContext = this._runtimeContextMessage();
+  _modelMessages(systemPrompt, controlState = null) {
+    const runtimeContext = this._runtimeContextMessage(controlState);
     const mergedSystemPrompt = [
       toStringValue(systemPrompt),
       toStringValue(this.projectContextPrompt),
@@ -1412,6 +1118,7 @@ class QueryEngine {
         selectedFilePath: this.selectedFilePath,
         engineQuestionOverride: this.engineQuestionOverride,
       });
+      this._configureToolsForRequest(runContext);
       this._resetRepairState();
       const userBlocks = buildUserBlocks(
         toStringValue(runContext?.prompt || prompt),
@@ -1426,7 +1133,7 @@ class QueryEngine {
         initialToolNames: Array.isArray(runContext?.initialToolNames) ? runContext.initialToolNames.slice(0, 20) : [],
         symbolHints: Array.isArray(runContext?.symbolHints) ? runContext.symbolHints.slice(0, 6) : [],
       });
-      if (this.workspacePath) {
+      if (this.workspacePath && toStringValue(runContext?.mode) === 'local') {
         try {
           this.projectContext = await loadProjectContext({
             workspacePath: this.workspacePath,
@@ -1492,7 +1199,8 @@ class QueryEngine {
           getAssistantText: () => streamedAssistantText,
         });
         try {
-          completion = await this._callModel(this._modelMessages(systemPrompt), {
+          const modelMessages = this._modelMessages(systemPrompt, controlState);
+          completion = await this._callModel(modelMessages, {
             signal,
             turn,
             onToolCalls: async (toolCalls) => {

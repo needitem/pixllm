@@ -47,9 +47,6 @@ function collectWorkspacePathHints(context = {}) {
   const trace = Array.isArray(context?.trace) ? context.trace : [];
   const fileCache = context?.fileCache && typeof context.fileCache === 'object' ? context.fileCache : {};
 
-  for (const value of Array.isArray(requestContext?.artifactPlan?.likelyPaths) ? requestContext.artifactPlan.likelyPaths : []) {
-    candidates.push(value);
-  }
   candidates.push(requestContext?.selectedFilePath);
   for (const value of requestContext?.explicitPaths || []) {
     candidates.push(value);

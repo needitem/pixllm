@@ -1,4 +1,4 @@
-# Engine Wiki Schema
+﻿# Engine Wiki Schema
 
 ## Coordination Facts
 ```yaml
@@ -41,4 +41,39 @@ verification_rules:
 - Keep sample/index-style workflow pages out of the canonical runtime wiki when they only duplicate routing or sample guidance.
 - Do not invent overloads, enum literals, or `ref/out` directions beyond the verified pages.
 - Treat `workflow_bound_to_host_context` as a host-context contract: default to WPF only when the explanation needs to mention the surrounding desktop shell.
+
+## AI-Readable Page Format
+- Keep section names stable so an answering model can skim by heading before reading prose.
+- Prefer short, flat bullets over long paragraphs when listing task buckets, method groups, or boundary rules.
+- Put reusable answering guidance in a dedicated section instead of scattering it through overview prose.
+
+### Workflow Pages
+- Recommended order:
+  1. `# Overview`
+  2. `## Primary Usage Buckets` when the family has clear task slices
+  3. `## Family Boundaries` when neighboring families are easy to confuse
+  4. `## Answering Guidance`
+  5. `## Knowledge Bundle`
+  6. runtime status block
+  7. `## Verified Facts`
+- `## Answering Guidance` should tell the model how to use the workflow, when to read related pages, and whether the page is authoritative for exact signatures or only a family overview.
+
+### How-To Pages
+- Recommended order:
+  1. `# <Title>`
+  2. `## What This Recipe Covers`
+  3. `## Use This Recipe For`
+  4. `## Answering Guidance`
+  5. `## Common Recipes`
+  6. `## Related Pages`
+- Keep recipes imperative and step-oriented so they can be turned into direct answers without extra summarization.
+
+### Concept Pages
+- Recommended order:
+  1. `# <Title>`
+  2. core explanatory bullets or paragraphs
+  3. `## Answering Guidance`
+  4. optional related-page list
+- Concept pages should explain shared vocabulary and boundaries, then route the model back to the owning workflow for exact API or code-level answers.
+
 

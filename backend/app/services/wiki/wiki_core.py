@@ -60,6 +60,7 @@ _WRITEBACK_CATEGORY_PATHS = {
     "topic": "pages/topics",
 }
 _RUNTIME_MANIFEST_PATH = ".runtime/manifest.json"
+_RUNTIME_MANIFEST_CACHE: Dict[str, Tuple[float, Dict[str, Any]]] = {}
 
 
 def _slugify(value: str, fallback: str = "engine") -> str:
@@ -191,11 +192,21 @@ def _load_runtime_manifest_for_root(root: Path) -> Dict[str, Any]:
     path = _runtime_manifest_file(root)
     if not path.exists():
         return {}
+    cache_key = str(path.resolve())
+    try:
+        mtime = path.stat().st_mtime
+    except Exception:
+        mtime = 0.0
+    cached = _RUNTIME_MANIFEST_CACHE.get(cache_key)
+    if cached and cached[0] == mtime:
+        return cached[1]
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return {}
-    return payload if isinstance(payload, dict) else {}
+    normalized = payload if isinstance(payload, dict) else {}
+    _RUNTIME_MANIFEST_CACHE[cache_key] = (mtime, normalized)
+    return normalized
 
 
 def _yaml_dump(data: Dict[str, Any]) -> str:

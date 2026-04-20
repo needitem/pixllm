@@ -1,5 +1,6 @@
----
+﻿---
 title: Raster and XDM API Workflow
+description: Load raster files, fetch bands, build XDM composites, and tune display enhancement parameters.
 aliases:
   - raster api
   - raster load
@@ -98,7 +99,7 @@ tags:
 - Prefer this family for XDM composite add/move/remove, grayscale/RGB composition, and raster stretch/cut/enhancement; prefer `ImageView` only for the view shell and layer attachment.
 - Do not steal `ImageView` comp-link manager retrieval or composite `1/2 Front` settings; those stay in `ImageView`.
 
-# Primary Usage Buckets
+## Primary Usage Buckets
 - `파일 로드`: `Initialize`, `LoadFile`, `GetSubDatasets`, `LoadRawFile`, `GetFileInfo`
 - `밴드 접근`: `XRSLoadFile.GetBandAt`
 - `흑백/칼라 도시`: `XDMComposite.SetBand`, `XDMCompManager.AddXDMComposite`
@@ -106,10 +107,23 @@ tags:
 - `화질 조정`: `SetCutType`, `SetStretchCoverage`, `SetStretchType`, `SetCutMin`, `SetCutMax`
 - `고급 XDM 처리`: `XDMBandHistogramMatching`, `XDMBandImageSharpen`, `XDMBandNoiseInterpol`, `XDMBandGeoCorrect`, `XDMBandEpipolar`, `XDMBandOrthoRPC`, `XDMBandSarS2G`
 
-# Family Boundaries
+## Family Boundaries
 - If the question is about attaching loaded raster to `NXImageView`, continue with [ImageView API Workflow](wf-api-imageview.md).
 - If the question is about vector files, use [Vector API Workflow](wf-api-vector.md).
 - Source anchors for this family live in [NXDLio source](../pages/sources/nxdlio.md) and [NXDLrs source](../pages/sources/nxdlrs.md).
+
+## Practical Answer Shape
+- `파일 로드`: `Initialize` -> `LoadFile`/`LoadRawFile` -> `GetSubDatasets` or `GetBandAt`
+- `흑백/칼라 합성`: `SetBand` -> `AddXDMComposite` -> 필요 시 `MoveComposite`
+- `화질 조정`: `SetCutType`, `SetStretchType`, `SetStretchCoverage`, `SetCutMin/Max`
+- `ImageView 표시`: composite를 만든 뒤 `ImageView` workflow로 넘겨 최종 view attach를 설명
+
+
+## Answering Guidance
+- Start with this workflow to confirm the question belongs to this API family before writing code or steps.
+- Use the usage buckets and boundary notes to narrow the task to the smallest relevant slice.
+- Read the linked howto, concept, and source pages from the Knowledge Bundle before giving a procedural answer.
+- Use `Verified Facts` for exact method names and declarations; if this page is overview-only, say that and lean on the related pages for concrete steps.
 
 ## Knowledge Bundle
 ```yaml
@@ -126,7 +140,11 @@ routing_hints:
 bundle_pages:
 - path: pages/howtos/raster-load-and-composite.md
   relation: family_howto
+- path: pages/howtos/raster-low-level-parameter-recipes.md
+  relation: family_howto
 - path: pages/concepts/raster-band-and-enhancement.md
+  relation: family_concept
+- path: pages/concepts/raster-operator-parameter-families.md
   relation: family_concept
 - path: pages/concepts/layer-composite-display-pipeline.md
   relation: family_concept
@@ -140,14 +158,14 @@ bundle_pages:
 
 <!-- GENERATED:RUNTIME_STATUS:START -->
 ## Runtime Ingest Status
-- Auto-generated from raw source ingest at `2026-04-20T00:52:13Z`.
+- Auto-generated from raw source ingest at `2026-04-20T02:38:44Z`.
 - Resolved required symbols: `16/16`
 - Linked modules:
   - `NXDLio`
   - `NXDLrs`
 - Missing required symbols: `0`
 <!-- GENERATED:RUNTIME_STATUS:END -->
-## Required Facts
+## Verified Facts
 ```yaml
 workflow_family: api_raster
 output_shape: focused_snippet_or_helper
@@ -223,4 +241,5 @@ verification_rules:
   - verify_ref_out_and_enum_literals_when_signature_matters
   - cross_check_runtime_methods_index_before_emitting_code
 ```
+
 

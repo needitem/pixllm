@@ -29,7 +29,7 @@ function collectWorkspaceGroundedPaths({ trace = [], fileCache = {}, requestCont
   for (const item of listFilesFromTrace(trace)) append(item?.path);
   for (const item of symbolOutlinesFromTrace(trace)) append(item?.path);
   for (const step of Array.isArray(trace) ? trace : []) {
-    if (!['write', 'write_file', 'edit', 'replace_in_file', 'notebook_edit'].includes(toStringValue(step?.tool))) {
+    if (!['edit', 'replace_in_file'].includes(toStringValue(step?.tool))) {
       continue;
     }
     if (step?.observation?.ok === false) {

@@ -1,5 +1,6 @@
----
+﻿---
 title: ImageView API Workflow
+description: Host NXImageView, attach layers, control view state, and handle composite-linked display tasks.
 aliases:
   - imageview api
   - imageview 사용법
@@ -40,11 +41,11 @@ tags:
 - Goal: answer most `NXImageView` usage questions from one page.
 - Default host context: WPF. `NXImageView` is a WinForms-backed control, so host it through `WindowsFormsHost` when the shell matters.
 - This workflow covers host setup, layer attach/remove, background-map configuration, zoom/world control, screen/world conversion, pixel read, and XDM composite hookup.
-- Prefer this family for view-owned operations such as layer attach, background map, zoom, refresh, and ImageView screen/world conversion. If the question is really about XDM band/composite assembly, prefer `Raster`.
-- If the question is about `NXImageLayerCompLink` comp-manager retrieval or composite `1/2 Front` settings, keep it in `ImageView`; those are view-owned composite-link operations, not raw raster assembly.
-- Do not use this family for embedded video-layer channel wiring, channel reset, initial frame size, or video-layer screen/world conversion; those belong to `VideoView`.
+- For the current wiki routing, treat view-owned operations such as layer attach, background map, zoom, refresh, and ImageView screen/world conversion as `ImageView`; if the question is really about XDM band/composite assembly, route to `Raster`.
+- For the current wiki routing, questions about `NXImageLayerCompLink` comp-manager retrieval or composite `1/2 Front` settings stay in `ImageView`; those are documented here as view-owned composite-link operations.
+- For the current wiki routing, embedded video-layer channel wiring, channel reset, initial frame size, and video-layer screen/world conversion are handled by `VideoView`.
 
-# Primary Usage Buckets
+## Primary Usage Buckets
 - `ImageView에 Layer 추가/제거`: `AddImageLayer`, `RemoveImageLayer`, `ClearLayer`
 - `파일을 띄운 뒤 화면 맞춤`: `ZoomFit`, `ZoomFitRect`, `ZoomOneToOne`, `RefreshScreen`
 - `화면/좌표 변환`: `ScreenToWorld`, `WorldToScreen`, `SetWorld`, `SetWorldToCenter`, `SetWorldPerScreen`
@@ -52,10 +53,23 @@ tags:
 - `XDM / 합성`: `NXImageLayerComposites.GetXDMCompManager`, `ReadPixelValues`, `ZoomFit`
 - `특수 레이어`: `NXImageLayerCompLink.GetXDLCompManager1`, `GetXDLCompManager2`, `ZoomFit`
 
-# Family Boundaries
+## Family Boundaries
 - File load and band extraction live in [Raster API Workflow](wf-api-raster.md).
 - If the question is mainly about vector files or overlays, use [Vector API Workflow](wf-api-vector.md).
 - Source anchors for this family live in [NXImage source](../pages/sources/nximage.md), [NXDLio source](../pages/sources/nxdlio.md), and [NXDLrs source](../pages/sources/nxdlrs.md).
+
+## Practical Answer Shape
+- `ImageView에 레이어 추가`: view 생성/호스팅 -> `AddImageLayer` -> `ZoomFit` 또는 `RefreshScreen`
+- `배경지도 설정`: `SetBackgroundMap` 호출과 이후 view refresh를 같이 설명
+- `화면/실좌표 변환`: `ScreenToWorld` / `WorldToScreen`을 pair로 설명
+- `합성 관리자/comp-link`: `GetXDMCompManager` 또는 `GetXDLCompManager1/2`가 필요한지 먼저 가릅니다
+
+
+## Answering Guidance
+- Start with this workflow to confirm the question belongs to this API family before writing code or steps.
+- Use the usage buckets and boundary notes to narrow the task to the smallest relevant slice.
+- Read the linked howto, concept, and source pages from the Knowledge Bundle before giving a procedural answer.
+- Use `Verified Facts` for exact method names and declarations; if this page is overview-only, say that and lean on the related pages for concrete steps.
 
 ## Knowledge Bundle
 ```yaml
@@ -87,13 +101,13 @@ bundle_pages:
 
 <!-- GENERATED:RUNTIME_STATUS:START -->
 ## Runtime Ingest Status
-- Auto-generated from raw source ingest at `2026-04-20T00:52:13Z`.
+- Auto-generated from raw source ingest at `2026-04-20T02:38:44Z`.
 - Resolved required symbols: `20/20`
 - Linked modules:
   - `NXImage`
 - Missing required symbols: `0`
 <!-- GENERATED:RUNTIME_STATUS:END -->
-## Required Facts
+## Verified Facts
 ```yaml
 workflow_family: api_imageview
 output_shape: workflow_bound_to_host_context
@@ -167,4 +181,5 @@ verification_rules:
   - verify_ref_out_and_enum_literals_when_signature_matters
   - cross_check_runtime_methods_index_before_emitting_code
 ```
+
 

@@ -1,5 +1,6 @@
----
+﻿---
 title: VideoView API Workflow
+description: Open video, bind channels, capture frames, extract KLV, and explain embedded video-layer handling.
 aliases:
   - videoview api
   - videoview 사용법
@@ -56,16 +57,30 @@ tags:
 # Overview
 - Goal: cover open/bind/render/capture/KLV questions for the video family.
 - This workflow covers `XVideoIO`, `NXVideoView`, `NXImageLayerVideo`, and `NXMpegTSAnalysis`.
-- Even when `ImageView` is explicitly named, prefer this family for `비디오 레이어`, `채널 연결/해제`, `초기 프레임 크기`, and video-layer screen/world conversion.
-- The same rule applies when `MilmapView` or `PlanetView` is named: if the intent is video channel wiring, KLV, frame capture, or embedded video-layer conversion, keep it in `VideoView`.
+- For the current wiki routing, even when `ImageView` is explicitly named, `비디오 레이어`, `채널 연결/해제`, `초기 프레임 크기`, and video-layer screen/world conversion are treated as `VideoView`.
+- The same routing rule applies when `MilmapView` or `PlanetView` is named and the intent is video channel wiring, KLV, frame capture, or embedded video-layer conversion.
 
-# Primary Usage Buckets
+## Primary Usage Buckets
 - `동영상 열기`: `XVideoIO.OpenFile`
 - `화면 표시`: `SetVideoChannel`, `ResetVideoChannel`, `RefreshScreen`, `RequestRender`
 - `프레임 캡처`: `CaptureFrame`
 - `KLV`: `NXMpegTSAnalysis.GetKLVMetaData`
 - `ImageView 안의 비디오`: `NXImageLayerVideo.SetVideoChannel`, `ResetVideoChannel`, `SetInitialFrameSize`
 - `영상 융합`: `SetVideoChannelFuse`, `EnableVideoFusion`
+
+## Practical Answer Shape
+- `파일 열기 + 표시`: `OpenFile` -> `SetVideoChannel` -> `RefreshScreen/RequestRender`
+- `채널 교체/해제`: `SetVideoChannel`과 `ResetVideoChannel`을 같은 흐름 안에서 설명
+- `프레임 캡처`: live view 캡처인지, embedded video layer인지 먼저 나눈 뒤 `CaptureFrame` 또는 layer-side API를 제시
+- `embedded video layer`: `NXImageLayerVideo` 계열은 view family가 아니라 video family 책임으로 설명
+- `필터/그룹/모자이크/안정화`: low-level helper가 나오면 `XVideoFrameFilter`, `XVideoGroup`, `XVideoMosaic`, `XVideoStabilizer`를 묶어 답합니다
+
+
+## Answering Guidance
+- Start with this workflow to confirm the question belongs to this API family before writing code or steps.
+- Use the usage buckets and boundary notes to narrow the task to the smallest relevant slice.
+- Read the linked howto, concept, and source pages from the Knowledge Bundle before giving a procedural answer.
+- Use `Verified Facts` for exact method names and declarations; if this page is overview-only, say that and lean on the related pages for concrete steps.
 
 ## Knowledge Bundle
 ```yaml
@@ -91,6 +106,8 @@ routing_hints:
 bundle_pages:
 - path: pages/howtos/videoview-playback-and-klv.md
   relation: family_howto
+- path: pages/howtos/video-helper-processing-recipes.md
+  relation: family_howto
 - path: pages/concepts/video-channel-klv-and-fusion.md
   relation: family_concept
 - path: workflows/wf-api-imageview.md
@@ -101,13 +118,13 @@ bundle_pages:
 
 <!-- GENERATED:RUNTIME_STATUS:START -->
 ## Runtime Ingest Status
-- Auto-generated from raw source ingest at `2026-04-20T00:52:13Z`.
+- Auto-generated from raw source ingest at `2026-04-20T02:38:44Z`.
 - Resolved required symbols: `13/13`
 - Linked modules:
   - `NXVideo`
 - Missing required symbols: `0`
 <!-- GENERATED:RUNTIME_STATUS:END -->
-## Required Facts
+## Verified Facts
 ```yaml
 workflow_family: api_videoview
 output_shape: workflow_bound_to_host_context
@@ -165,4 +182,5 @@ verification_rules:
   - verify_ref_out_and_enum_literals_when_signature_matters
   - cross_check_runtime_methods_index_before_emitting_code
 ```
+
 

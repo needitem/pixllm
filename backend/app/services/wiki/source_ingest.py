@@ -181,7 +181,7 @@ def upsert_workflow_runtime_status(content: str, block: str) -> str:
         updated = text[:start].rstrip() + "\n\n" + replacement + text[end:].lstrip("\n")
         return updated
 
-    marker = "## Required Facts"
+    marker = "## Verified Facts"
     index = text.find(marker)
     if index >= 0:
         prefix = text[:index].rstrip()

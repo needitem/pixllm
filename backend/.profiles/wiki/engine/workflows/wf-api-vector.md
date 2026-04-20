@@ -1,5 +1,6 @@
----
+﻿---
 title: Vector API Workflow
+description: Load vector files, inspect vector metadata, create geometry objects, and overlay them onto views.
 aliases:
   - vector api
   - vector file load
@@ -41,8 +42,28 @@ tags:
 
 # Overview
 - Goal: load vector data, inspect metadata, create vector objects, and overlay them on image or map views.
-- Prefer this family for `vector`, `shp`, `overlay`, `bounding box`, `vertex`, `property`, and vector-layer hit-test questions even when ImageView is also mentioned.
-- If the question mentions vector file metadata, driver key, supported extensions, vector bounds, or vector geometry setup, prefer this family over `Coordinate` or `ImageView`.
+- For the current wiki routing, `vector`, `shp`, `overlay`, `bounding box`, `vertex`, `property`, and vector-layer hit-test questions stay in this family even when ImageView is also mentioned.
+- For the current wiki routing, vector file metadata, driver key, supported extensions, vector bounds, or vector geometry setup route here rather than `Coordinate` or `ImageView`.
+
+## Primary Usage Buckets
+- `벡터 파일 로드`: `Initialize`, `LoadFile`, `GetFileInfo`
+- `파일 메타데이터`: bounding box, spatial reference, driver key, supported extension
+- `객체/속성`: `GetPropertyNameAt`, `GetPropertyValueAt`
+- `기하 생성`: `SetVertex`, `SetVertices`, `Add`
+- `overlay / hit test`: `HitTest`, view layer attach
+
+## Practical Answer Shape
+- `벡터 파일 로드`: 먼저 `Initialize` -> `LoadFile` -> 필요한 경우 `GetFileInfo` 순서로 답합니다.
+- `속성 확인`: object property name/value access와 geometry setup를 분리해서 설명합니다.
+- `overlay`: vector를 로드한 뒤 어느 view에 붙일지 다음 workflow를 연결해줍니다.
+- `기하 생성`: point/line/polyline/polygon을 각각 다른 메서드군으로 설명합니다.
+
+
+## Answering Guidance
+- Start with this workflow to confirm the question belongs to this API family before writing code or steps.
+- Use the usage buckets and boundary notes to narrow the task to the smallest relevant slice.
+- Read the linked howto, concept, and source pages from the Knowledge Bundle before giving a procedural answer.
+- Use `Verified Facts` for exact method names and declarations; if this page is overview-only, say that and lean on the related pages for concrete steps.
 
 ## Knowledge Bundle
 ```yaml
@@ -63,7 +84,7 @@ bundle_pages:
 
 <!-- GENERATED:RUNTIME_STATUS:START -->
 ## Runtime Ingest Status
-- Auto-generated from raw source ingest at `2026-04-20T00:52:13Z`.
+- Auto-generated from raw source ingest at `2026-04-20T02:38:44Z`.
 - Resolved required symbols: `11/11`
 - Linked modules:
   - `NXDLio`
@@ -71,7 +92,7 @@ bundle_pages:
   - `NXImage`
 - Missing required symbols: `0`
 <!-- GENERATED:RUNTIME_STATUS:END -->
-## Required Facts
+## Verified Facts
 ```yaml
 workflow_family: api_vector
 output_shape: focused_snippet_or_helper
@@ -124,4 +145,5 @@ verification_rules:
   - verify_ref_out_and_enum_literals_when_signature_matters
   - cross_check_runtime_methods_index_before_emitting_code
 ```
+
 

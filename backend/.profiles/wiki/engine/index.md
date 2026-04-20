@@ -1,7 +1,7 @@
 # LLM Wiki Index
 
-- Total pages: `64`
-- Last rebuilt: `2026-04-20T00:52:19.508956+00:00`
+- Total pages: `68`
+- Last rebuilt: `2026-04-20T02:38:47.829330+00:00`
 
 ## Coordination
 
@@ -40,6 +40,7 @@
 
 ## Analyses
 
+- [Routing and Coverage Status](pages/analyses/routing-and-coverage-status.md) - Current routing quality and answer-material coverage status for the engine wiki.
 - [TODO | Compiled Wiki Growth](pages/analyses/todo-compiled-wiki-growth.md) - Placeholder analysis page for the gap between current wiki-only answers and future accumulation.
 
 ## Decisions
@@ -48,19 +49,19 @@
 
 ## Workflows
 
-- [Annotation Editor API Workflow](workflows/wf-api-editor.md) - # Overview - Goal: answer `NEditor` usage questions from one page. - This workflow covers image display/update, capture, SR and world/screen conversion, zoom/canvas state, and common editor actions such as copy/paste/group/delete. - Prefer
-- [Coordinate API Workflow](workflows/wf-api-coordinate.md) - # Overview - Goal: answer most coordinate-system questions from one page. - This workflow covers `Xcc` code conversion, `XCoordinateTransformation`, and `XSpatialReference`. - Prefer this family for SR/code conversion and explicit coordinat
-- [Core Utilities API Workflow](workflows/wf-api-core-utils.md) - # Overview - Goal: collect common top-level NXDL utilities that users call directly outside a view family. - This workflow covers progress reporting, config-path switching, and license validation. ## Knowledge Bundle
-- [DFS Export API Workflow](workflows/wf-api-dfs.md) - # Overview - Goal: register DFS providers and build PBI/PBE outputs. - Prefer this family for DFS provider-group registration, PBI/PBE export, export progress polling, and export cancel flows. ## Knowledge Bundle
-- [ImageView API Workflow](workflows/wf-api-imageview.md) - # Overview - Goal: answer most `NXImageView` usage questions from one page. - Default host context: WPF. `NXImageView` is a WinForms-backed control, so host it through `WindowsFormsHost` when the shell matters. - This workflow covers host s
-- [MilmapView API Workflow](workflows/wf-api-milmapview.md) - # Overview - Goal: cover scale, center, render-layer attach/order, draw args, and capture on `NXMilmapView`. - This workflow is the primary family for normal `MilmapView` usage questions. - If `MilmapView` is explicitly named, prefer this f
-- [PlanetView API Workflow](workflows/wf-api-planetview.md) - # Overview - Goal: cover camera, layer attach/order, capture, and dataset registration on `NXPlanetView`. - This workflow merges view control and PBI dataset usage into one API family page. - If `PlanetView` is explicitly named, prefer this
-- [Raster and XDM API Workflow](workflows/wf-api-raster.md) - # Overview - Goal: cover raster-file load, band access, XDM composite assembly, and display-quality tuning. - This workflow is the primary family for `XRasterIO`, `XRSLoadFile`, `XDMBand`, `XDMComposite`, and `XDMCompManager`. - Prefer this
-- [Scene Editor API Workflow](workflows/wf-api-scene-editor.md) - # Overview - Goal: create/open/save scenes and select scene objects through `NXPlanetLayerSceneEditor`. - This workflow merges scene IO and selection into one API family page. - Prefer this family when the question explicitly says `scene`,
-- [Sensor Model API Workflow](workflows/wf-api-sensor-model.md) - # Overview - Goal: configure sensor parameters and project between image and world spaces. - Prefer this family for image-to-ground, ground-to-image, image-to-geo, geo-to-image, and image-center map-coordinate questions. ## Knowledge Bundle
-- [UspaceView API Workflow](workflows/wf-api-uspaceview.md) - # Overview - Goal: define region, camera, SR, and interaction mode on `NXUspaceView`. - Prefer this family for `UspaceView`-named coordinate or space/screen conversion questions. - If the question explicitly names `UspaceView`, prefer this
-- [Vector API Workflow](workflows/wf-api-vector.md) - # Overview - Goal: load vector data, inspect metadata, create vector objects, and overlay them on image or map views. - Prefer this family for `vector`, `shp`, `overlay`, `bounding box`, `vertex`, `property`, and vector-layer hit-test quest
-- [VideoView API Workflow](workflows/wf-api-videoview.md) - # Overview - Goal: cover open/bind/render/capture/KLV questions for the video family. - This workflow covers `XVideoIO`, `NXVideoView`, `NXImageLayerVideo`, and `NXMpegTSAnalysis`. - Even when `ImageView` is explicitly named, prefer this fa
+- [Annotation Editor API Workflow](workflows/wf-api-editor.md) - Display, capture, edit, and reorder annotation objects on the editor canvas.
+- [Coordinate API Workflow](workflows/wf-api-coordinate.md) - Convert coordinate codes, define spatial references, and transform points between coordinate systems.
+- [Core Utilities API Workflow](workflows/wf-api-core-utils.md) - Handle license validation, config path switching, and progress/helper utilities outside view families.
+- [DFS Export API Workflow](workflows/wf-api-dfs.md) - Build DFS provider groups, run PBI/PBE exports, and track export progress or cancellation.
+- [ImageView API Workflow](workflows/wf-api-imageview.md) - Host NXImageView, attach layers, control view state, and handle composite-linked display tasks.
+- [MilmapView API Workflow](workflows/wf-api-milmapview.md) - Control MilmapView scale, center, render layers, capture, and map display state.
+- [PlanetView API Workflow](workflows/wf-api-planetview.md) - Control PlanetView camera, render layers, dataset display, and capture operations.
+- [Raster and XDM API Workflow](workflows/wf-api-raster.md) - Load raster files, fetch bands, build XDM composites, and tune display enhancement parameters.
+- [Scene Editor API Workflow](workflows/wf-api-scene-editor.md) - Create, open, save, and select scene objects through the scene editor family.
+- [Sensor Model API Workflow](workflows/wf-api-sensor-model.md) - Configure sensor parameters and project between image, world, and geographic coordinates.
+- [UspaceView API Workflow](workflows/wf-api-uspaceview.md) - Control UspaceView render layers, space regions, camera state, and space/world/screen conversions.
+- [Vector API Workflow](workflows/wf-api-vector.md) - Load vector files, inspect vector metadata, create geometry objects, and overlay them onto views.
+- [VideoView API Workflow](workflows/wf-api-videoview.md) - Open video, bind channels, capture frames, extract KLV, and explain embedded video-layer handling.
 
 ## Other
 
@@ -77,6 +78,8 @@
 - [Provider, Dataset, and Scene Assets](pages/concepts/provider-dataset-and-scene-assets.md) - Cross-cutting concept page for providers, datasets, and scene asset routing.
 - [Raster Band and Enhancement Model](pages/concepts/raster-band-and-enhancement.md) - Cross-cutting concept page for band access, grayscale/RGB composition, and display enhancement.
 - [Raster Load and Composite Recipes](pages/howtos/raster-load-and-composite.md) - Common raster workflows for load, band access, grayscale/RGB display, and enhancement setup.
+- [Raster Low-Level Parameter Recipes](pages/howtos/raster-low-level-parameter-recipes.md) - Common low-level raster operator tasks for input params, statistics, plateau values, masks, and feature seeds.
+- [Raster Operator Parameter Families](pages/concepts/raster-operator-parameter-families.md) - Cross-cutting concept page for low-level raster operator names such as input params, statistics, plateaus, masks, and feature polygons.
 - [Scene Editor Object IO Recipes](pages/howtos/scene-editor-object-io.md) - Common scene-editor tasks for scene-object creation, load, save, and object wiring.
 - [Sensor Model Projection Recipes](pages/howtos/sensor-model-image-ground-projection.md) - Common sensor-model tasks for image-to-ground and ground-to-image projection.
 - [Sensor Model and Projection](pages/concepts/sensor-model-and-projection.md) - Cross-cutting concept page for image-ground projection and sensor geometry.
@@ -84,5 +87,6 @@
 - [UspaceView Render and World Recipes](pages/howtos/uspaceview-render-and-world.md) - Common UspaceView tasks for render-layer setup, world mapping, and interaction.
 - [Vector Load and Overlay Recipes](pages/howtos/vector-load-and-overlay.md) - Common vector tasks for loading, styling, and overlaying vector content on views.
 - [Video Channel, KLV, and Fusion](pages/concepts/video-channel-klv-and-fusion.md) - Cross-cutting concept page for video channel ownership, MPEG TS metadata, and fused video output.
+- [Video Helper Processing Recipes](pages/howtos/video-helper-processing-recipes.md) - Common helper-class tasks for video filters, grouped channels, mosaics, and stabilizers.
 - [VideoView Playback and KLV Recipes](pages/howtos/videoview-playback-and-klv.md) - Common video tasks for open, bind, render, capture, and KLV extraction.
 - [View Screen and World Coordinates](pages/concepts/view-screen-world-coordinates.md) - Cross-cutting concept page for screen-space and world-space transforms across view families.

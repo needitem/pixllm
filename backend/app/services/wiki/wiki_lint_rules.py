@@ -90,7 +90,7 @@ async def run_wiki_lint(service, wiki_id: str, *, repair: bool = False) -> Dict[
         if kind != "workflow":
             continue
 
-        required_section = _extract_section_yaml(content, "Required Facts")
+        required_section = _extract_section_yaml(content, "Verified Facts")
         knowledge_bundle = _extract_knowledge_bundle(content)
         required_symbols = _normalize_string_list(required_section.get("required_symbols"), limit=64)
         required_facts = required_section.get("required_facts") if isinstance(required_section.get("required_facts"), list) else []
