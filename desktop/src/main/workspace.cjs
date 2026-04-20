@@ -3,7 +3,6 @@ const { execFile } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const { createUnifiedDiff } = require('./tools/shared/unifiedDiff.cjs');
-const { evaluateWorkspaceShellRequest } = require('./workspaceShell.cjs');
 
 const IGNORED_DIRS = new Set([
   '.svn',
@@ -80,8 +79,6 @@ const DEFAULT_COMMAND_TIMEOUT_MS = 15_000;
 const SVN_INFO_TIMEOUT_MS = 30_000;
 const SVN_STATUS_TIMEOUT_MS = 30_000;
 const SVN_DIFF_TIMEOUT_MS = 120_000;
-const BUILD_TIMEOUT_MS = 10 * 60 * 1000;
-const SHELL_TIMEOUT_MS = 60_000;
 
 function isAllowedWorkbenchFile(fileName) {
   const lowered = String(fileName || '').toLowerCase();
@@ -1273,85 +1270,6 @@ async function readSymbolSpanInWorkspace(workspacePath, relativePath = '', symbo
   }
 }
 
-async function runBuild(workspacePath, tool, args) {
-  const normalizedTool = String(tool || '').trim().toLowerCase();
-  const extraArgs = Array.isArray(args) ? args.map((item) => String(item)) : [];
-  let normalizedPath;
-  try {
-    normalizedPath = await normalizeWorkspacePath(workspacePath);
-  } catch (error) {
-    return invalidWorkspaceResult(error);
-  }
-
-  if (normalizedTool === 'dotnet') {
-    return runCommand('dotnet', ['build', ...extraArgs], normalizedPath, { timeoutMs: BUILD_TIMEOUT_MS });
-  }
-  if (normalizedTool === 'msbuild') {
-    return runCommand('msbuild', extraArgs, normalizedPath, { timeoutMs: BUILD_TIMEOUT_MS });
-  }
-  if (normalizedTool === 'cmake') {
-    return runCommand('cmake', ['--build', '.', ...extraArgs], normalizedPath, { timeoutMs: BUILD_TIMEOUT_MS });
-  }
-  if (normalizedTool === 'ninja') {
-    return runCommand('ninja', extraArgs, normalizedPath, { timeoutMs: BUILD_TIMEOUT_MS });
-  }
-
-  return {
-    ok: false,
-    code: 1,
-    stdout: '',
-    stderr: '',
-    error: `Unsupported build tool: ${tool}`
-  };
-}
-
-async function runWorkspaceShell(workspacePath, commandText, options = {}) {
-  let normalizedPath;
-  try {
-    normalizedPath = await normalizeWorkspacePath(workspacePath);
-  } catch (error) {
-    return invalidWorkspaceResult(error);
-  }
-
-  const shellRequest = evaluateWorkspaceShellRequest(commandText);
-  if (!shellRequest.ok) {
-    return {
-      ok: false,
-      code: 1,
-      stdout: '',
-      stderr: '',
-      error: shellRequest.error,
-      message: shellRequest.message,
-    };
-  }
-
-  if (shellRequest.locationPath) {
-    try {
-      normalizedPath = await safeResolve(normalizedPath, shellRequest.locationPath);
-    } catch (error) {
-      return invalidWorkspaceResult(error);
-    }
-  }
-
-  const timeoutMs = Math.max(1_000, Math.min(Number(options.timeoutMs || options.timeout_ms || SHELL_TIMEOUT_MS), BUILD_TIMEOUT_MS));
-  let lastResult = null;
-  for (const candidate of powershellExecutableCandidates()) {
-    lastResult = await runCommand(candidate, ['-NoLogo', '-NoProfile', '-Command', shellRequest.executableCommand], normalizedPath, {
-      timeoutMs,
-    });
-    if (lastResult.ok || lastResult.stdout || lastResult.stderr) {
-      return {
-        ...lastResult,
-        command: shellRequest.requestedCommand,
-      };
-    }
-  }
-  return {
-    ...(lastResult || invalidWorkspaceResult(new Error('powershell_unavailable'))),
-    command: shellRequest.requestedCommand,
-  };
-}
-
 module.exports = {
   selectWorkspace,
   svnInfo,
@@ -1367,7 +1285,5 @@ module.exports = {
   findReferencesInWorkspace,
   symbolNeighborhoodInWorkspace,
   symbolOutlineInWorkspace,
-  runBuild,
-  runWorkspaceShell,
   safeResolve,
 };

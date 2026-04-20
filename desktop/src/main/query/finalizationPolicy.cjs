@@ -48,6 +48,7 @@ function extractCandidatePaths(trace = []) {
 
     const groups = [
       observation.items,
+      observation.results,
       observation.matches,
       observation.windows,
       observation.sources,
@@ -166,19 +167,16 @@ function requestNeedsGroundedChangeEvidence(requestContext = {}) {
     ? requestContext.intent
     : {};
   return Boolean(
-    intent.wantsChanges
-    || intent.createLikely
-    || requestContext?.artifactPlan?.requiresWorkspaceArtifact,
+    intent.wantsChanges,
   );
 }
 
-function requestRequiresWorkspaceMutation(requestContext = {}) {
+function requestRequiresWorkspaceEdit(requestContext = {}) {
   const intent = requestContext?.intent && typeof requestContext.intent === 'object'
     ? requestContext.intent
     : {};
   return Boolean(
-    intent.createLikely
-    || requestContext?.artifactPlan?.requiresWorkspaceArtifact,
+    intent.wantsChanges,
   );
 }
 
@@ -200,7 +198,7 @@ function evaluateFinalAnswerPolicy({
   const hasGroundedChangeEvidence =
     hasWorkspaceGrounding
     || referenceEvidence.hasVerifiedCodeEvidence;
-  const hasVerifiedApiFacts = Number(referenceEvidence.apiFactCount || 0) > 0
+  const hasVerifiedWorkflowFacts = Number(referenceEvidence.apiFactCount || 0) > 0
     || Number(referenceEvidence.workflowRequiredFactCount || 0) > 0;
   const matchedForbiddenAnswerPatterns = matchForbiddenAnswerPatterns(
     finalAnswer,
@@ -211,28 +209,7 @@ function evaluateFinalAnswerPolicy({
 
   if (
     prefersWorkflowFirst
-    && !requestRequiresWorkspaceMutation(requestContext)
-    && !acknowledgesMissingVerification
-    && referenceEvidence.workflowBundleSeen
-    && !referenceEvidence.workflowSlotsComplete
-  ) {
-    return {
-      ok: false,
-      reason: 'workflow_slots_incomplete',
-      blockingMessage: `Do not finalize a workflow-first guidance answer until the required workflow slots are satisfied. Missing: ${(referenceEvidence.workflowMissingSlots || []).join(', ') || 'unknown slots'}.`,
-      details: {
-        turn,
-        finalAnswerPreview: toStringValue(finalAnswer).slice(0, 240),
-        acknowledgesMissingVerification,
-        referenceEvidence,
-        ...summary,
-      },
-    };
-  }
-
-  if (
-    prefersWorkflowFirst
-    && !requestRequiresWorkspaceMutation(requestContext)
+    && !requestRequiresWorkspaceEdit(requestContext)
     && !acknowledgesMissingVerification
     && !referenceEvidence.hasWorkflowEvidence
   ) {
@@ -252,7 +229,7 @@ function evaluateFinalAnswerPolicy({
 
   if (
     prefersWorkflowFirst
-    && !requestRequiresWorkspaceMutation(requestContext)
+    && !requestRequiresWorkspaceEdit(requestContext)
     && containsCodeExample
     && !acknowledgesMissingVerification
     && matchedForbiddenAnswerPatterns.length > 0
@@ -275,42 +252,20 @@ function evaluateFinalAnswerPolicy({
 
   if (
     prefersWorkflowFirst
-    && !requestRequiresWorkspaceMutation(requestContext)
+    && !requestRequiresWorkspaceEdit(requestContext)
     && containsCodeExample
     && !acknowledgesMissingVerification
-    && !hasVerifiedApiFacts
+    && !hasVerifiedWorkflowFacts
   ) {
     return {
       ok: false,
-      reason: 'verified_api_facts_required',
-      blockingMessage: 'Do not finalize a workflow-first guidance answer that includes code until verified API facts or workflow required facts are present. Run wiki_evidence_search and ground the snippet in the emitted signatures instead of inventing APIs.',
+      reason: 'verified_workflow_facts_required',
+      blockingMessage: 'Do not finalize a workflow-first guidance answer that includes code until the read workflow or methods pages expose Required Facts or verified declarations. Read the relevant wiki pages first and ground the snippet in those declarations instead of inventing APIs.',
       details: {
         turn,
         finalAnswerPreview: toStringValue(finalAnswer).slice(0, 240),
         acknowledgesMissingVerification,
         containsCodeExample,
-        referenceEvidence,
-        ...summary,
-      },
-    };
-  }
-
-  if (
-    prefersWorkflowFirst
-    && !requestRequiresWorkspaceMutation(requestContext)
-    && !acknowledgesMissingVerification
-    && referenceEvidence.hasWorkflowEvidence
-    && !referenceEvidence.hasMethodEvidence
-    && !referenceEvidence.hasVerifiedCodeEvidence
-  ) {
-    return {
-      ok: false,
-      reason: 'workflow_slots_incomplete',
-      blockingMessage: 'Do not finalize a workflow-first guidance answer until the workflow references are expanded into methods or verified code evidence.',
-      details: {
-        turn,
-        finalAnswerPreview: toStringValue(finalAnswer).slice(0, 240),
-        acknowledgesMissingVerification,
         referenceEvidence,
         ...summary,
       },
@@ -340,7 +295,7 @@ function evaluateFinalAnswerPolicy({
   }
 
   if (
-    requestRequiresWorkspaceMutation(requestContext)
+    requestRequiresWorkspaceEdit(requestContext)
     && usedTools
     && !summary.hasMutationEvidence
     && !acknowledgesMissingVerification
@@ -348,7 +303,7 @@ function evaluateFinalAnswerPolicy({
     return {
       ok: false,
       reason: 'workspace_mutation_required',
-      blockingMessage: 'Do not finalize a create request without producing a grounded workspace file change in this run. Update an existing file, create the requested file, or state the concrete blocker.',
+      blockingMessage: 'Do not finalize a local edit request without producing a grounded change to an existing workspace file in this run. Update the targeted file directly or state the concrete blocker.',
       details: {
         turn,
         finalAnswerPreview: toStringValue(finalAnswer).slice(0, 240),

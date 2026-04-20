@@ -109,28 +109,6 @@ export type WikiCoordinationStatus = {
   has_coordination_spine?: boolean;
 };
 
-export type WikiLintFinding = {
-  severity?: string;
-  code?: string;
-  path?: string;
-  target?: string;
-  message?: string;
-};
-
-export type WikiLintResponse = {
-  wiki_id?: string;
-  repair?: boolean;
-  coordination_status?: WikiCoordinationStatus | null;
-  finding_count?: number;
-  severity_counts?: Record<string, number>;
-  findings?: WikiLintFinding[];
-};
-
-export type WikiWritebackResponse = {
-  page?: WikiPage | null;
-  index_page?: WikiPage | null;
-};
-
 export type StreamStatusPayload = {
   phase?: string;
   message?: string;
@@ -264,30 +242,29 @@ export type StreamBriefPayload = {
   level?: string;
 };
 
-export const fetchHealth = (baseUrl: string, token: string) =>
-  invokeDesktop<HealthResponse>('apiHealth', baseUrl, token);
-export async function fetchRuns(baseUrl: string, token: string): Promise<ExecutionRun[]> {
-  return normalizeDesktopItems<ExecutionRun>(await invokeDesktop<unknown>('apiRuns', baseUrl, token));
+export const fetchHealth = (baseUrl: string) =>
+  invokeDesktop<HealthResponse>('apiHealth', baseUrl);
+export async function fetchRuns(baseUrl: string): Promise<ExecutionRun[]> {
+  return normalizeDesktopItems<ExecutionRun>(await invokeDesktop<unknown>('apiRuns', baseUrl));
 }
-export const fetchRun = (baseUrl: string, token: string, runId: string) =>
-  invokeDesktop<ExecutionRun>('apiRun', baseUrl, token, runId);
-export const cancelRun = (baseUrl: string, token: string, runId: string, reason = 'desktop_user') =>
-  invokeDesktop<ExecutionRun>('apiCancelRun', baseUrl, token, runId, reason);
+export const fetchRun = (baseUrl: string, runId: string) =>
+  invokeDesktop<ExecutionRun>('apiRun', baseUrl, runId);
+export const cancelRun = (baseUrl: string, runId: string, reason = 'desktop_user') =>
+  invokeDesktop<ExecutionRun>('apiCancelRun', baseUrl, runId, reason);
 
 export async function resumeRun(
   baseUrl: string,
-  token: string,
   runId: string,
   fromTaskKey = '',
   fromStepKey = ''
 ) {
-  return invokeDesktop<ExecutionRun>('apiResumeRun', baseUrl, token, runId, fromTaskKey, fromStepKey);
+  return invokeDesktop<ExecutionRun>('apiResumeRun', baseUrl, runId, fromTaskKey, fromStepKey);
 }
 
-export const approveRun = (baseUrl: string, token: string, runId: string, approvalId: string, note = '') =>
-  invokeDesktop<RunApproval>('apiApproveRun', baseUrl, token, runId, approvalId, note);
-export const rejectRun = (baseUrl: string, token: string, runId: string, approvalId: string, note = '') =>
-  invokeDesktop<RunApproval>('apiRejectRun', baseUrl, token, runId, approvalId, note);
+export const approveRun = (baseUrl: string, runId: string, approvalId: string, note = '') =>
+  invokeDesktop<RunApproval>('apiApproveRun', baseUrl, runId, approvalId, note);
+export const rejectRun = (baseUrl: string, runId: string, approvalId: string, note = '') =>
+  invokeDesktop<RunApproval>('apiRejectRun', baseUrl, runId, approvalId, note);
 
 function toStringValue(value: unknown): string {
   return String(value || '').trim();
@@ -297,16 +274,10 @@ function normalizeBaseUrl(baseUrl: string): string {
   return toStringValue(baseUrl).replace(/\/$/, '');
 }
 
-function buildHeaders(apiToken: string): Record<string, string> {
-  const headers: Record<string, string> = {
+function buildHeaders(): Record<string, string> {
+  return {
     'Content-Type': 'application/json',
   };
-  const token = toStringValue(apiToken);
-  if (token) {
-    headers.Authorization = `Bearer ${token}`;
-    headers['x-api-token'] = token;
-  }
-  return headers;
 }
 
 function buildApiTarget(baseUrl: string, requestPath: string): string {
@@ -318,10 +289,10 @@ function buildApiTarget(baseUrl: string, requestPath: string): string {
   return `${normalizedBaseUrl}${normalizedPath}`;
 }
 
-async function backendRequest<T>(baseUrl: string, apiToken: string, requestPath: string, method = 'POST', body?: unknown): Promise<T> {
+async function backendRequest<T>(baseUrl: string, requestPath: string, method = 'POST', body?: unknown): Promise<T> {
   const response = await fetch(buildApiTarget(baseUrl, requestPath), {
     method,
-    headers: buildHeaders(apiToken),
+    headers: buildHeaders(),
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const rawText = await response.text();
@@ -344,17 +315,11 @@ async function backendRequest<T>(baseUrl: string, apiToken: string, requestPath:
   return (record.data ?? {}) as T;
 }
 
-export const fetchWikiContext = (baseUrl: string, token: string, wikiId: string) =>
-  backendRequest<WikiContextResponse>(baseUrl, token, '/v1/wiki/context', 'POST', { wiki_id: toStringValue(wikiId) || 'engine' });
-
-export const rebuildWikiIndex = (baseUrl: string, token: string, wikiId: string) =>
-  backendRequest<WikiPage>(baseUrl, token, '/v1/wiki/index/rebuild', 'POST', {
-    wiki_id: toStringValue(wikiId) || 'engine',
-  });
+export const fetchWikiContext = (baseUrl: string, wikiId: string) =>
+  backendRequest<WikiContextResponse>(baseUrl, '/v1/wiki/context', 'POST', { wiki_id: toStringValue(wikiId) || 'engine' });
 
 export const searchWiki = (
   baseUrl: string,
-  token: string,
   wikiId: string,
   query: string,
   limit = 12,
@@ -363,7 +328,6 @@ export const searchWiki = (
 ) =>
   backendRequest<{ wiki_id?: string; total?: number; results?: WikiSearchResult[] }>(
     baseUrl,
-    token,
     '/v1/wiki/search',
     'POST',
     {
@@ -375,54 +339,10 @@ export const searchWiki = (
     },
   );
 
-export const readWikiPage = (baseUrl: string, token: string, wikiId: string, path: string) =>
-  backendRequest<WikiPage>(baseUrl, token, '/v1/wiki/page/read', 'POST', {
+export const readWikiPage = (baseUrl: string, wikiId: string, path: string) =>
+  backendRequest<WikiPage>(baseUrl, '/v1/wiki/page/read', 'POST', {
     wiki_id: toStringValue(wikiId) || 'engine',
     path: toStringValue(path),
-  });
-
-export const lintWiki = (baseUrl: string, token: string, wikiId: string, repair = false) =>
-  backendRequest<WikiLintResponse>(baseUrl, token, '/v1/wiki/lint', 'POST', {
-    wiki_id: toStringValue(wikiId) || 'engine',
-    repair,
-  });
-
-export const writeWikiPage = (
-  baseUrl: string,
-  token: string,
-  wikiId: string,
-  path: string,
-  content: string,
-  title = '',
-  kind = '',
-) =>
-  backendRequest<WikiPage>(baseUrl, token, '/v1/wiki/page', 'PUT', {
-    wiki_id: toStringValue(wikiId) || 'engine',
-    path: toStringValue(path),
-    content: String(content || ''),
-    title: toStringValue(title),
-    kind: toStringValue(kind),
-  });
-
-export const writebackWikiPage = (
-  baseUrl: string,
-  token: string,
-  wikiId: string,
-  query: string,
-  answer: string,
-  title = '',
-  category = 'analysis',
-  path = '',
-  sourcePaths: string[] = [],
-) =>
-  backendRequest<WikiWritebackResponse>(baseUrl, token, '/v1/wiki/writeback', 'POST', {
-    wiki_id: toStringValue(wikiId) || 'engine',
-    query: toStringValue(query),
-    answer: String(answer || ''),
-    title: toStringValue(title),
-    category: toStringValue(category) || 'analysis',
-    path: toStringValue(path),
-    source_paths: Array.isArray(sourcePaths) ? sourcePaths : [],
   });
 
 export async function streamLocalAgentChat(
@@ -431,12 +351,10 @@ export async function streamLocalAgentChat(
     prompt: string;
     model: string;
     baseUrl: string;
-    apiToken: string;
     serverBaseUrl?: string;
-    serverApiToken?: string;
     llmBaseUrl?: string;
-    llmApiToken?: string;
     wikiId?: string;
+    engineQuestionOverride?: boolean;
     selectedFilePath?: string;
     sessionId?: string;
     historyMessages?: Array<{ role: string; content: string }>;

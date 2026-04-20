@@ -1,5 +1,3 @@
-const { extractCodeExamples, extractReferenceAnchors } = require('./referenceArtifacts.cjs');
-
 function toStringValue(value) {
   return String(value || '').trim();
 }
@@ -8,177 +6,274 @@ function normalizePath(value) {
   return toStringValue(value).replace(/\\/g, '/');
 }
 
-function workflowBundleScore(bundle = {}) {
-  const requiredSlots = Array.isArray(bundle.required_slots) ? bundle.required_slots.length : 0;
-  const filledSlots = Array.isArray(bundle.filled_slots) ? bundle.filled_slots.length : 0;
-  const missingSlots = Array.isArray(bundle.missing_slots) ? bundle.missing_slots.length : 0;
-  const requiredFacts = Array.isArray(bundle.required_facts) ? bundle.required_facts.length : 0;
-  const methodPaths = Array.isArray(bundle.method_paths) ? bundle.method_paths.length : 0;
-  const workflowPaths = Array.isArray(bundle.workflow_paths) ? bundle.workflow_paths.length : 0;
-  return [
-    Boolean(bundle.slots_complete) ? 1 : 0,
-    requiredFacts,
-    filledSlots,
-    workflowPaths,
-    methodPaths,
-    requiredSlots - missingSlots,
-    -missingSlots,
-  ];
+function uniqueStrings(items = []) {
+  const seen = new Set();
+  const output = [];
+  for (const item of Array.isArray(items) ? items : []) {
+    const normalized = toStringValue(item);
+    if (!normalized) continue;
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    output.push(normalized);
+  }
+  return output;
 }
 
-function shouldPreferWorkflowBundle(candidate = {}, current = null) {
-  if (!current || Object.keys(current).length === 0) {
-    return true;
+function unquoteYamlScalar(value = '') {
+  const text = toStringValue(value);
+  if (!text) return '';
+  if (
+    (text.startsWith('"') && text.endsWith('"'))
+    || (text.startsWith('\'') && text.endsWith('\''))
+  ) {
+    return text.slice(1, -1);
   }
-  const candidateScore = workflowBundleScore(candidate);
-  const currentScore = workflowBundleScore(current);
-  for (let index = 0; index < candidateScore.length; index += 1) {
-    if (candidateScore[index] === currentScore[index]) {
+  return text;
+}
+
+function extractRequiredFactsYaml(content = '') {
+  const match = String(content || '').match(/##\s*Required Facts\s*```ya?ml\s*([\s\S]*?)```/i);
+  return match ? toStringValue(match[1]) : '';
+}
+
+function parseRequiredFactsYaml(content = '') {
+  const yaml = extractRequiredFactsYaml(content);
+  const result = {
+    hasBlock: Boolean(yaml),
+    requiredSymbols: [],
+    requiredFacts: [],
+    verificationRules: [],
+    forbiddenAnswerPatterns: [],
+    missingSlots: [],
+  };
+  if (!yaml) {
+    return result;
+  }
+
+  let section = '';
+  let currentFact = null;
+  for (const rawLine of yaml.split(/\r?\n/)) {
+    const line = String(rawLine || '');
+    const trimmed = line.trim();
+    if (!trimmed) {
       continue;
     }
-    return candidateScore[index] > currentScore[index];
+
+    const topLevel = line.match(/^([A-Za-z_][A-Za-z0-9_]*):(?:\s*(.+))?$/);
+    if (topLevel) {
+      section = toStringValue(topLevel[1]);
+      currentFact = null;
+      continue;
+    }
+
+    if (section === 'required_symbols') {
+      const itemMatch = line.match(/^\s*-\s*(.+)$/);
+      if (itemMatch) {
+        result.requiredSymbols.push(unquoteYamlScalar(itemMatch[1]));
+      }
+      continue;
+    }
+
+    if (section === 'verification_rules') {
+      const itemMatch = line.match(/^\s*-\s*(.+)$/);
+      if (itemMatch) {
+        result.verificationRules.push(unquoteYamlScalar(itemMatch[1]));
+      }
+      continue;
+    }
+
+    if (section === 'forbidden_answer_patterns') {
+      const itemMatch = line.match(/^\s*-\s*(.+)$/);
+      if (itemMatch) {
+        result.forbiddenAnswerPatterns.push(unquoteYamlScalar(itemMatch[1]));
+      }
+      continue;
+    }
+
+    if (section === 'missing_slots') {
+      const itemMatch = line.match(/^\s*-\s*(.+)$/);
+      if (itemMatch) {
+        result.missingSlots.push(unquoteYamlScalar(itemMatch[1]));
+      }
+      continue;
+    }
+
+    if (section === 'required_facts') {
+      const symbolMatch = line.match(/^\s*-\s*symbol:\s*(.+)$/);
+      if (symbolMatch) {
+        currentFact = {
+          symbol: unquoteYamlScalar(symbolMatch[1]),
+          declaration: '',
+          source: '',
+        };
+        result.requiredFacts.push(currentFact);
+        continue;
+      }
+      if (!currentFact) {
+        continue;
+      }
+      const declarationMatch = line.match(/^\s*declaration:\s*(.+)$/);
+      if (declarationMatch) {
+        currentFact.declaration = unquoteYamlScalar(declarationMatch[1]);
+        continue;
+      }
+      const sourceMatch = line.match(/^\s*source:\s*(.+)$/);
+      if (sourceMatch) {
+        currentFact.source = unquoteYamlScalar(sourceMatch[1]);
+      }
+    }
   }
-  return false;
+
+  result.requiredSymbols = uniqueStrings(result.requiredSymbols);
+  result.verificationRules = uniqueStrings(result.verificationRules);
+  result.forbiddenAnswerPatterns = uniqueStrings(result.forbiddenAnswerPatterns);
+  result.missingSlots = uniqueStrings(result.missingSlots);
+  return result;
+}
+
+function isWorkflowPath(value = '') {
+  const normalized = normalizePath(value).toLowerCase();
+  return normalized.startsWith('workflows/') || normalized.includes('/workflows/');
+}
+
+function isMethodPath(value = '') {
+  const normalized = normalizePath(value).toLowerCase();
+  return normalized.startsWith('methods/') || normalized.includes('/methods/');
+}
+
+function collectWikiReadPages(observation = {}) {
+  const pages = [];
+  const append = (item = {}) => {
+    const pathValue = normalizePath(item?.path);
+    const content = String(item?.content || '');
+    if (!pathValue && !content) {
+      return;
+    }
+    pages.push({
+      path: pathValue,
+      content,
+      kind: toStringValue(item?.kind),
+      summary: toStringValue(item?.summary),
+    });
+  };
+
+  append(observation);
+  for (const item of Array.isArray(observation?.related_pages) ? observation.related_pages : []) {
+    append(item);
+  }
+  return pages;
+}
+
+function hasVerifiedSourceMarkers(content = '') {
+  const source = String(content || '');
+  if (!source) return false;
+  return /verified source/i.test(source) && /Source\/[^:\s`'"]+:\d+/i.test(source);
 }
 
 function summarizeWikiEvidence(trace = []) {
-  const evidenceTypes = new Set();
   let searchCount = 0;
-  let codeMatchCount = 0;
-  let codeWindowCount = 0;
+  let readCount = 0;
   let docResultCount = 0;
-  let citationCount = 0;
-  let referenceAnchorCount = 0;
-  let exampleCount = 0;
-  let apiFactCount = 0;
   let workflowSourceCount = 0;
   let methodSourceCount = 0;
   let workflowRequiredFactCount = 0;
+  let apiFactCount = 0;
   let workflowBundleSeen = false;
-  let bestWorkflowBundle = null;
+  let workflowSlotsComplete = false;
+  let hasVerifiedCodeEvidence = false;
   const workflowForbiddenAnswerPatterns = [];
+  const workflowMissingSlots = [];
+  const evidenceTypes = new Set();
 
   for (const step of Array.isArray(trace) ? trace : []) {
-    if (toStringValue(step?.tool) === 'wiki_read' && step?.observation?.ok !== false) {
-      const pathValue = normalizePath(step?.observation?.path);
-      if (pathValue.startsWith('workflows/') || pathValue.includes('/workflows/')) {
-        workflowSourceCount += 1;
-      }
-      if (pathValue.startsWith('methods/') || pathValue.includes('/methods/')) {
-        methodSourceCount += 1;
-      }
+    if (step?.observation?.ok === false) {
       continue;
     }
-    if (toStringValue(step?.tool) !== 'wiki_evidence_search' || step?.observation?.ok === false) {
-      continue;
-    }
-
-    searchCount += 1;
-    const observation = step?.observation && typeof step.observation === 'object' ? step.observation : {};
-    const matches = Array.isArray(observation.matches) ? observation.matches : [];
-    const windows = Array.isArray(observation.windows) ? observation.windows : [];
-    const sources = Array.isArray(observation.sources)
-      ? observation.sources
-      : [
-          ...(Array.isArray(observation.doc_results) ? observation.doc_results : []),
-          ...(Array.isArray(observation.doc_chunks) ? observation.doc_chunks : []),
-        ];
-    const citations = Array.isArray(observation.citations) ? observation.citations : [];
-    const referenceAnchors = Array.isArray(observation.reference_anchors)
-      ? observation.reference_anchors
-      : extractReferenceAnchors(sources);
-    const examples = Array.isArray(observation.examples)
-      ? observation.examples
-      : extractCodeExamples(sources);
-    const apiFacts = Array.isArray(observation.api_facts || observation.apiFacts)
-      ? (observation.api_facts || observation.apiFacts)
-      : [];
-    const workflowBundle = observation?.workflow_bundle && typeof observation.workflow_bundle === 'object'
-      ? observation.workflow_bundle
+    const toolName = toStringValue(step?.tool);
+    const observation = step?.observation && typeof step.observation === 'object'
+      ? step.observation
       : {};
-    const workflowRequiredFacts = Array.isArray(workflowBundle.required_facts)
-      ? workflowBundle.required_facts
-      : [];
-    const forbiddenAnswerPatterns = Array.isArray(workflowBundle.forbidden_answer_patterns)
-      ? workflowBundle.forbidden_answer_patterns
-      : [];
 
-    codeMatchCount += matches.length;
-    codeWindowCount += windows.length;
-    docResultCount += sources.length;
-    citationCount += citations.length;
-    referenceAnchorCount += referenceAnchors.length;
-    exampleCount += examples.length;
-    apiFactCount += apiFacts.length;
-    workflowRequiredFactCount += workflowRequiredFacts.length;
-    for (const item of sources) {
-      const pathValue = normalizePath(item?.file_path || item?.source_url || '');
-      if (!pathValue) continue;
-      if (pathValue.startsWith('workflows/') || pathValue.includes('/workflows/')) {
+    if (toolName === 'wiki_search') {
+      searchCount += 1;
+      const results = Array.isArray(observation.results) ? observation.results : [];
+      docResultCount += results.length;
+      continue;
+    }
+
+    if (toolName !== 'wiki_read') {
+      continue;
+    }
+
+    readCount += 1;
+    const pages = collectWikiReadPages(observation);
+    docResultCount += pages.length;
+
+    for (const page of pages) {
+      const pathValue = normalizePath(page.path);
+      const content = String(page.content || '');
+      const parsedSpec = parseRequiredFactsYaml(content);
+      const verifiedBySource = hasVerifiedSourceMarkers(content);
+
+      if (isWorkflowPath(pathValue)) {
         workflowSourceCount += 1;
+        if (parsedSpec.hasBlock) {
+          workflowBundleSeen = true;
+        }
+        if (parsedSpec.requiredFacts.length > 0 || parsedSpec.requiredSymbols.length > 0 || verifiedBySource) {
+          hasVerifiedCodeEvidence = true;
+          evidenceTypes.add('declaration');
+        }
+        workflowRequiredFactCount += parsedSpec.requiredFacts.length;
+        apiFactCount += parsedSpec.requiredFacts.length;
+        for (const pattern of parsedSpec.forbiddenAnswerPatterns) {
+          if (!workflowForbiddenAnswerPatterns.includes(pattern)) {
+            workflowForbiddenAnswerPatterns.push(pattern);
+          }
+        }
+        for (const slot of parsedSpec.missingSlots) {
+          if (!workflowMissingSlots.includes(slot)) {
+            workflowMissingSlots.push(slot);
+          }
+        }
+        if (parsedSpec.hasBlock && parsedSpec.missingSlots.length === 0) {
+          workflowSlotsComplete = true;
+        }
+        continue;
       }
-      if (pathValue.startsWith('methods/') || pathValue.includes('/methods/')) {
-        methodSourceCount += 1;
-      }
-    }
-    if (Object.keys(workflowBundle).length > 0) {
-      workflowBundleSeen = true;
-      if (shouldPreferWorkflowBundle(workflowBundle, bestWorkflowBundle)) {
-        bestWorkflowBundle = workflowBundle;
-      }
-      for (const pattern of forbiddenAnswerPatterns) {
-        const normalized = toStringValue(pattern);
-        if (!normalized || workflowForbiddenAnswerPatterns.includes(normalized)) continue;
-        workflowForbiddenAnswerPatterns.push(normalized);
-      }
-    }
 
-    for (const item of [...matches, ...windows]) {
-      const evidenceType = toStringValue(item?.evidenceType || item?.evidence_type).toLowerCase();
-      if (evidenceType) {
-        evidenceTypes.add(evidenceType);
+      if (isMethodPath(pathValue)) {
+        methodSourceCount += 1;
+        if (parsedSpec.requiredFacts.length > 0 || parsedSpec.requiredSymbols.length > 0 || verifiedBySource) {
+          hasVerifiedCodeEvidence = true;
+          evidenceTypes.add('declaration');
+        }
+        apiFactCount += parsedSpec.requiredFacts.length;
+        continue;
       }
-    }
-    for (const item of referenceAnchors) {
-      const evidenceType = toStringValue(item?.evidenceType || item?.evidence_type).toLowerCase();
-      if (evidenceType) {
-        evidenceTypes.add(evidenceType);
-      }
-    }
-    for (const item of apiFacts) {
-      const evidenceType = toStringValue(item?.evidenceType || item?.evidence_type).toLowerCase();
-      if (evidenceType) {
-        evidenceTypes.add(evidenceType);
+
+      if (parsedSpec.requiredFacts.length > 0 || parsedSpec.requiredSymbols.length > 0 || verifiedBySource) {
+        hasVerifiedCodeEvidence = true;
+        evidenceTypes.add('declaration');
+        apiFactCount += parsedSpec.requiredFacts.length;
       }
     }
   }
 
-  const normalizedEvidenceTypes = Array.from(evidenceTypes);
-  const hasCodeEvidence = codeMatchCount > 0 || codeWindowCount > 0;
-  const hasDocEvidence = docResultCount > 0 || citationCount > 0;
-  const hasVerifiedCodeEvidence = hasCodeEvidence
-    || referenceAnchorCount > 0
-    || apiFactCount > 0
-    || normalizedEvidenceTypes.some((item) => ['declaration', 'implementation'].includes(item));
-  const workflowSlotsComplete = Boolean(bestWorkflowBundle?.slots_complete);
-  const workflowMissingSlots = Array.isArray(bestWorkflowBundle?.missing_slots)
-    ? bestWorkflowBundle.missing_slots.map((item) => toStringValue(item)).filter(Boolean)
-    : [];
+  const hasDocEvidence = searchCount > 0 || readCount > 0 || docResultCount > 0;
+  const hasCodeEvidence = hasVerifiedCodeEvidence;
 
   return {
     searchCount,
-    codeMatchCount,
-    codeWindowCount,
+    readCount,
     docResultCount,
-    citationCount,
-    referenceAnchorCount,
-    exampleCount,
     apiFactCount,
     workflowSourceCount,
     methodSourceCount,
     workflowRequiredFactCount,
     workflowForbiddenAnswerPatterns,
-    evidenceTypes: normalizedEvidenceTypes,
+    evidenceTypes: Array.from(evidenceTypes),
     hasCodeEvidence,
     hasDocEvidence,
     hasDocsOnlyEvidence: hasDocEvidence && !hasCodeEvidence,

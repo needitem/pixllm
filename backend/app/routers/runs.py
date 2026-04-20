@@ -1,9 +1,7 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter
 from pydantic import BaseModel
 
-from ..deps import get_redis
-from ..envelopes import ok, err
-from ..services.execution.runs import ExecutionRunsService
+from ..envelopes import err, ok
 
 
 router = APIRouter()
@@ -24,61 +22,46 @@ class ResolveApprovalRequest(BaseModel):
 
 
 @router.get("/runs")
-async def list_runs(page: int = 1, per_page: int = 20, redis=Depends(get_redis)):
-    svc = ExecutionRunsService(redis)
-    data = await svc.list(page=page, per_page=per_page)
-    return ok(data)
+async def list_runs(page: int = 1, per_page: int = 20):
+    return ok(
+        {
+            "items": [],
+            "total": 0,
+            "page": max(1, int(page)),
+            "per_page": max(1, int(per_page)),
+        }
+    )
 
 
 @router.get("/runs/{run_id}")
-async def get_run(run_id: str, redis=Depends(get_redis)):
-    svc = ExecutionRunsService(redis)
-    data = await svc.get(run_id)
-    if not data:
-        return err("NOT_FOUND", "run not found")
-    return ok(data)
+async def get_run(run_id: str):
+    return err("NOT_FOUND", f"run not found: {run_id}")
 
 
 @router.post("/runs/{run_id}/cancel")
-async def cancel_run(run_id: str, payload: CancelRunRequest, redis=Depends(get_redis)):
-    svc = ExecutionRunsService(redis)
-    data = await svc.request_cancel(run_id, reason=payload.reason)
-    if not data:
-        return err("NOT_FOUND", "run not found")
-    return ok(data)
+async def cancel_run(run_id: str, payload: CancelRunRequest):
+    del payload
+    return err("NOT_FOUND", f"run not found: {run_id}")
 
 
 @router.post("/runs/{run_id}/resume")
-async def resume_run(run_id: str, payload: ResumeRunRequest, redis=Depends(get_redis)):
-    svc = ExecutionRunsService(redis)
-    data = await svc.resume_run(run_id, from_task_key=payload.from_task_key, from_step_key=payload.from_step_key)
-    if not data:
-        return err("NOT_FOUND", "run not found")
-    return ok(data)
+async def resume_run(run_id: str, payload: ResumeRunRequest):
+    del payload
+    return err("NOT_FOUND", f"run not found: {run_id}")
 
 
 @router.get("/runs/{run_id}/approvals")
-async def list_approvals(run_id: str, redis=Depends(get_redis)):
-    svc = ExecutionRunsService(redis)
-    data = await svc.get(run_id)
-    if not data:
-        return err("NOT_FOUND", "run not found")
-    return ok({"items": list(data.get("approvals") or []), "total": len(list(data.get("approvals") or []))})
+async def list_approvals(run_id: str):
+    return err("NOT_FOUND", f"run not found: {run_id}")
 
 
 @router.post("/runs/{run_id}/approvals/{approval_id}/approve")
-async def approve_run_action(run_id: str, approval_id: str, payload: ResolveApprovalRequest, redis=Depends(get_redis)):
-    svc = ExecutionRunsService(redis)
-    approval = await svc.update_approval(run_id, approval_id, status="approved", reviewer=payload.reviewer, note=payload.note)
-    if not approval:
-        return err("NOT_FOUND", "approval not found")
-    return ok(approval)
+async def approve_run_action(run_id: str, approval_id: str, payload: ResolveApprovalRequest):
+    del approval_id, payload
+    return err("NOT_FOUND", f"run not found: {run_id}")
 
 
 @router.post("/runs/{run_id}/approvals/{approval_id}/reject")
-async def reject_run_action(run_id: str, approval_id: str, payload: ResolveApprovalRequest, redis=Depends(get_redis)):
-    svc = ExecutionRunsService(redis)
-    approval = await svc.update_approval(run_id, approval_id, status="rejected", reviewer=payload.reviewer, note=payload.note)
-    if not approval:
-        return err("NOT_FOUND", "approval not found")
-    return ok(approval)
+async def reject_run_action(run_id: str, approval_id: str, payload: ResolveApprovalRequest):
+    del approval_id, payload
+    return err("NOT_FOUND", f"run not found: {run_id}")

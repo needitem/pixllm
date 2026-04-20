@@ -2,16 +2,10 @@ function toStringValue(value) {
   return String(value || '').trim();
 }
 
-function buildHeaders(apiToken = '') {
-  const headers = {
+function buildHeaders() {
+  return {
     'Content-Type': 'application/json',
   };
-  const token = toStringValue(apiToken);
-  if (token) {
-    headers.Authorization = `Bearer ${token}`;
-    headers['x-api-token'] = token;
-  }
-  return headers;
 }
 
 function resolveMode(baseUrl = '') {
@@ -244,9 +238,7 @@ function normalizeTokenizePayload(payload = {}) {
 
 function buildEndpointCandidates({
   baseUrl = '',
-  apiToken = '',
   fallbackBaseUrl = '',
-  fallbackApiToken = '',
 } = {}) {
   const primaryBaseUrl = normalizeBaseUrl(baseUrl);
   const fallbackBase = normalizeBaseUrl(fallbackBaseUrl);
@@ -254,7 +246,6 @@ function buildEndpointCandidates({
   if (primaryBaseUrl) {
     candidates.push({
       baseUrl: primaryBaseUrl,
-      apiToken: toStringValue(apiToken),
       mode: resolveMode(primaryBaseUrl),
       label: 'primary',
     });
@@ -262,7 +253,6 @@ function buildEndpointCandidates({
   if (fallbackBase && fallbackBase !== primaryBaseUrl) {
     candidates.push({
       baseUrl: fallbackBase,
-      apiToken: toStringValue(fallbackApiToken || apiToken),
       mode: resolveMode(fallbackBase),
       label: 'fallback',
     });
@@ -272,18 +262,14 @@ function buildEndpointCandidates({
 
 async function countPromptTokens({
   baseUrl = '',
-  apiToken = '',
   fallbackBaseUrl = '',
-  fallbackApiToken = '',
   model = '',
   messages = [],
   signal = null,
 } = {}) {
   const candidates = buildEndpointCandidates({
     baseUrl,
-    apiToken,
     fallbackBaseUrl,
-    fallbackApiToken,
   });
   if (!candidates.length) {
     throw new Error('serverBaseUrl is required');
@@ -299,7 +285,7 @@ async function countPromptTokens({
           : buildRequestTarget(candidate.baseUrl, '/tokenize'),
         {
           method: 'POST',
-          headers: buildHeaders(candidate.apiToken),
+          headers: buildHeaders(),
           signal: signal || undefined,
           body: JSON.stringify({
             model: toStringValue(model),
@@ -443,9 +429,7 @@ function buildExtraBody({
 
 async function callModelCompletion({
   baseUrl = '',
-  apiToken = '',
   fallbackBaseUrl = '',
-  fallbackApiToken = '',
   model = '',
   messages = [],
   maxTokens = 1200,
@@ -457,9 +441,7 @@ async function callModelCompletion({
 } = {}) {
   const candidates = buildEndpointCandidates({
     baseUrl,
-    apiToken,
     fallbackBaseUrl,
-    fallbackApiToken,
   });
   if (!candidates.length) {
     throw new Error('serverBaseUrl is required');
@@ -495,7 +477,7 @@ async function callModelCompletion({
           buildRequestTarget(candidate.baseUrl, requestPath),
           {
             method: 'POST',
-            headers: buildHeaders(candidate.apiToken),
+            headers: buildHeaders(),
             signal: signal || undefined,
             body: JSON.stringify(requestBody),
           },
@@ -665,9 +647,7 @@ async function callModelCompletion({
 
 async function streamModelCompletion({
   baseUrl = '',
-  apiToken = '',
   fallbackBaseUrl = '',
-  fallbackApiToken = '',
   model = '',
   messages = [],
   maxTokens = 1200,
@@ -682,9 +662,7 @@ async function streamModelCompletion({
 } = {}) {
   const candidates = buildEndpointCandidates({
     baseUrl,
-    apiToken,
     fallbackBaseUrl,
-    fallbackApiToken,
   });
   if (!candidates.length) {
     throw new Error('serverBaseUrl is required');
@@ -721,7 +699,7 @@ async function streamModelCompletion({
           ? buildRequestTarget(candidate.baseUrl, requestPath)
           : buildRequestTarget(candidate.baseUrl, requestPath), {
           method: 'POST',
-          headers: buildHeaders(candidate.apiToken),
+          headers: buildHeaders(),
           body: JSON.stringify(requestBody),
           signal: signal || undefined,
         });

@@ -20,26 +20,25 @@ declare global {
       getSession: (sessionId: string) => Promise<DesktopSessionRecord | null>;
       createSession: (workspacePath: string, title?: string) => Promise<DesktopSessionRecord>;
       saveSession: (session: DesktopSessionRecord) => Promise<DesktopSessionRecord>;
-      apiHealth: (baseUrl: string, apiToken: string) => Promise<{ status?: string; components?: Record<string, unknown> }>;
-      apiRuns: (baseUrl: string, apiToken: string) => Promise<{ items: unknown[] } | unknown[]>;
-      apiRun: (baseUrl: string, apiToken: string, runId: string) => Promise<unknown>;
-      apiCancelRun: (baseUrl: string, apiToken: string, runId: string, reason: string) => Promise<unknown>;
+      apiHealth: (baseUrl: string) => Promise<{ status?: string; components?: Record<string, unknown> }>;
+      apiRuns: (baseUrl: string) => Promise<{ items: unknown[] } | unknown[]>;
+      apiRun: (baseUrl: string, runId: string) => Promise<unknown>;
+      apiCancelRun: (baseUrl: string, runId: string, reason: string) => Promise<unknown>;
       apiResumeRun: (
         baseUrl: string,
-        apiToken: string,
         runId: string,
         fromTaskKey: string,
         fromStepKey: string
       ) => Promise<unknown>;
-      apiApproveRun: (baseUrl: string, apiToken: string, runId: string, approvalId: string, note: string) => Promise<unknown>;
-      apiRejectRun: (baseUrl: string, apiToken: string, runId: string, approvalId: string, note: string) => Promise<unknown>;
+      apiApproveRun: (baseUrl: string, runId: string, approvalId: string, note: string) => Promise<unknown>;
+      apiRejectRun: (baseUrl: string, runId: string, approvalId: string, note: string) => Promise<unknown>;
       agentChatStreamStart: (payload: {
         workspacePath: string;
         prompt: string;
         model: string;
         baseUrl: string;
-        apiToken: string;
         wikiId?: string;
+        engineQuestionOverride?: boolean;
         selectedFilePath?: string;
         sessionId?: string;
         historyMessages?: Array<{ role: string; content: string }>;
@@ -71,12 +70,11 @@ declare global {
 
   type DesktopSettings = {
     serverBaseUrl: string;
-    apiToken: string;
     llmBaseUrl: string;
-    llmApiToken: string;
     workspacePath: string;
     selectedModel: string;
     wikiId: string;
+    engineQuestionDefault: boolean;
     recentWorkspaces: string[];
   };
 

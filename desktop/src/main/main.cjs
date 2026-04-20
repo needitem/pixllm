@@ -143,24 +143,24 @@ app.whenReady().then(() => {
   ipcMain.handle('sessions:create', async (_, workspacePath, title) => createSession(workspacePath, title));
   ipcMain.handle('sessions:save', async (_, session) => saveSession(session));
 
-  ipcMain.handle('api:health', async (_, baseUrl, apiToken) => apiHealth(baseUrl, apiToken));
-  ipcMain.handle('api:runs', async (_, baseUrl, apiToken) => apiRuns(baseUrl, apiToken));
-  ipcMain.handle('api:run', async (_, baseUrl, apiToken, runId) => apiRun(baseUrl, apiToken, runId));
-  ipcMain.handle('api:cancel-run', async (_, baseUrl, apiToken, runId, reason) => apiCancelRun(baseUrl, apiToken, runId, reason));
+  ipcMain.handle('api:health', async (_, baseUrl) => apiHealth(baseUrl));
+  ipcMain.handle('api:runs', async (_, baseUrl) => apiRuns(baseUrl));
+  ipcMain.handle('api:run', async (_, baseUrl, runId) => apiRun(baseUrl, runId));
+  ipcMain.handle('api:cancel-run', async (_, baseUrl, runId, reason) => apiCancelRun(baseUrl, runId, reason));
   ipcMain.handle(
     'api:resume-run',
-    async (_, baseUrl, apiToken, runId, fromTaskKey, fromStepKey) =>
-      apiResumeRun(baseUrl, apiToken, runId, fromTaskKey, fromStepKey)
+    async (_, baseUrl, runId, fromTaskKey, fromStepKey) =>
+      apiResumeRun(baseUrl, runId, fromTaskKey, fromStepKey)
   );
   ipcMain.handle(
     'api:approve-run',
-    async (_, baseUrl, apiToken, runId, approvalId, note) =>
-      apiApproveRun(baseUrl, apiToken, runId, approvalId, note)
+    async (_, baseUrl, runId, approvalId, note) =>
+      apiApproveRun(baseUrl, runId, approvalId, note)
   );
   ipcMain.handle(
     'api:reject-run',
-    async (_, baseUrl, apiToken, runId, approvalId, note) =>
-      apiRejectRun(baseUrl, apiToken, runId, approvalId, note)
+    async (_, baseUrl, runId, approvalId, note) =>
+      apiRejectRun(baseUrl, runId, approvalId, note)
   );
   ipcMain.handle(
     'agent:chat-stream-start',

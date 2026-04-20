@@ -5,7 +5,6 @@ const {
   findReferencesInWorkspace,
   readSymbolSpanInWorkspace,
   symbolOutlineInWorkspace,
-  runWorkspaceShell,
 } = require('../../workspace.cjs');
 const {
   toPositiveInt,
@@ -32,8 +31,8 @@ function LspTool(options = {}) {
     workspaceRelativePaths: ['path'],
     inputSchema: objectSchema({
       action: enumSchema(
-        ['workspace_symbols', 'document_symbols', 'references', 'callers', 'read_symbol', 'diagnostics'],
-        'LSP-like operation to perform',
+        ['workspace_symbols', 'document_symbols', 'references', 'callers', 'read_symbol'],
+        'LSP-style read-only operation to perform',
       ),
       path: stringSchema('Workspace-relative file path'),
       symbol: stringSchema('Symbol name'),
@@ -42,21 +41,17 @@ function LspTool(options = {}) {
       limit: integerSchema('Maximum number of items to return', { minimum: 1 }),
       pathFilter: stringSchema('Optional path substring filter'),
       maxChars: integerSchema('Maximum characters to return for symbol reads', { minimum: 1 }),
-      timeoutMs: integerSchema('Timeout in milliseconds for diagnostics', { minimum: 1 }),
     }, ['action']),
-    searchHint: 'perform symbol, reference, or diagnostic operations with a single LSP-style tool',
-    laneAffinity: ['read', 'flow', 'compare', 'review', 'failure'],
+    searchHint: 'perform symbol or reference lookups with a single LSP-style tool',
+    laneAffinity: ['read', 'flow', 'review'],
     isReadOnly: () => true,
-    isConcurrencySafe: (input) => toStringValue(input?.action || input?.operation).toLowerCase() !== 'diagnostics',
+    isConcurrencySafe: () => true,
     getObservationEvidenceKinds: (_observation, input) => {
       const action = toStringValue(input?.action || input?.operation).toLowerCase();
       if (action === 'document_symbols' || action === 'read_symbol') {
         return ['inspection'];
       }
-      if (action === 'workspace_symbols' || action === 'references' || action === 'callers') {
-        return ['discovery'];
-      }
-      return [];
+      return ['discovery'];
     },
     userFacingName: () => 'Code intelligence',
     getToolUseSummary: (input) => {
@@ -65,7 +60,7 @@ function LspTool(options = {}) {
       return target ? `LSP ${action}: ${target}` : `LSP ${action}`;
     },
     async description() {
-      return 'Run an LSP-like code intelligence operation';
+      return 'Run a read-only LSP-style code intelligence operation';
     },
     async call(input, context) {
       const action = toStringValue(input.action || input.operation).toLowerCase();
@@ -105,24 +100,6 @@ function LspTool(options = {}) {
             pathFilter: toStringValue(input.pathFilter || input.path_filter),
           },
         );
-      }
-      if (action === 'diagnostics') {
-        const filePath = toStringValue(input.path);
-        if (/\.(ts|tsx)$/i.test(filePath)) {
-          return runWorkspaceShell(context.workspacePath, `npx tsc --noEmit --pretty false "${filePath}"`, {
-            timeoutMs: toPositiveInt(input.timeoutMs || input.timeout_ms, 60_000),
-          });
-        }
-        if (/\.(cs|csproj|sln)$/i.test(filePath)) {
-          return runWorkspaceShell(context.workspacePath, `dotnet build "${filePath}"`, {
-            timeoutMs: toPositiveInt(input.timeoutMs || input.timeout_ms, 120_000),
-          });
-        }
-        return {
-          ok: false,
-          error: 'diagnostics_not_supported_for_file_type',
-          path: filePath,
-        };
       }
       return {
         ok: false,

@@ -7,9 +7,7 @@
     fetchRun,
     fetchRuns,
     fetchWikiContext,
-    lintWiki,
     readWikiPage,
-    rebuildWikiIndex,
     rejectRun,
     resumeRun,
     searchWiki,
@@ -34,11 +32,8 @@
     type StreamDonePayload,
     type StreamStatusPayload,
     type WikiCoordinationStatus,
-    type WikiLintFinding,
     type WikiPage,
-    type WikiSearchResult,
-    writebackWikiPage,
-    writeWikiPage
+    type WikiSearchResult
   } from './lib/api';
   import { desktop } from './lib/bridge';
   import { desktopSettings } from './lib/store';
@@ -160,12 +155,11 @@
 
   const DEFAULT_SETTINGS: DesktopSettings = {
     serverBaseUrl: 'http://192.168.2.238:8000/api',
-    apiToken: '',
     llmBaseUrl: '',
-    llmApiToken: '',
     workspacePath: '',
     selectedModel: 'qwen3.5-27b',
     wikiId: 'engine',
+    engineQuestionDefault: true,
     recentWorkspaces: []
   };
   let settings: DesktopSettings = { ...DEFAULT_SETTINGS };
@@ -211,19 +205,15 @@
   let wikiPageSummary = '';
   let wikiPageUpdatedAt = '';
   let wikiBusy = false;
-  let wikiSaving = false;
-  let wikiLintBusy = false;
   let wikiStatusMessage = '';
   let wikiErrorMessage = '';
   let wikiCoordinationStatus: WikiCoordinationStatus | null = null;
-  let wikiLintFindings: WikiLintFinding[] = [];
-  let wikiOriginalSignature = '';
-  let wikiDirty = false;
   let resolvedWikiId = 'engine';
   let wikiLoadKey = '';
   let lastWikiLoadKey = '';
 
   let chatInput = '';
+  let engineQuestionChecked = DEFAULT_SETTINGS.engineQuestionDefault;
   const includeWorkspaceContext = true;
   let activeStreamCancel: null | (() => Promise<{ ok: boolean; requestId: string }>) = null;
   let activeStreamUnsubscribe: null | (() => void) = null;
@@ -279,7 +269,6 @@
     workspaceDiffCount
   );
   $: resolvedWikiId = resolveWikiId(settings.wikiId);
-  $: wikiDirty = wikiEditorSignature() !== wikiOriginalSignature;
   $: connectionHostLabel = compactEndpoint(settings.serverBaseUrl);
   $: appBuildLabel = appInfo
     ? `v${appInfo.version}${appInfo.isPackaged ? '' : ' · dev'}`
@@ -332,6 +321,9 @@
   $: wikiLoadKey = viewMode === 'wiki'
     ? `${String(settings.serverBaseUrl || '').trim()}|${resolvedWikiId}`
     : '';
+  $: if (!settings.workspacePath) {
+    engineQuestionChecked = true;
+  }
   $: if (wikiLoadKey && wikiLoadKey !== lastWikiLoadKey) {
     lastWikiLoadKey = wikiLoadKey;
     void refreshWikiContext();
@@ -420,15 +412,6 @@
     return text.length > limit ? `${text.slice(0, limit - 3)}...` : text;
   }
 
-  function wikiEditorSignature() {
-    return JSON.stringify([
-      wikiSelectedPath,
-      wikiPageTitle,
-      wikiPageKind,
-      wikiPageContent
-    ]);
-  }
-
   function applyWikiPage(page: WikiPage | null | undefined) {
     wikiSelectedPath = String(page?.path || '').trim();
     wikiPageTitle = String(page?.title || '').trim();
@@ -436,17 +419,15 @@
     wikiPageContent = String(page?.content || '');
     wikiPageSummary = String(page?.summary || '').trim();
     wikiPageUpdatedAt = String(page?.updated_at || '').trim();
-    wikiOriginalSignature = wikiEditorSignature();
   }
 
-  function clearWikiEditor(defaultPath = 'pages/topics/new-note.md') {
+  function clearWikiEditor(defaultPath = '') {
     wikiSelectedPath = defaultPath;
     wikiPageTitle = '';
-    wikiPageKind = 'topic';
-    wikiPageContent = '# New Page\n';
+    wikiPageKind = '';
+    wikiPageContent = '';
     wikiPageSummary = '';
     wikiPageUpdatedAt = '';
-    wikiOriginalSignature = wikiEditorSignature();
   }
 
   function mergeWikiResults(primary: WikiSearchResult[] = [], secondary: WikiSearchResult[] = []) {
@@ -492,7 +473,7 @@
       wikiStatusMessage = '';
     }
     try {
-      const page = await readWikiPage(settings.serverBaseUrl, settings.apiToken, resolvedWikiId, targetPath);
+      const page = await readWikiPage(settings.serverBaseUrl, resolvedWikiId, targetPath);
       applyWikiPage(page);
     } catch (error) {
       wikiErrorMessage = error instanceof Error ? error.message : String(error);
@@ -507,7 +488,7 @@
     wikiErrorMessage = '';
     wikiStatusMessage = '';
     try {
-      const result = await fetchWikiContext(settings.serverBaseUrl, settings.apiToken, resolvedWikiId);
+      const result = await fetchWikiContext(settings.serverBaseUrl, resolvedWikiId);
       wikiCoordinationStatus = result.coordination_status || null;
       const createdPaths = Array.isArray(result.coordination_status?.created_paths)
         ? result.coordination_status.created_paths.filter((item) => String(item || '').trim().length > 0)
@@ -542,7 +523,6 @@
     try {
       const result = await searchWiki(
         settings.serverBaseUrl,
-        settings.apiToken,
         resolvedWikiId,
         query,
         24,
@@ -556,122 +536,6 @@
       wikiErrorMessage = error instanceof Error ? error.message : String(error);
     } finally {
       wikiBusy = false;
-    }
-  }
-
-  function createWikiPage() {
-    wikiErrorMessage = '';
-    wikiStatusMessage = '';
-    clearWikiEditor();
-  }
-
-  async function handleRebuildWikiIndex() {
-    if (!settings.serverBaseUrl.trim()) return;
-    wikiBusy = true;
-    wikiErrorMessage = '';
-    wikiStatusMessage = '';
-    try {
-      const page = await rebuildWikiIndex(settings.serverBaseUrl, settings.apiToken, resolvedWikiId);
-      wikiStatusMessage = `Rebuilt ${page.path || 'index.md'}`;
-      await refreshWikiContext(page.path || 'index.md');
-    } catch (error) {
-      wikiErrorMessage = error instanceof Error ? error.message : String(error);
-    } finally {
-      wikiBusy = false;
-    }
-  }
-
-  async function handleWikiLint(repair = false) {
-    if (!settings.serverBaseUrl.trim()) return;
-    wikiLintBusy = true;
-    wikiErrorMessage = '';
-    wikiStatusMessage = '';
-    try {
-      const result = await lintWiki(settings.serverBaseUrl, settings.apiToken, resolvedWikiId, repair);
-      wikiLintFindings = Array.isArray(result.findings) ? result.findings : [];
-      wikiCoordinationStatus = result.coordination_status || wikiCoordinationStatus;
-      wikiStatusMessage = repair
-        ? `Lint repair completed with ${wikiLintFindings.length} findings.`
-        : `Lint completed with ${wikiLintFindings.length} findings.`;
-      if (repair) {
-        await refreshWikiContext(wikiSelectedPath);
-      }
-    } catch (error) {
-      wikiErrorMessage = error instanceof Error ? error.message : String(error);
-    } finally {
-      wikiLintBusy = false;
-    }
-  }
-
-  async function fileLatestAnswerToWiki() {
-    if (!settings.serverBaseUrl.trim()) return;
-    const assistant = latestAssistantMessage();
-    if (!assistant || !String(assistant.content || '').trim()) {
-      wikiErrorMessage = 'No assistant answer is available to file.';
-      return;
-    }
-    const query = latestUserPromptBefore(assistant.id);
-    const firstLine = String(assistant.content || '')
-      .split('\n')
-      .map((line) => line.replace(/^#+\s*/, '').trim())
-      .find((line) => line.length > 0);
-    wikiSaving = true;
-    wikiErrorMessage = '';
-    wikiStatusMessage = '';
-    try {
-      const result = await writebackWikiPage(
-        settings.serverBaseUrl,
-        settings.apiToken,
-        resolvedWikiId,
-        query,
-        assistant.content,
-        firstLine || 'Saved Analysis',
-        'analysis',
-        '',
-        wikiSelectedPath ? [wikiSelectedPath] : []
-      );
-      const page = result.page;
-      if (page?.path) {
-        wikiStatusMessage = `Filed latest answer to ${page.path}`;
-        await refreshWikiContext(page.path);
-      } else {
-        wikiStatusMessage = 'Filed latest answer to wiki.';
-        await refreshWikiContext(wikiSelectedPath);
-      }
-    } catch (error) {
-      wikiErrorMessage = error instanceof Error ? error.message : String(error);
-    } finally {
-      wikiSaving = false;
-    }
-  }
-
-  async function saveWikiEditor() {
-    if (!settings.serverBaseUrl.trim()) return;
-    const targetPath = wikiSelectedPath.trim();
-    if (!targetPath) {
-      wikiErrorMessage = 'Page path is required.';
-      return;
-    }
-    wikiSaving = true;
-    wikiErrorMessage = '';
-    wikiStatusMessage = '';
-    try {
-      const page = await writeWikiPage(
-        settings.serverBaseUrl,
-        settings.apiToken,
-        resolvedWikiId,
-        targetPath,
-        wikiPageContent,
-        wikiPageTitle,
-        wikiPageKind
-      );
-      applyWikiPage(page);
-      wikiStatusMessage = `Saved ${page.path || targetPath}`;
-      await refreshWikiContext(page.path || targetPath);
-    } catch (error) {
-      wikiErrorMessage = error instanceof Error ? error.message : String(error);
-    } finally {
-      wikiSaving = false;
     }
   }
 
@@ -1851,7 +1715,7 @@
     }
     for (const [runId, messageIds] of messagesByRunId.entries()) {
       try {
-        const detail = await fetchRun(baseUrl, settings.apiToken, runId);
+        const detail = await fetchRun(baseUrl, runId);
         for (const messageId of messageIds) {
           updateRunSnapshotMessage(messageId, detail);
         }
@@ -1899,6 +1763,7 @@
   function applyLoadedSettings(next: DesktopSettings) {
     settings = { ...next };
     settingsForm = { ...next };
+    engineQuestionChecked = Boolean(next.engineQuestionDefault);
     desktopSettings.set(settings);
   }
 
@@ -1906,6 +1771,17 @@
     settingsForm = { ...settings };
     settingsSaveMessage = '';
     settingsSaveError = '';
+  }
+
+  async function persistEngineQuestionDefault(value: boolean) {
+    try {
+      const next = await desktop.saveSettings({
+        engineQuestionDefault: Boolean(value)
+      });
+      applyLoadedSettings(next);
+    } catch {
+      engineQuestionChecked = Boolean(settings.engineQuestionDefault);
+    }
   }
 
   function clearWorkspaceScopedState() {
@@ -1930,12 +1806,9 @@
 
     try {
       const serverBaseUrl = settingsForm.serverBaseUrl.trim();
-      const apiToken = settingsForm.apiToken.trim();
       const llmBaseUrl = settingsForm.llmBaseUrl.trim();
-      const llmApiToken = settingsForm.llmApiToken.trim();
       const selectedModel = settingsForm.selectedModel.trim();
       const wikiId = settingsForm.wikiId.trim();
-
       if (!serverBaseUrl || !selectedModel) {
         settingsSaveError = 'Server API URL and chat model are required.';
         return;
@@ -1943,11 +1816,10 @@
 
       const next = await desktop.saveSettings({
         serverBaseUrl,
-        apiToken,
         llmBaseUrl,
-        llmApiToken,
         selectedModel,
-        wikiId
+        wikiId,
+        engineQuestionDefault: Boolean(settingsForm.engineQuestionDefault)
       });
       applyLoadedSettings(next);
       settingsSaveMessage = 'Settings saved.';
@@ -1959,7 +1831,7 @@
 
   async function refreshHealth() {
     try {
-      const res = await fetchHealth(settings.serverBaseUrl, settings.apiToken);
+      const res = await fetchHealth(settings.serverBaseUrl);
       healthStatus = res.status || 'unknown';
       healthMessage = '';
     } catch (error) {
@@ -1970,7 +1842,7 @@
 
   async function refreshRuns() {
     try {
-      runs = await fetchRuns(settings.serverBaseUrl, settings.apiToken);
+      runs = await fetchRuns(settings.serverBaseUrl);
       if (!selectedRunId && runs.length > 0) {
         selectedRunId = runs[0].run_id;
       } else if (selectedRunId && !runs.some((run) => run.run_id === selectedRunId) && runs.length > 0) {
@@ -1990,7 +1862,7 @@
       return;
     }
     try {
-      const detail = await fetchRun(settings.serverBaseUrl, settings.apiToken, runId);
+      const detail = await fetchRun(settings.serverBaseUrl, runId);
       runTasks = Array.isArray(detail.tasks) ? detail.tasks : [];
       runArtifacts = Array.isArray(detail.artifacts) ? detail.artifacts : [];
       runApprovals = Array.isArray(detail.approvals) ? detail.approvals : [];
@@ -2034,7 +1906,7 @@
     if (!runId || runDetailPollInFlight) return;
     runDetailPollInFlight = true;
     try {
-      const detail = await fetchRun(settings.serverBaseUrl, settings.apiToken, runId);
+      const detail = await fetchRun(settings.serverBaseUrl, runId);
       updateRunSnapshotMessage(messageId, detail);
       if (selectedRunId === runId) {
         runTasks = Array.isArray(detail.tasks) ? detail.tasks : [];
@@ -2214,13 +2086,11 @@
         {
           workspacePath: settings.workspacePath || '',
           prompt,
+          engineQuestionOverride: engineQuestionChecked,
           model: settings.selectedModel || 'qwen3.5-27b',
           baseUrl: settings.llmBaseUrl || settings.serverBaseUrl,
-          apiToken: settings.llmApiToken || settings.apiToken,
           serverBaseUrl: settings.serverBaseUrl,
-          serverApiToken: settings.apiToken,
           llmBaseUrl: settings.llmBaseUrl,
-          llmApiToken: settings.llmApiToken,
           wikiId: settings.wikiId,
           selectedFilePath,
           sessionId: selectedSessionId || '',
@@ -2581,7 +2451,7 @@
 
   async function requestCancel(run: ExecutionRun) {
     await refreshRunAfter(
-      () => cancelRun(settings.serverBaseUrl, settings.apiToken, run.run_id),
+      () => cancelRun(settings.serverBaseUrl, run.run_id),
       run.run_id,
       true
     );
@@ -2589,7 +2459,7 @@
 
   async function requestResume(run: ExecutionRun) {
     await refreshRunAfter(
-      () => resumeRun(settings.serverBaseUrl, settings.apiToken, run.run_id),
+      () => resumeRun(settings.serverBaseUrl, run.run_id),
       run.run_id,
       true
     );
@@ -2598,7 +2468,7 @@
   async function requestApprove(approval: RunApproval) {
     if (!selectedRun) return;
     await refreshRunAfter(
-      () => approveRun(settings.serverBaseUrl, settings.apiToken, selectedRun.run_id, approval.approval_id),
+      () => approveRun(settings.serverBaseUrl, selectedRun.run_id, approval.approval_id),
       selectedRun.run_id
     );
   }
@@ -2606,7 +2476,7 @@
   async function requestReject(approval: RunApproval) {
     if (!selectedRun) return;
     await refreshRunAfter(
-      () => rejectRun(settings.serverBaseUrl, settings.apiToken, selectedRun.run_id, approval.approval_id),
+      () => rejectRun(settings.serverBaseUrl, selectedRun.run_id, approval.approval_id),
       selectedRun.run_id
     );
   }
@@ -3137,16 +3007,8 @@
                 <input bind:value={settingsForm.serverBaseUrl} placeholder="http://host:port/api" />
               </label>
               <label class="field">
-                <span>API Token</span>
-                <input bind:value={settingsForm.apiToken} type="password" placeholder="Optional bearer token" />
-              </label>
-              <label class="field">
                 <span>LLM Base URL</span>
                 <input bind:value={settingsForm.llmBaseUrl} placeholder="Optional direct LLM URL" />
-              </label>
-              <label class="field">
-                <span>LLM Token</span>
-                <input bind:value={settingsForm.llmApiToken} type="password" placeholder="Optional direct LLM token" />
               </label>
               <label class="field">
                 <span>Chat Model</span>
@@ -3179,30 +3041,12 @@
               <div class="panel-head">
                 <div>
                   <div class="section-title">LLM Wiki</div>
-                  <div class="muted small">Browse, lint, and maintain the persistent LLM knowledge wiki.</div>
+                  <div class="muted small">Browse the persistent wiki for backend knowledge and usage guidance.</div>
                 </div>
                 <div class="panel-head-meta">
                   <span class="pill neutral">{resolvedWikiId}</span>
-                  <button class="secondary" on:click={() => refreshWikiContext()} disabled={wikiBusy || wikiSaving}>
+                  <button class="secondary" on:click={() => refreshWikiContext()} disabled={wikiBusy}>
                     Refresh
-                  </button>
-                  <button class="secondary" on:click={handleRebuildWikiIndex} disabled={wikiBusy || wikiSaving || wikiLintBusy}>
-                    Rebuild Index
-                  </button>
-                  <button class="secondary" on:click={() => handleWikiLint(false)} disabled={wikiBusy || wikiSaving || wikiLintBusy}>
-                    {wikiLintBusy ? 'Linting…' : 'Lint'}
-                  </button>
-                  <button class="secondary" on:click={() => handleWikiLint(true)} disabled={wikiBusy || wikiSaving || wikiLintBusy}>
-                    Repair
-                  </button>
-                  <button class="secondary" on:click={createWikiPage} disabled={wikiBusy || wikiSaving}>
-                    New
-                  </button>
-                  <button class="secondary" on:click={fileLatestAnswerToWiki} disabled={wikiBusy || wikiSaving || wikiLintBusy}>
-                    File Latest Answer
-                  </button>
-                  <button class="primary" on:click={saveWikiEditor} disabled={wikiBusy || wikiSaving || !wikiDirty}>
-                    {wikiSaving ? 'Saving…' : 'Save'}
                   </button>
                 </div>
               </div>
@@ -3216,10 +3060,10 @@
                     on:keydown={handleWikiSearchKeydown}
                   />
                 </label>
-                <button class="secondary" on:click={runWikiSearch} disabled={wikiBusy || wikiSaving}>
+                <button class="secondary" on:click={runWikiSearch} disabled={wikiBusy}>
                   {wikiBusy ? 'Loading…' : 'Search'}
                 </button>
-                <button class="secondary" on:click={() => { wikiQuery = ''; void refreshWikiContext(wikiSelectedPath); }} disabled={wikiBusy || wikiSaving}>
+                <button class="secondary" on:click={() => { wikiQuery = ''; void refreshWikiContext(wikiSelectedPath); }} disabled={wikiBusy}>
                   Browse
                 </button>
               </div>
@@ -3242,33 +3086,6 @@
                   </span>
                 </div>
               {/if}
-              {#if wikiLintFindings.length > 0}
-                <div class="wiki-lint-box">
-                  <div class="section-title">Lint Findings</div>
-                  <div class="wiki-finding-list">
-                    {#each wikiLintFindings as finding}
-                      <div class="wiki-finding-item">
-                        <div class="wiki-finding-head">
-                          <span class={`pill ${finding.severity === 'error' ? 'danger' : finding.severity === 'warning' ? 'accent' : 'neutral'}`}>
-                            {finding.severity || 'info'}
-                          </span>
-                          {#if finding.code}
-                            <span class="muted small">{finding.code}</span>
-                          {/if}
-                        </div>
-                        <div>{finding.message || 'No message'}</div>
-                        {#if finding.path}
-                          <div class="wiki-result-path">{finding.path}</div>
-                        {/if}
-                        {#if finding.target}
-                          <div class="wiki-result-path">target: {finding.target}</div>
-                        {/if}
-                      </div>
-                    {/each}
-                  </div>
-                </div>
-              {/if}
-
               <div class="wiki-workspace-grid">
                 <div class="wiki-results-pane">
                   <div class="section-title">Pages</div>
@@ -3300,19 +3117,19 @@
                   <div class="wiki-meta-grid">
                     <label class="field">
                       <span>Path</span>
-                      <input bind:value={wikiSelectedPath} placeholder="pages/topics/new-note.md" />
+                      <input bind:value={wikiSelectedPath} placeholder="pages/topic/example.md" readonly />
                     </label>
                     <label class="field">
                       <span>Title</span>
-                      <input bind:value={wikiPageTitle} placeholder="Page title" />
+                      <input bind:value={wikiPageTitle} placeholder="Page title" readonly />
                     </label>
                     <label class="field">
                       <span>Kind</span>
-                      <input bind:value={wikiPageKind} placeholder="topic" />
+                      <input bind:value={wikiPageKind} placeholder="topic" readonly />
                     </label>
                     <div class="wiki-meta-readout">
                       <span>Updated</span>
-                      <strong>{wikiPageUpdatedAt ? formatDateTime(wikiPageUpdatedAt) : 'Unsaved page'}</strong>
+                      <strong>{wikiPageUpdatedAt ? formatDateTime(wikiPageUpdatedAt) : 'Not loaded'}</strong>
                     </div>
                   </div>
 
@@ -3325,7 +3142,8 @@
                     <textarea
                       bind:value={wikiPageContent}
                       rows="18"
-                      placeholder="Write markdown here"
+                      placeholder="Wiki page content"
+                      readonly
                     ></textarea>
                   </label>
                 </div>
@@ -3628,7 +3446,24 @@
           </label>
 
           <div class="composer-actions">
-            <div class="muted small">Enter to send, Shift+Enter for a new line.</div>
+            <div class="composer-meta">
+              <label class="composer-checkbox">
+                <input
+                  type="checkbox"
+                  bind:checked={engineQuestionChecked}
+                  disabled={!settings.workspacePath}
+                  on:change={() => void persistEngineQuestionDefault(engineQuestionChecked)}
+                />
+                <span>엔진 관련 질문</span>
+              </label>
+              <div class="muted small">
+                {settings.workspacePath
+                  ? engineQuestionChecked
+                    ? '체크됨: 위키/엔진 워크플로우 기준으로 찾습니다.'
+                    : '해제됨: 현재 워크스페이스 로컬 코드 기준으로 봅니다.'
+                  : '워크스페이스가 없어서 엔진 기준 위키 검색만 사용합니다.'}
+              </div>
+            </div>
             <button
               class={`composer-send ${busy && activeStreamCancel ? 'stop' : 'send'}`}
               on:click={busy && activeStreamCancel ? cancelActiveChat : submitChat}
@@ -4450,6 +4285,32 @@
     border-color: rgba(248, 113, 113, 0.3);
     background: rgba(248, 113, 113, 0.12);
     color: #ffd5d5;
+  }
+
+  .composer-meta {
+    display: grid;
+    gap: 6px;
+    min-width: 0;
+  }
+
+  .composer-checkbox {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    font-weight: 600;
+    color: rgba(233, 242, 253, 0.88);
+  }
+
+  .composer-checkbox input {
+    width: 14px;
+    height: 14px;
+    margin: 0;
+    accent-color: #23c7a1;
+  }
+
+  .composer-checkbox input:disabled + span {
+    color: rgba(188, 201, 216, 0.56);
   }
 
   .composer-icon {

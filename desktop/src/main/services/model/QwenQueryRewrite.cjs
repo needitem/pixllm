@@ -3,22 +3,21 @@ const { safeJsonParse, toStringValue } = require('../../query/blocks.cjs');
 
 const REQUEST_CONTRACT_PROMPT = [
   'You are a strict preflight classifier for a desktop coding agent.',
-  'Classify the user request into execution intent and delivery expectations.',
-  'The user may write in Korean or mixed Korean/English.',
+  'The agent only supports two modes:',
+  '1. backend wiki guidance for usage/explanation questions',
+  '2. local code review/explanation with optional comment-only edits on existing files',
   'Do not answer the request.',
   'Do not ask follow-up questions.',
   'Return JSON only with these fields:',
-  '{"intent":{"wants_changes":false,"wants_execution":false,"wants_analysis":false,"create_likely":false,"compare_likely":false},"artifact":{"requires_workspace_artifact":false,"likely_paths":["short/path.cs"]},"focus":{"mentions_config":false,"mentions_todo":false,"mentions_runtime_task":false,"mentions_wiki":false},"search_terms":["short english code-search phrase"],"symbol_hints":["ExactIdentifier"],"notes":"brief optional note","confidence":"low|medium|high"}',
+  '{"intent":{"wants_changes":false,"wants_execution":false,"wants_analysis":true,"create_likely":false,"compare_likely":false},"artifact":{"requires_workspace_artifact":false,"likely_paths":[]},"focus":{"mentions_config":false,"mentions_todo":false,"mentions_runtime_task":false,"mentions_wiki":false},"search_terms":["short english code-search phrase"],"symbol_hints":["ExactIdentifier"],"notes":"brief optional note","confidence":"low|medium|high"}',
   'Rules:',
-  '- If the user asks you to make, create, write, generate, or implement a program/app/viewer/sample/example, set wants_changes=true.',
-  '- If the request should be fulfilled by creating or editing files in the current workspace, set artifact.requires_workspace_artifact=true and usually create_likely=true.',
-  '- If the user only wants explanation, guidance, review, analysis, or comparison, set wants_analysis=true.',
-  '- If the user is asking how to do something, asking for an explanation, or uses phrases like how, how to, explain, 알려줘, 방법, or 설명 without explicitly asking you to create or edit files, keep create_likely=false and artifact.requires_workspace_artifact=false.',
-  '- If the user wants commands executed, builds run, tests run, or runtime failures debugged, set wants_execution=true.',
-  '- Use likely_paths only when a target filename or file type is genuinely implied.',
+  '- Keep wants_execution=false, create_likely=false, compare_likely=false.',
+  '- Set wants_changes=true only for requests that edit existing local files, especially comments, annotations, or explanatory text.',
+  '- Set wants_analysis=true for explanation, review, trace, and guidance requests.',
+  '- Set focus.mentions_wiki=true only when the user explicitly asks for wiki/knowledge-base style guidance.',
+  '- Do not invent file creation, build execution, or backend maintenance actions.',
   '- search_terms should contain 0 to 6 short English technical phrases suitable for grep/search.',
   '- symbol_hints should contain only plausible exact identifiers.',
-  '- Do not invent backend/reference routing modes.',
 ].join('\n');
 
 function uniqStrings(items, limit = 8) {
@@ -49,7 +48,7 @@ function defaultContract() {
     intent: {
       wantsChanges: false,
       wantsExecution: false,
-      wantsAnalysis: false,
+      wantsAnalysis: true,
       createLikely: false,
       compareLikely: false,
     },
@@ -79,29 +78,24 @@ function sanitizeRequestContract(payload = {}) {
 
   contract.intent = {
     wantsChanges: Boolean(intent.wants_changes ?? intent.wantsChanges),
-    wantsExecution: Boolean(intent.wants_execution ?? intent.wantsExecution),
-    wantsAnalysis: Boolean(intent.wants_analysis ?? intent.wantsAnalysis),
-    createLikely: Boolean(intent.create_likely ?? intent.createLikely),
-    compareLikely: Boolean(intent.compare_likely ?? intent.compareLikely),
+    wantsExecution: false,
+    wantsAnalysis: Boolean(intent.wants_analysis ?? intent.wantsAnalysis ?? true),
+    createLikely: false,
+    compareLikely: false,
   };
-  if (contract.intent.createLikely) {
-    contract.intent.wantsChanges = true;
-  }
 
   contract.artifact = {
-    requiresWorkspaceArtifact: Boolean(
-      artifact.requires_workspace_artifact ?? artifact.requiresWorkspaceArtifact,
-    ),
+    requiresWorkspaceArtifact: false,
     likelyPaths: uniqStrings(
       artifact.likely_paths ?? artifact.likelyPaths,
-      4,
+      0,
     ),
   };
 
   contract.focus = {
-    mentionsConfig: Boolean(focus.mentions_config ?? focus.mentionsConfig),
-    mentionsTodo: Boolean(focus.mentions_todo ?? focus.mentionsTodo),
-    mentionsRuntimeTask: Boolean(focus.mentions_runtime_task ?? focus.mentionsRuntimeTask),
+    mentionsConfig: false,
+    mentionsTodo: false,
+    mentionsRuntimeTask: false,
     mentionsWiki: Boolean(focus.mentions_wiki ?? focus.mentionsWiki),
   };
 
@@ -118,8 +112,6 @@ function hasUsefulContract(contract = null) {
     && (
       Object.values(contract.intent || {}).some(Boolean)
       || Object.values(contract.focus || {}).some(Boolean)
-      || Boolean(contract.artifact?.requiresWorkspaceArtifact)
-      || (Array.isArray(contract.artifact?.likelyPaths) && contract.artifact.likelyPaths.length > 0)
       || (Array.isArray(contract.searchTerms) && contract.searchTerms.length > 0)
       || (Array.isArray(contract.symbolHints) && contract.symbolHints.length > 0)
       || toStringValue(contract.notes)
@@ -130,9 +122,7 @@ function hasUsefulContract(contract = null) {
 
 async function analyzePromptSemantics({
   baseUrl = '',
-  apiToken = '',
   fallbackBaseUrl = '',
-  fallbackApiToken = '',
   model = '',
   prompt = '',
   signal = null,
@@ -145,9 +135,7 @@ async function analyzePromptSemantics({
   try {
     const completion = await callModelCompletion({
       baseUrl,
-      apiToken,
       fallbackBaseUrl,
-      fallbackApiToken,
       model,
       signal,
       maxTokens: 320,

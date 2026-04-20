@@ -1,15 +1,9 @@
-async function callApi(baseUrl, apiToken, path, init = {}) {
+async function callApi(baseUrl, path, init = {}) {
   const normalizedBase = String(baseUrl || '').replace(/\/$/, '');
-  const token = String(apiToken || '').trim();
   const headers = {
     'Content-Type': 'application/json',
     ...(init.headers || {})
   };
-
-  if (token) {
-    headers.Authorization = `Bearer ${token}`;
-    headers['x-api-token'] = token;
-  }
 
   const response = await fetch(`${normalizedBase}${path}`, {
     ...init,
@@ -35,27 +29,27 @@ async function callApi(baseUrl, apiToken, path, init = {}) {
   throw new Error(payload?.error?.message || 'Invalid API response');
 }
 
-async function apiHealth(baseUrl, apiToken) {
-  return callApi(baseUrl, apiToken, '/v1/health');
+async function apiHealth(baseUrl) {
+  return callApi(baseUrl, '/v1/health');
 }
 
-async function apiRuns(baseUrl, apiToken) {
-  return callApi(baseUrl, apiToken, '/v1/runs?page=1&per_page=20');
+async function apiRuns(baseUrl) {
+  return callApi(baseUrl, '/v1/runs?page=1&per_page=20');
 }
 
-async function apiRun(baseUrl, apiToken, runId) {
-  return callApi(baseUrl, apiToken, `/v1/runs/${encodeURIComponent(runId)}`);
+async function apiRun(baseUrl, runId) {
+  return callApi(baseUrl, `/v1/runs/${encodeURIComponent(runId)}`);
 }
 
-async function apiCancelRun(baseUrl, apiToken, runId, reason) {
-  return callApi(baseUrl, apiToken, `/v1/runs/${encodeURIComponent(runId)}/cancel`, {
+async function apiCancelRun(baseUrl, runId, reason) {
+  return callApi(baseUrl, `/v1/runs/${encodeURIComponent(runId)}/cancel`, {
     method: 'POST',
     body: JSON.stringify({ reason })
   });
 }
 
-async function apiResumeRun(baseUrl, apiToken, runId, fromTaskKey, fromStepKey) {
-  return callApi(baseUrl, apiToken, `/v1/runs/${encodeURIComponent(runId)}/resume`, {
+async function apiResumeRun(baseUrl, runId, fromTaskKey, fromStepKey) {
+  return callApi(baseUrl, `/v1/runs/${encodeURIComponent(runId)}/resume`, {
     method: 'POST',
     body: JSON.stringify({
       from_task_key: fromTaskKey || '',
@@ -64,10 +58,9 @@ async function apiResumeRun(baseUrl, apiToken, runId, fromTaskKey, fromStepKey) 
   });
 }
 
-async function apiApproveRun(baseUrl, apiToken, runId, approvalId, note) {
+async function apiApproveRun(baseUrl, runId, approvalId, note) {
   return callApi(
     baseUrl,
-    apiToken,
     `/v1/runs/${encodeURIComponent(runId)}/approvals/${encodeURIComponent(approvalId)}/approve`,
     {
       method: 'POST',
@@ -76,10 +69,9 @@ async function apiApproveRun(baseUrl, apiToken, runId, approvalId, note) {
   );
 }
 
-async function apiRejectRun(baseUrl, apiToken, runId, approvalId, note) {
+async function apiRejectRun(baseUrl, runId, approvalId, note) {
   return callApi(
     baseUrl,
-    apiToken,
     `/v1/runs/${encodeURIComponent(runId)}/approvals/${encodeURIComponent(approvalId)}/reject`,
     {
       method: 'POST',

@@ -1,5 +1,4 @@
 const { createHash } = require('node:crypto');
-const fs = require('node:fs');
 const { createLocalToolCollection } = require('./tools.cjs');
 const { streamModelCompletion, countPromptTokens } = require('./services/model/streamModelCompletion.cjs');
 const { ToolRuntime } = require('./services/tools/ToolRuntime.cjs');
@@ -21,18 +20,15 @@ const {
   flattenMessagesForModel,
   buildSystemPrompt,
 } = require('./services/model/QwenAdapter.cjs');
-const { verifyCreateRequestSatisfaction } = require('./query/createRequestCheck.cjs');
 const { evaluateFinalAnswerPolicy } = require('./query/finalizationPolicy.cjs');
 const { findUngroundedSourceMentions } = require('./query/sourceGuard.cjs');
 const { buildRequestContext } = require('./utils/processUserInput/processUserInput.cjs');
-const { analyzePromptSemantics } = require('./services/model/QwenQueryRewrite.cjs');
 const { loadAgentState, saveAgentState } = require('./state/agentStateStore.cjs');
 const { listTasks, listTerminalCaptures } = require('./tasks/taskRuntime.cjs');
 const {
   readObservationsFromTrace,
   failedSteps,
 } = require('./queryTrace.cjs');
-const { safeResolve } = require('./workspace.cjs');
 const { collectGroundedPaths } = require('./query/groundedPaths.cjs');
 const { summarizeWikiEvidence } = require('./query/referenceEvidence.cjs');
 
@@ -41,41 +37,23 @@ const MAX_CONSECUTIVE_PARSE_ERRORS = 2;
 const MAX_MODEL_RETRIES = 2;
 const MAX_OUTPUT_TOKENS_RECOVERY_LIMIT = 3;
 const ESCALATED_MAX_TOKENS = 6400;
-const MAX_CONTEXT_COMPACTION_PASSES = 4;
-const MESSAGE_CHAR_BUDGET = 32000;
 const DEFAULT_MODEL_CONTEXT_WINDOW = 16384;
 const DEFAULT_MODEL_OUTPUT_TOKENS = 1600;
 const MIN_DYNAMIC_OUTPUT_TOKENS = 64;
 const REQUEST_TOKEN_SAFETY_MARGIN = 64;
-const APPROX_CONTEXT_HEADROOM_TOKENS = 192;
-const TOOL_RESULT_CHAR_BUDGET = 18000;
 const MODEL_PREVIEW_LIMIT = 180;
 const MAX_FILE_CACHE_ENTRIES = 24;
 const MAX_PROMPT_TOKEN_CACHE_ENTRIES = 32;
 const MAX_TRANSITIONS = 64;
 const MAX_UNGROUNDED_ANSWER_RETRIES = 2;
 const MAX_FINAL_ANSWER_POLICY_RETRIES = 2;
-const MAX_CREATE_VERIFICATION_RETRIES = 2;
-const MAX_CREATE_VERIFICATION_EXTRA_TURNS = 6;
 const FINAL_ANSWER_POLICY_TOOL_LOCK_NAMES = Object.freeze([
   'wiki_search',
   'wiki_read',
-  'wiki_evidence_search',
 ]);
 const NO_WORKSPACE_TOOL_NAMES = Object.freeze([
-  'todo_read',
-  'todo_write',
-  'brief',
-  'sleep',
-  'tool_search',
-  'config',
-  'wiki_evidence_search',
   'wiki_search',
   'wiki_read',
-  'wiki_write',
-  'wiki_rebuild_index',
-  'wiki_lint',
-  'wiki_writeback',
 ]);
 
 function deriveLoopControlState({
@@ -85,7 +63,6 @@ function deriveLoopControlState({
   turn = 1,
 } = {}) {
   const available = new Set((Array.isArray(availableToolNames) ? availableToolNames : []).map((item) => toStringValue(item)).filter(Boolean));
-  const verificationLocked = state?.phaseLock?.kind === 'draft_verification';
   const finalAnswerPolicyLock = state?.finalAnswerPolicyLock && typeof state.finalAnswerPolicyLock === 'object'
     ? state.finalAnswerPolicyLock
     : null;
@@ -93,15 +70,9 @@ function deriveLoopControlState({
   const requestIntent = requestContext?.intent && typeof requestContext.intent === 'object'
     ? requestContext.intent
     : {};
-  const requiresWorkspaceArtifact = Boolean(
-    requestIntent.wantsChanges
-    || requestIntent.wantsExecution
-    || requestIntent.createLikely
-    || requestContext?.artifactPlan?.requiresWorkspaceArtifact,
-  );
+  const requiresWorkspaceArtifact = Boolean(requestIntent.wantsChanges);
   const workflowAnswerLocked = Boolean(
-    !verificationLocked
-    && turn >= 4
+    turn >= 4
     && !requiresWorkspaceArtifact
     && requestContext?.workflowPlan?.preferWikiFirst
     && referenceEvidence.hasWorkflowEvidence
@@ -113,8 +84,7 @@ function deriveLoopControlState({
     ),
   );
   const finalAnswerPolicyLocked = Boolean(
-    !verificationLocked
-    && !requiresWorkspaceArtifact
+    !requiresWorkspaceArtifact
     && finalAnswerPolicyLock?.kind === 'answer_only',
   );
   const filteredToolNames = finalAnswerPolicyLocked
@@ -122,9 +92,7 @@ function deriveLoopControlState({
     : Array.from(available);
 
   return {
-    phase: verificationLocked
-      ? 'draft_verification'
-      : finalAnswerPolicyLocked
+    phase: finalAnswerPolicyLocked
         ? 'final_answer_policy'
       : workflowAnswerLocked
         ? 'workflow_answer'
@@ -134,7 +102,6 @@ function deriveLoopControlState({
       : finalAnswerPolicyLocked
         ? []
         : filteredToolNames,
-    verificationLocked,
     finalAnswerPolicyLocked,
     workflowAnswerLocked,
   };
@@ -209,13 +176,10 @@ function normalizeUsage(value = {}) {
     completion_calls: Number(payload.completion_calls || 0),
     streamed_completion_calls: Number(payload.streamed_completion_calls || 0),
     tool_calls: Number(payload.tool_calls || 0),
-    compactions: Number(payload.compactions || 0),
     parse_retries: Number(payload.parse_retries || 0),
     model_retries: Number(payload.model_retries || 0),
     resumed_sessions: Number(payload.resumed_sessions || 0),
     streamed_chars: Number(payload.streamed_chars || 0),
-    reactive_compactions: Number(payload.reactive_compactions || 0),
-    tool_result_compactions: Number(payload.tool_result_compactions || 0),
     background_tasks_started: Number(payload.background_tasks_started || 0),
     stop_hooks: Number(payload.stop_hooks || 0),
     user_questions: Number(payload.user_questions || 0),
@@ -304,59 +268,6 @@ function buildFinalAnswerPolicyRetrySignature(finalAnswerCheck = {}) {
   }));
 }
 
-function mergeBooleanHints(base = {}, incoming = {}) {
-  const output = {};
-  const keys = new Set([
-    ...Object.keys(base && typeof base === 'object' ? base : {}),
-    ...Object.keys(incoming && typeof incoming === 'object' ? incoming : {}),
-  ]);
-  for (const key of keys) {
-    output[key] = Boolean(base?.[key] || incoming?.[key]);
-  }
-  return output;
-}
-
-function messageCharLength(message) {
-  return serializeBlocks(Array.isArray(message?.content) ? message.content : []).length;
-}
-
-function isSyntheticSummaryText(text = '') {
-  const normalized = toStringValue(text);
-  return normalized.startsWith('[Compacted transcript]')
-    || normalized.startsWith('[Tool result summary]');
-}
-
-function summarizeSyntheticText(text = '') {
-  const normalized = toStringValue(text);
-  if (!normalized) return '';
-  if (normalized.startsWith('[Compacted transcript]')) {
-    const repeats = (normalized.match(/\[Compacted transcript\]/g) || []).length;
-    const userMatch = normalized.match(/user:\s*([^\n]+)/i);
-    const request = toStringValue(userMatch?.[1]).slice(0, 220);
-    return [
-      `[Compacted transcript summary${repeats > 1 ? ` x${repeats}` : ''}]`,
-      request ? `Latest request: ${request}` : '',
-    ].filter(Boolean).join('\n');
-  }
-  if (normalized.startsWith('[Tool result summary]')) {
-    return normalized
-      .split(/\r?\n/)
-      .slice(0, 8)
-      .join('\n')
-      .slice(0, 420);
-  }
-  return normalized.slice(0, 420);
-}
-
-function summarizeMessage(message) {
-  const role = toStringValue(message?.role || 'assistant');
-  const rawContent = serializeBlocks(Array.isArray(message?.content) ? message.content : []);
-  const content = isSyntheticSummaryText(rawContent)
-    ? summarizeSyntheticText(rawContent)
-    : rawContent.slice(0, 420);
-  return `${role}: ${content}`;
-}
-
 function contentWithoutToolResponses(content = '') {
   return toStringValue(String(content || '').replace(/<tool_response>\s*[\s\S]*?<\/tool_response>/gi, ' '));
 }
@@ -369,277 +280,6 @@ function hasSubstantiveUserQueryMessage(messages = []) {
     const content = contentWithoutToolResponses(toStringValue(message?.content));
     return Boolean(content);
   });
-}
-
-function findFirstSubstantiveUserMessage(messages = []) {
-  return (Array.isArray(messages) ? messages : []).find((message) => {
-    if (toStringValue(message?.role).toLowerCase() !== 'user') {
-      return false;
-    }
-    const content = serializeBlocks(Array.isArray(message?.content) ? message.content : []);
-    return Boolean(contentWithoutToolResponses(content));
-  }) || null;
-}
-
-function cloneMessage(message = null) {
-  if (!message || typeof message !== 'object') {
-    return null;
-  }
-  return {
-    role: toStringValue(message.role).toLowerCase() === 'user' ? 'user' : 'assistant',
-    content: normalizeMessageBlocks(message.content),
-  };
-}
-
-function compactMessages(messages) {
-  const safeMessages = Array.isArray(messages) ? [...messages] : [];
-  const totalChars = safeMessages.reduce((sum, item) => sum + messageCharLength(item), 0);
-  if (totalChars <= MESSAGE_CHAR_BUDGET || safeMessages.length <= 2) {
-    return { messages: safeMessages, compacted: false };
-  }
-  const firstUserMessage = cloneMessage(findFirstSubstantiveUserMessage(safeMessages));
-  const preserveTailCount = safeMessages.length > 10
-    ? 8
-    : Math.max(2, Math.min(6, safeMessages.length - 2));
-  const head = safeMessages.slice(0, Math.max(0, safeMessages.length - preserveTailCount));
-  const tail = safeMessages.slice(-preserveTailCount);
-  const summary = head
-    .map((item) => summarizeMessage(item))
-    .filter(Boolean)
-    .join('\n')
-    .slice(0, 6000);
-  if (!summary) {
-    return { messages: safeMessages, compacted: false };
-  }
-  const nextMessages = [];
-  if (firstUserMessage) {
-    nextMessages.push(firstUserMessage);
-  }
-  nextMessages.push({
-    role: 'assistant',
-    content: [createTextBlock(`[Compacted transcript]\n${summary}`)],
-  });
-  for (const item of tail) {
-    const cloned = cloneMessage(item);
-    if (!cloned) continue;
-    if (
-      firstUserMessage
-      && cloned.role === 'user'
-      && serializeBlocks(cloned.content) === serializeBlocks(firstUserMessage.content)
-    ) {
-      continue;
-    }
-    nextMessages.push(cloned);
-  }
-  return {
-    compacted: true,
-    messages: nextMessages,
-  };
-}
-
-function toolResultMessageIndexes(messages) {
-  const indexes = [];
-  for (let index = 0; index < (Array.isArray(messages) ? messages : []).length; index += 1) {
-    const message = messages[index];
-    if (Array.isArray(message?.content) && message.content.some((block) => block?.type === 'tool_result')) {
-      indexes.push(index);
-    }
-  }
-  return indexes;
-}
-
-function summarizeToolResultBlocks(message) {
-  const lines = [];
-  for (const block of Array.isArray(message?.content) ? message.content : []) {
-    if (block?.type !== 'tool_result') continue;
-    const prefix = `${toStringValue(block?.name || 'tool')}#${toStringValue(block?.tool_use_id)}`;
-    const body = String(block?.content || '').replace(/\s+/g, ' ').trim().slice(0, 220);
-    lines.push(`${prefix}${block?.is_error ? ' error' : ' ok'}: ${body}`);
-  }
-  return lines;
-}
-
-function summarizeStructuredItems(items = [], formatter, limit = 4) {
-  return (Array.isArray(items) ? items : [])
-    .slice(0, limit)
-    .map((item) => toStringValue(formatter(item)))
-    .filter(Boolean);
-}
-
-function summarizeStructuredToolResult(name = '', payload = {}) {
-  const lines = [];
-  const toolName = toStringValue(name || payload?.tool || 'tool');
-  const status = payload?.ok === false ? 'error' : 'ok';
-  const message = toStringValue(payload?.message || payload?.error || payload?.reason);
-  lines.push(`${toolName}: ${status}`);
-  if (message) {
-    lines.push(message.slice(0, 240));
-  }
-
-  const matchItems = summarizeStructuredItems(payload?.matches, (item) => {
-    const path = toStringValue(item?.path || item?.file_path || item?.filePath);
-    const lineRange = toStringValue(item?.lineRange || item?.line_range || item?.line);
-    return [path, lineRange].filter(Boolean).join(':');
-  });
-  if (matchItems.length > 0) {
-    lines.push(`matches(${Array.isArray(payload?.matches) ? payload.matches.length : matchItems.length}): ${matchItems.join('; ')}`);
-  }
-
-  const windowItems = summarizeStructuredItems(payload?.windows, (item) => {
-    const path = toStringValue(item?.path || item?.file_path || item?.filePath);
-    const lineRange = toStringValue(item?.lineRange || item?.line_range || '');
-    return [path, lineRange].filter(Boolean).join(':');
-  }, 3);
-  if (windowItems.length > 0) {
-    lines.push(`windows(${Array.isArray(payload?.windows) ? payload.windows.length : windowItems.length}): ${windowItems.join('; ')}`);
-  }
-
-  const docItems = summarizeStructuredItems(
-    payload?.sources,
-    (item) => {
-      const path = toStringValue(item?.file_path || item?.path || item?.source_url || item?.sourceUrl);
-      const heading = toStringValue(item?.heading_path || item?.paragraph_range || item?.line_range);
-      return [path, heading].filter(Boolean).join(' @ ');
-    },
-    3,
-  );
-  if (docItems.length > 0) {
-    const count = Array.isArray(payload?.sources) ? payload.sources.length : docItems.length;
-    lines.push(`docs(${count}): ${docItems.join('; ')}`);
-  }
-
-  const fileItems = summarizeStructuredItems(payload?.files, (item) => toStringValue(item?.path || item), 4);
-  if (fileItems.length > 0) {
-    lines.push(`files(${Array.isArray(payload?.files) ? payload.files.length : fileItems.length}): ${fileItems.join('; ')}`);
-  }
-
-  const stdout = toStringValue(payload?.stdout || payload?.output_preview || payload?.summary || payload?.text)
-    .replace(/\s+/g, ' ')
-    .slice(0, 320);
-  if (stdout) {
-    lines.push(stdout);
-  }
-
-  return lines.filter(Boolean).join('\n').slice(0, 1400);
-}
-
-function summarizeToolResultContent(name = '', content = '', isError = false) {
-  const raw = toStringValue(content);
-  if (!raw) {
-    return raw;
-  }
-  const parsed = safeJsonParseObject(raw);
-  if (parsed) {
-    const summary = summarizeStructuredToolResult(name, parsed);
-    if (summary) {
-      return summary;
-    }
-  }
-  const prefix = `${toStringValue(name || 'tool')}${isError ? ' error' : ''}: `;
-  return `${prefix}${raw.replace(/\s+/g, ' ').slice(0, 1200)}`.slice(0, 1400);
-}
-
-function shrinkToolResultMessage(message) {
-  let changed = false;
-  const nextContent = [];
-  for (const block of Array.isArray(message?.content) ? message.content : []) {
-    if (block?.type !== 'tool_result') {
-      nextContent.push(block);
-      continue;
-    }
-    const original = toStringValue(block?.content);
-    const summarized = summarizeToolResultContent(block?.name, original, Boolean(block?.is_error));
-    if (summarized && summarized !== original) {
-      changed = true;
-      nextContent.push({
-        ...block,
-        content: summarized,
-      });
-    } else {
-      nextContent.push(block);
-    }
-  }
-  return {
-    changed,
-    message: changed
-      ? {
-          ...message,
-          content: nextContent,
-        }
-      : message,
-  };
-}
-
-function applyToolResultBudget(messages) {
-  let safeMessages = Array.isArray(messages) ? [...messages] : [];
-  let resultIndexes = toolResultMessageIndexes(safeMessages);
-  let totalChars = resultIndexes.reduce((sum, index) => sum + messageCharLength(safeMessages[index]), 0);
-  if (totalChars <= TOOL_RESULT_CHAR_BUDGET || resultIndexes.length === 0) {
-    return { messages: safeMessages, compacted: false, removed: 0 };
-  }
-
-  let summarizedMessages = 0;
-  safeMessages = safeMessages.map((message, index) => {
-    if (!resultIndexes.includes(index)) {
-      return message;
-    }
-    const shrunk = shrinkToolResultMessage(message);
-    if (shrunk.changed) {
-      summarizedMessages += 1;
-    }
-    return shrunk.message;
-  });
-  resultIndexes = toolResultMessageIndexes(safeMessages);
-  totalChars = resultIndexes.reduce((sum, index) => sum + messageCharLength(safeMessages[index]), 0);
-  if (totalChars <= TOOL_RESULT_CHAR_BUDGET) {
-    return {
-      messages: safeMessages,
-      compacted: summarizedMessages > 0,
-      removed: 0,
-    };
-  }
-
-  const preserve = new Set(resultIndexes.slice(-2));
-  const summarizeIndexes = [];
-  let removedChars = 0;
-  for (const index of resultIndexes) {
-    if (preserve.has(index)) continue;
-    summarizeIndexes.push(index);
-    removedChars += messageCharLength(safeMessages[index]);
-    if (totalChars - removedChars <= TOOL_RESULT_CHAR_BUDGET) {
-      break;
-    }
-  }
-  if (summarizeIndexes.length === 0) {
-    return { messages: safeMessages, compacted: false, removed: 0 };
-  }
-
-  const summaryText = summarizeIndexes
-    .flatMap((index) => summarizeToolResultBlocks(safeMessages[index]))
-    .join('\n')
-    .slice(0, 6000);
-
-  const summaryMessage = {
-    role: 'assistant',
-    content: [createTextBlock(`[Tool result summary]\n${summaryText}`)],
-  };
-
-  const firstIndex = summarizeIndexes[0];
-  const summarizeSet = new Set(summarizeIndexes);
-  const nextMessages = [];
-  for (let index = 0; index < safeMessages.length; index += 1) {
-    if (index === firstIndex) {
-      nextMessages.push(summaryMessage);
-    }
-    if (summarizeSet.has(index)) continue;
-    nextMessages.push(safeMessages[index]);
-  }
-
-  return {
-    messages: nextMessages,
-    compacted: true,
-    removed: summarizeIndexes.length,
-  };
 }
 
 function stableSerialize(value) {
@@ -730,8 +370,6 @@ function initialState({ historyMessages = [] } = {}) {
     trace: [],
     transcript: [],
     transitions: [],
-    compactBoundaries: [],
-    phaseLock: null,
     finalAnswerPolicyLock: null,
     finalAnswerPolicyRetries: 0,
     finalAnswerPolicyRetrySignature: '',
@@ -742,7 +380,6 @@ function initialState({ historyMessages = [] } = {}) {
     maxOutputTokensOverride: 0,
     pendingAssistantContinuation: '',
     ungroundedAnswerRetries: 0,
-    createVerificationRetries: 0,
     terminalReason: '',
     currentTurn: 0,
     totalUsage: normalizeUsage(),
@@ -753,12 +390,10 @@ class QueryEngine {
   constructor({
     workspacePath = '',
     baseUrl = '',
-    apiToken = '',
     serverBaseUrl = '',
-    serverApiToken = '',
     llmBaseUrl = '',
-    llmApiToken = '',
     wikiId = '',
+    engineQuestionOverride = null,
     model = '',
     selectedFilePath = '',
     sessionId = '',
@@ -766,12 +401,10 @@ class QueryEngine {
   } = {}) {
     this.workspacePath = toStringValue(workspacePath);
     this.serverBaseUrl = toStringValue(serverBaseUrl || baseUrl);
-    this.serverApiToken = toStringValue(serverApiToken || apiToken);
     this.llmBaseUrl = toStringValue(llmBaseUrl);
-    this.llmApiToken = toStringValue(llmApiToken);
     this.wikiId = toStringValue(wikiId);
+    this.engineQuestionOverride = typeof engineQuestionOverride === 'boolean' ? engineQuestionOverride : null;
     this.baseUrl = this.llmBaseUrl || this.serverBaseUrl;
-    this.apiToken = this.llmApiToken || this.serverApiToken;
     this.model = toStringValue(model);
     this.selectedFilePath = toStringValue(selectedFilePath);
     this.sessionId = toStringValue(sessionId);
@@ -795,8 +428,10 @@ class QueryEngine {
       runtimeBridge: this.runtimeBridge,
       getBackendConfig: () => ({
         baseUrl: this.serverBaseUrl,
-        apiToken: this.serverApiToken,
         wikiId: this.wikiId,
+        llmBaseUrl: this.llmBaseUrl || this.baseUrl || this.serverBaseUrl,
+        serverBaseUrl: this.serverBaseUrl,
+        model: this.model,
       }),
       allowedToolNames: this.workspacePath ? null : NO_WORKSPACE_TOOL_NAMES,
     });
@@ -811,22 +446,20 @@ class QueryEngine {
 
   updateContext({
     baseUrl = '',
-    apiToken = '',
     serverBaseUrl = '',
-    serverApiToken = '',
     llmBaseUrl = '',
-    llmApiToken = '',
     wikiId = '',
+    engineQuestionOverride = null,
     model = '',
     selectedFilePath = '',
   } = {}) {
     this.serverBaseUrl = toStringValue(serverBaseUrl) || this.serverBaseUrl || toStringValue(baseUrl) || this.baseUrl;
-    this.serverApiToken = toStringValue(serverApiToken) || this.serverApiToken || toStringValue(apiToken) || this.apiToken;
     this.llmBaseUrl = toStringValue(llmBaseUrl) || this.llmBaseUrl;
-    this.llmApiToken = toStringValue(llmApiToken) || this.llmApiToken;
     this.wikiId = toStringValue(wikiId) || this.wikiId;
+    this.engineQuestionOverride = typeof engineQuestionOverride === 'boolean'
+      ? engineQuestionOverride
+      : this.engineQuestionOverride;
     this.baseUrl = this.llmBaseUrl || toStringValue(baseUrl) || this.baseUrl || this.serverBaseUrl;
-    this.apiToken = this.llmApiToken || toStringValue(apiToken) || this.apiToken || this.serverApiToken;
     this.model = toStringValue(model) || this.model;
     this.selectedFilePath = toStringValue(selectedFilePath) || this.selectedFilePath;
     this.promptTokenCountCache.clear();
@@ -853,10 +486,6 @@ class QueryEngine {
       trace: Array.isArray(restored.trace) ? restored.trace.map((step) => toSerializableTraceStep(step)) : [],
       transcript: Array.isArray(restored.transcript) ? restored.transcript : [],
       transitions: Array.isArray(restored.transitions) ? restored.transitions : [],
-      compactBoundaries: Array.isArray(restored.compactBoundaries) ? restored.compactBoundaries : [],
-      phaseLock: restored.phaseLock && typeof restored.phaseLock === 'object'
-        ? restored.phaseLock
-        : null,
       finalAnswerPolicyLock: restored.finalAnswerPolicyLock && typeof restored.finalAnswerPolicyLock === 'object'
         ? restored.finalAnswerPolicyLock
         : null,
@@ -873,7 +502,6 @@ class QueryEngine {
       maxOutputTokensOverride: Number(restored.maxOutputTokensOverride || 0),
       pendingAssistantContinuation: toStringValue(restored.pendingAssistantContinuation),
       ungroundedAnswerRetries: Number(restored.ungroundedAnswerRetries || 0),
-      createVerificationRetries: Number(restored.createVerificationRetries || 0),
       terminalReason: toStringValue(restored.terminalReason),
       currentTurn: Number(restored.currentTurn || 0),
       totalUsage: {
@@ -895,10 +523,6 @@ class QueryEngine {
       trace: this.state.trace.map((step) => toSerializableTraceStep(step)),
       transcript: Array.isArray(this.state.transcript) ? this.state.transcript : [],
       transitions: Array.isArray(this.state.transitions) ? this.state.transitions : [],
-      compactBoundaries: Array.isArray(this.state.compactBoundaries) ? this.state.compactBoundaries : [],
-      phaseLock: this.state.phaseLock && typeof this.state.phaseLock === 'object'
-        ? this.state.phaseLock
-        : null,
       finalAnswerPolicyLock: this.state.finalAnswerPolicyLock && typeof this.state.finalAnswerPolicyLock === 'object'
         ? this.state.finalAnswerPolicyLock
         : null,
@@ -913,7 +537,6 @@ class QueryEngine {
       maxOutputTokensOverride: Number(this.state.maxOutputTokensOverride || 0),
       pendingAssistantContinuation: toStringValue(this.state.pendingAssistantContinuation),
       ungroundedAnswerRetries: Number(this.state.ungroundedAnswerRetries || 0),
-      createVerificationRetries: Number(this.state.createVerificationRetries || 0),
       terminalReason: toStringValue(this.state.terminalReason),
       currentTurn: Number(this.state.currentTurn || 0),
       totalUsage: { ...this.state.totalUsage },
@@ -957,7 +580,6 @@ class QueryEngine {
       messageCount: Array.isArray(this.state.messages) ? this.state.messages.length : 0,
       transcriptCount: Array.isArray(this.state.transcript) ? this.state.transcript.length : 0,
       transitionCount: Array.isArray(this.state.transitions) ? this.state.transitions.length : 0,
-      compactBoundaries: Array.isArray(this.state.compactBoundaries) ? this.state.compactBoundaries.slice(-12) : [],
       fileCacheKeys: Object.keys(this.state.fileCache && typeof this.state.fileCache === 'object' ? this.state.fileCache : {}).slice(-12),
       pendingToolUseSummary: toStringValue(this.state.pendingToolUseSummary),
       pendingAssistantContinuation: toStringValue(this.state.pendingAssistantContinuation),
@@ -1089,9 +711,7 @@ class QueryEngine {
         });
         const result = await streamModelCompletion({
           baseUrl: this.llmBaseUrl || this.baseUrl || this.serverBaseUrl,
-          apiToken: this.llmApiToken || this.apiToken || this.serverApiToken,
           fallbackBaseUrl: this.serverBaseUrl,
-          fallbackApiToken: this.serverApiToken,
           model: this.model,
           messages,
           maxTokens,
@@ -1370,9 +990,7 @@ class QueryEngine {
     try {
       const payload = await countPromptTokens({
         baseUrl: this.llmBaseUrl || this.baseUrl || this.serverBaseUrl,
-        apiToken: this.llmApiToken || this.apiToken || this.serverApiToken,
         fallbackBaseUrl: this.serverBaseUrl,
-        fallbackApiToken: this.serverApiToken,
         model: this.model,
         messages,
         signal,
@@ -1415,14 +1033,6 @@ class QueryEngine {
     }
   }
 
-  _softContextTokenBudget(contextWindowOverride = 0) {
-    const contextWindow = Number(contextWindowOverride || 0) || resolveModelContextWindow(this.model);
-    return Math.max(
-      1024,
-      contextWindow - APPROX_CONTEXT_HEADROOM_TOKENS,
-    );
-  }
-
   _resolveMaxTokensForRequest(messages = [], budgetState = null) {
     const requested = Math.max(
       MIN_DYNAMIC_OUTPUT_TOKENS,
@@ -1446,80 +1056,6 @@ class QueryEngine {
       return Math.max(1, available);
     }
     return requested;
-  }
-
-  async _compactMessagesToSoftBudget({
-    systemPrompt = '',
-    turn = 0,
-    boundaryReason = 'context_budget_compaction',
-    transitionName = 'context_budget_compaction',
-    reactive = false,
-    errorMessage = '',
-    signal = null,
-  } = {}) {
-    let budgetState = await this._requestBudgetStateForMessages(
-      this._modelMessages(systemPrompt),
-      { signal },
-    );
-    let passes = 0;
-    while (
-      Number(budgetState?.promptTokens || budgetState?.approxTokens || 0) > this._softContextTokenBudget(budgetState?.contextWindow)
-      && passes < MAX_CONTEXT_COMPACTION_PASSES
-    ) {
-      const previousTokens = Number(budgetState?.promptTokens || budgetState?.approxTokens || 0);
-      const toolBudget = applyToolResultBudget(this.state.messages);
-      if (toolBudget.compacted) {
-        this.state.messages = toolBudget.messages;
-        this.state.totalUsage.tool_result_compactions += 1;
-        passes += 1;
-        budgetState = await this._requestBudgetStateForMessages(
-          this._modelMessages(systemPrompt),
-          { signal },
-        );
-        if (Number(budgetState?.promptTokens || budgetState?.approxTokens || 0) < previousTokens) {
-          continue;
-        }
-      }
-
-      const candidate = compactMessages(this.state.messages);
-      if (!candidate.compacted) {
-        break;
-      }
-      this.state.messages = candidate.messages;
-      this.state.totalUsage.compactions += 1;
-      passes += 1;
-      budgetState = await this._requestBudgetStateForMessages(
-        this._modelMessages(systemPrompt),
-        { signal },
-      );
-      if (Number(budgetState?.promptTokens || budgetState?.approxTokens || 0) >= previousTokens) {
-        break;
-      }
-    }
-    if (passes > 0) {
-      if (reactive) {
-        this.state.totalUsage.reactive_compactions += passes;
-      }
-      this.state.compactBoundaries = [...(Array.isArray(this.state.compactBoundaries) ? this.state.compactBoundaries : []), {
-        timestamp: new Date().toISOString(),
-        reason: boundaryReason,
-        turn,
-        passes,
-      }].slice(-MAX_TRANSITIONS);
-      this._recordTransition(transitionName, {
-        turn,
-        passes,
-        promptTokens: Number(budgetState?.promptTokens || budgetState?.approxTokens || 0),
-        exact: Boolean(budgetState?.exact),
-        ...(toStringValue(errorMessage) ? { message: toStringValue(errorMessage) } : {}),
-      });
-      this._persistState();
-    }
-    return {
-      budgetState,
-      compacted: passes > 0,
-      passes,
-    };
   }
 
   _runtimeContextMessage() {
@@ -1553,30 +1089,9 @@ class QueryEngine {
         ? this.state.finalAnswerPolicyLock
         : {};
       const reasoning = toStringValue(finalAnswerPolicyLock.blockingMessage || finalAnswerPolicyLock.reason);
-      lines.push('Final-answer policy lock: do not call wiki_search, wiki_read, or wiki_evidence_search again for this question. Revise the answer using the evidence already collected, or explicitly say which detail is unverified.');
+      lines.push('Final-answer policy lock: do not call wiki_search or wiki_read again for this question. Revise the answer using the evidence already collected, or explicitly say which detail is unverified.');
       if (reasoning) {
         lines.push(`Policy blocker: ${reasoning}`);
-      }
-    }
-    if (controlState.verificationLocked) {
-      const targets = Array.isArray(this.state.phaseLock.targetPaths) ? this.state.phaseLock.targetPaths : [];
-      const requiredChanges = Array.isArray(this.state.phaseLock.requiredChanges) ? this.state.phaseLock.requiredChanges : [];
-      const reasoning = toStringValue(this.state.phaseLock.reasoning);
-      const referenceFactSheet = toStringValue(this.state.phaseLock.referenceFactSheet);
-      lines.push('Verification phase lock: do not summarize or explain yet. Use only read_file/write/edit on the generated workspace file until the verifier passes. Do not call wiki_read, wiki_search, or wiki_evidence_search during repair.');
-      if (targets.length > 0) {
-        lines.push(`Verification target files: ${targets.slice(0, 4).join(', ')}`);
-      }
-      if (reasoning) {
-        lines.push(`Verifier reasoning: ${reasoning}`);
-      }
-      if (requiredChanges.length > 0) {
-        lines.push('Verifier-required changes:');
-        lines.push(...requiredChanges.map((item) => `- ${item}`));
-      }
-      if (referenceFactSheet) {
-        lines.push('Verified API facts:');
-        lines.push(referenceFactSheet.slice(0, 1200));
       }
     }
     return lines.join('\n').trim();
@@ -1608,151 +1123,6 @@ class QueryEngine {
       { role: 'system', content: mergedSystemPrompt },
       ...flattenedMessages,
     ];
-  }
-
-  async _collectGeneratedFiles(runTrace = [], runContext = {}) {
-    if (!this.workspacePath) {
-      return [];
-    }
-    const candidatePaths = this._collectMutationPaths(runTrace);
-    if (candidatePaths.length === 0) {
-      for (const value of this._resolveRepairTargetPaths(runTrace, runContext)) {
-        if (!candidatePaths.includes(value)) {
-          candidatePaths.push(value);
-        }
-      }
-    }
-    const files = [];
-    for (const relativePath of candidatePaths.slice(0, 3)) {
-      try {
-        const fullPath = await safeResolve(this.workspacePath, relativePath);
-        const content = await fs.promises.readFile(fullPath, 'utf8');
-        files.push({
-          path: relativePath,
-          content,
-        });
-      } catch {
-        // ignore unreadable mutation targets
-      }
-    }
-    return files;
-  }
-
-  _collectReferenceEvidence(runTrace = []) {
-    const referenceExcerpts = [];
-    const apiFacts = [];
-    const knownTypes = [];
-    const factSheetLines = [];
-    for (const step of Array.isArray(runTrace) ? runTrace : []) {
-      if (toStringValue(step?.tool) === 'wiki_read' && step?.observation?.ok !== false) {
-        const wikiPath = toStringValue(step?.observation?.path);
-        const wikiContent = String(step?.observation?.content || '').trim();
-        if (wikiPath && wikiContent) {
-          referenceExcerpts.push({
-            path: wikiPath,
-            lineRange: '',
-            evidenceType: 'workflow',
-            content: wikiContent.slice(0, 4000),
-          });
-        }
-        continue;
-      }
-      if (toStringValue(step?.tool) !== 'wiki_evidence_search' || step?.observation?.ok === false) {
-        continue;
-      }
-      for (const item of Array.isArray(step?.observation?.windows) ? step.observation.windows : []) {
-        if (!toStringValue(item?.path) || !String(item?.content || '').trim()) continue;
-        referenceExcerpts.push({
-          path: toStringValue(item?.path),
-          lineRange: toStringValue(item?.lineRange || item?.line_range),
-          evidenceType: toStringValue(item?.evidenceType || item?.evidence_type),
-          content: String(item?.content || ''),
-        });
-        if (referenceExcerpts.length >= 8) break;
-      }
-      for (const item of Array.isArray(step?.observation?.api_facts || step?.observation?.apiFacts) ? (step.observation.api_facts || step.observation.apiFacts) : []) {
-        apiFacts.push({
-          kind: toStringValue(item?.kind),
-          namespace: toStringValue(item?.namespace),
-          typeName: toStringValue(item?.typeName),
-          qualifiedType: toStringValue(item?.qualifiedType),
-          memberName: toStringValue(item?.memberName),
-          signature: toStringValue(item?.signature),
-          stubSignature: toStringValue(item?.stubSignature),
-          path: toStringValue(item?.path),
-          lineRange: toStringValue(item?.lineRange || item?.line_range),
-          evidenceType: toStringValue(item?.evidenceType || item?.evidence_type),
-        });
-        if (apiFacts.length >= 20) break;
-      }
-      for (const item of Array.isArray(step?.observation?.known_types || step?.observation?.knownTypes) ? (step.observation.known_types || step.observation.knownTypes) : []) {
-        knownTypes.push({
-          qualifiedType: toStringValue(item?.qualifiedType),
-          namespace: toStringValue(item?.namespace),
-          typeName: toStringValue(item?.typeName),
-          kind: toStringValue(item?.kind),
-        });
-        if (knownTypes.length >= 20) break;
-      }
-      if (toStringValue(step?.observation?.fact_sheet || step?.observation?.factSheet)) {
-        factSheetLines.push(toStringValue(step.observation.fact_sheet || step.observation.factSheet));
-      }
-      if (referenceExcerpts.length >= 8 && apiFacts.length >= 20) {
-        break;
-      }
-    }
-    return {
-      referenceExcerpts,
-      apiFacts,
-      knownTypes,
-      factSheet: factSheetLines.slice(0, 2).join('\n').trim(),
-    };
-  }
-
-  async _verifyCreateRequestCompletion(runContext, runTrace, { signal = null, files = null, referenceEvidence = null } = {}) {
-    const intent = runContext?.intent && typeof runContext.intent === 'object' ? runContext.intent : {};
-    const requiresWorkspaceArtifact = Boolean(
-      runContext?.artifactPlan?.requiresWorkspaceArtifact || intent.createLikely,
-    );
-    if (!requiresWorkspaceArtifact || !this.workspacePath) {
-      return null;
-    }
-
-    const generatedFiles = Array.isArray(files) ? files : await this._collectGeneratedFiles(runTrace, runContext);
-    if (generatedFiles.length === 0) {
-      return null;
-    }
-
-    const references = referenceEvidence && typeof referenceEvidence === 'object'
-      ? referenceEvidence
-      : this._collectReferenceEvidence(runTrace);
-
-    return verifyCreateRequestSatisfaction({
-      baseUrl: this.llmBaseUrl || this.baseUrl || this.serverBaseUrl,
-      apiToken: this.llmApiToken || this.apiToken || this.serverApiToken,
-      fallbackBaseUrl: this.serverBaseUrl,
-      fallbackApiToken: this.serverApiToken,
-      model: this.model,
-      signal,
-      userPrompt: toStringValue(runContext?.prompt),
-      files: generatedFiles,
-      referenceExcerpts: references.referenceExcerpts,
-      apiFacts: references.apiFacts,
-    });
-  }
-
-  _collectMutationPaths(runTrace = []) {
-    const paths = [];
-    for (const step of Array.isArray(runTrace) ? runTrace : []) {
-      if (!['write', 'write_file', 'edit', 'replace_in_file', 'notebook_edit'].includes(toStringValue(step?.tool))) {
-        continue;
-      }
-      if (step?.observation?.ok === false) continue;
-      const pathValue = toStringValue(step?.observation?.path);
-      if (!pathValue || paths.includes(pathValue)) continue;
-      paths.push(pathValue);
-    }
-    return paths;
   }
 
   _groundedSourcePaths(runTrace = []) {
@@ -1824,67 +1194,6 @@ class QueryEngine {
     return finalAnswerCheck;
   }
 
-  _queueRepairLoop({
-    turn = 0,
-    maxTurns = MAX_TURNS,
-    runTrace = [],
-    runContext = {},
-    hook = 'draft_answer_verification_retry',
-    reasoning = '',
-    requiredChanges = [],
-    fallbackWithTarget = '',
-    fallbackWithoutTarget = '',
-  } = {}) {
-    const intent = runContext?.intent && typeof runContext.intent === 'object'
-      ? runContext.intent
-      : {};
-    const requiresWorkspaceArtifact = Boolean(
-      runContext?.artifactPlan?.requiresWorkspaceArtifact
-      || intent.createLikely
-      || intent.wantsChanges,
-    );
-    const targetPaths = requiresWorkspaceArtifact
-      ? this._resolveRepairTargetPaths(runTrace, runContext)
-      : [];
-    const normalizedRequiredChanges = (
-      Array.isArray(requiredChanges) && requiredChanges.length > 0
-        ? requiredChanges
-        : [requiresWorkspaceArtifact
-          ? 'Re-read the generated file and patch it directly before finalizing.'
-          : 'Revise the answer text so it matches the verified reference evidence before finalizing.']
-    ).map((item) => toStringValue(item)).filter(Boolean).slice(0, 6);
-    const referenceEvidence = this._collectReferenceEvidence(runTrace);
-    this.state.createVerificationRetries += 1;
-    this.state.phaseLock = requiresWorkspaceArtifact
-      ? {
-        kind: 'draft_verification',
-        targetPaths,
-        turn,
-        reasoning: toStringValue(reasoning),
-        requiredChanges: normalizedRequiredChanges,
-        referenceFactSheet: toStringValue(referenceEvidence?.factSheet),
-      }
-      : null;
-    const nextMaxTurns = Math.max(maxTurns, MAX_TURNS + MAX_CREATE_VERIFICATION_EXTRA_TURNS);
-    this._pushMetaUserMessage(
-      toStringValue(reasoning)
-        || (targetPaths.length > 0 ? toStringValue(fallbackWithTarget) : toStringValue(fallbackWithoutTarget)),
-      {
-        turn,
-        hook,
-        requiredChanges: normalizedRequiredChanges,
-        targetPaths: targetPaths.slice(0, 4),
-      },
-    );
-    this._recordTransition(hook, {
-      turn,
-      retryCount: Number(this.state.createVerificationRetries || 0),
-      targetPaths: targetPaths.slice(0, 4),
-    });
-    this._persistState();
-    return nextMaxTurns;
-  }
-
   _resetPendingAnswerState() {
     this.state.pendingAssistantContinuation = '';
     this.state.maxOutputTokensRecoveryCount = 0;
@@ -1898,8 +1207,6 @@ class QueryEngine {
   }
 
   _resetRepairState() {
-    this.state.createVerificationRetries = 0;
-    this.state.phaseLock = null;
     this._resetFinalAnswerPolicyState();
   }
 
@@ -1914,12 +1221,7 @@ class QueryEngine {
     const requestIntent = requestContext?.intent && typeof requestContext.intent === 'object'
       ? requestContext.intent
       : {};
-    const requiresWorkspaceArtifact = Boolean(
-      requestIntent.wantsChanges
-      || requestIntent.wantsExecution
-      || requestIntent.createLikely
-      || requestContext?.artifactPlan?.requiresWorkspaceArtifact,
-    );
+    const requiresWorkspaceArtifact = Boolean(requestIntent.wantsChanges);
     const canLockToAnswerOnly = Boolean(
       !requiresWorkspaceArtifact
       && (
@@ -1946,7 +1248,7 @@ class QueryEngine {
       shouldLockToAnswerOnly
         ? [
           'Stop searching.',
-          'Do not call wiki_search, wiki_read, or wiki_evidence_search again for this question unless the user provides new evidence.',
+          'Do not call wiki_search or wiki_read again for this question unless the user provides new evidence.',
           'Revise the answer from the evidence already collected, or explicitly mark the remaining detail as unverified.',
           toStringValue(finalAnswerCheck?.blockingMessage),
         ].filter(Boolean).join(' ')
@@ -2063,43 +1365,6 @@ class QueryEngine {
       return { status: 'continue', maxTurns };
     }
 
-    const referenceEvidence = this._collectReferenceEvidence(runTrace);
-    const createVerification = await this._verifyCreateRequestCompletion(runContext, runTrace, {
-      signal,
-      files: null,
-      referenceEvidence,
-    });
-    if (
-      createVerification
-      && createVerification.needs_changes
-      && Number(this.state.createVerificationRetries || 0) < MAX_CREATE_VERIFICATION_RETRIES
-    ) {
-      return {
-        status: 'continue',
-        maxTurns: this._queueRepairLoop({
-          turn,
-          maxTurns,
-          runTrace,
-          runContext: {
-            ...runContext,
-            artifactPlan: {
-              ...(runContext?.artifactPlan && typeof runContext.artifactPlan === 'object' ? runContext.artifactPlan : {}),
-              likelyPaths: Array.isArray(createVerification.target_paths)
-                ? createVerification.target_paths
-                : (Array.isArray(runContext?.artifactPlan?.likelyPaths) ? runContext.artifactPlan.likelyPaths : []),
-            },
-          },
-          hook: 'create_request_verification_retry',
-          reasoning: createVerification.reasoning,
-          requiredChanges: Array.isArray(createVerification.required_changes)
-            ? createVerification.required_changes
-            : [],
-          fallbackWithTarget: 'The generated workspace file does not yet fully satisfy the request. Fix the target file directly instead of finalizing or switching to build/dependency troubleshooting.',
-          fallbackWithoutTarget: 'The generated workspace file does not yet fully satisfy the request. Fix the source file directly instead of finalizing or switching to build/dependency troubleshooting.',
-        }),
-      };
-    }
-
     if (!finalAnswerCheck?.ok && finalAnswerCheck?.type === 'grounding') {
       return {
         status: this._queueUngroundedAnswerRetry(finalAnswerCheck, { turn }),
@@ -2119,124 +1384,6 @@ class QueryEngine {
         onTerminal,
       }),
     };
-  }
-
-  _resolveRepairTargetPaths(runTrace = [], runContext = {}) {
-    const targets = [];
-    const push = (value) => {
-      const normalized = toStringValue(value);
-      if (!normalized || targets.includes(normalized)) return;
-      targets.push(normalized);
-    };
-
-    for (const value of this._collectMutationPaths(runTrace)) {
-      push(value);
-    }
-
-    for (const observation of readObservationsFromTrace(runTrace)) {
-      const pathValue = toStringValue(observation?.path);
-      if (/\.(cs|xaml|xaml\.cs|csproj|sln)$/i.test(pathValue)) {
-        push(pathValue);
-      }
-    }
-
-    for (const value of Array.isArray(runContext?.artifactPlan?.likelyPaths) ? runContext.artifactPlan.likelyPaths : []) {
-      push(value);
-    }
-
-    const cacheEntries = Object.keys(this.state.fileCache && typeof this.state.fileCache === 'object' ? this.state.fileCache : {});
-    for (const value of cacheEntries) {
-      if (/\.(cs|xaml|xaml\.cs|csproj|sln)$/i.test(value)) {
-        push(value);
-      }
-    }
-
-    return targets.slice(0, 4);
-  }
-
-  _mergeRequestContractContext(requestContext = {}, contract = {}) {
-    return buildRequestContext({
-      ...requestContext,
-      prompt: toStringValue(requestContext?.prompt),
-      workspacePath: this.workspacePath,
-      selectedFilePath: toStringValue(requestContext?.selectedFilePath || this.selectedFilePath),
-      directives: requestContext?.directives,
-      languageProfile: requestContext?.languageProfile,
-      intent: mergeBooleanHints(
-        requestContext?.intent && typeof requestContext.intent === 'object' ? requestContext.intent : {},
-        contract?.intent && typeof contract.intent === 'object' ? contract.intent : {},
-      ),
-      focus: mergeBooleanHints(
-        requestContext?.focus && typeof requestContext.focus === 'object' ? requestContext.focus : {},
-        contract?.focus && typeof contract.focus === 'object' ? contract.focus : {},
-      ),
-      symbolHints: [
-        ...(Array.isArray(requestContext?.symbolHints) ? requestContext.symbolHints : []),
-        ...(Array.isArray(contract?.symbolHints) ? contract.symbolHints : []),
-      ],
-      searchTerms: [
-        ...(Array.isArray(requestContext?.searchTerms) ? requestContext.searchTerms : []),
-        ...(Array.isArray(contract?.searchTerms) ? contract.searchTerms : []),
-      ],
-      artifactPlan: {
-        requiresWorkspaceArtifact: Boolean(
-          contract?.artifact?.requiresWorkspaceArtifact
-          || requestContext?.artifactPlan?.requiresWorkspaceArtifact
-          || requestContext?.intent?.createLikely
-          || contract?.intent?.createLikely,
-        ),
-        likelyPaths: [
-          ...(Array.isArray(requestContext?.artifactPlan?.likelyPaths) ? requestContext.artifactPlan.likelyPaths : []),
-          ...(Array.isArray(contract?.artifact?.likelyPaths) ? contract.artifact.likelyPaths : []),
-        ],
-      },
-    });
-  }
-
-  async _enrichRunContextWithContract(runContext, { signal = null } = {}) {
-    const requestContext = runContext && typeof runContext === 'object' ? runContext : {};
-    const prompt = toStringValue(requestContext?.prompt);
-    if (!prompt) {
-      return requestContext;
-    }
-
-    const contract = await analyzePromptSemantics({
-      baseUrl: this.llmBaseUrl || this.baseUrl || this.serverBaseUrl,
-      apiToken: this.llmApiToken || this.apiToken || this.serverApiToken,
-      fallbackBaseUrl: this.serverBaseUrl,
-      fallbackApiToken: this.serverApiToken,
-      model: this.model,
-      prompt,
-      signal,
-    });
-    const nextContext = this._mergeRequestContractContext(requestContext, contract);
-    this.runtime.requestContext = nextContext;
-    if (
-      Object.values(contract?.intent || {}).some(Boolean)
-      || Boolean(contract?.artifact?.requiresWorkspaceArtifact)
-      || (Array.isArray(contract?.artifact?.likelyPaths) && contract.artifact.likelyPaths.length > 0)
-      || (Array.isArray(contract?.searchTerms) && contract.searchTerms.length > 0)
-      || (Array.isArray(contract?.symbolHints) && contract.symbolHints.length > 0)
-      || toStringValue(contract?.confidence)
-    ) {
-      this._recordTranscript({
-        kind: 'request_contract',
-        intent: nextContext.intent,
-        artifactPlan: nextContext.artifactPlan,
-        searchTerms: nextContext.searchTerms,
-        symbolHints: nextContext.symbolHints,
-        confidence: toStringValue(contract?.confidence),
-      });
-      this._recordTransition('request_contract', {
-        createLikely: Boolean(nextContext?.intent?.createLikely),
-        wantsChanges: Boolean(nextContext?.intent?.wantsChanges),
-        wantsExecution: Boolean(nextContext?.intent?.wantsExecution),
-        requiresWorkspaceArtifact: Boolean(nextContext?.artifactPlan?.requiresWorkspaceArtifact),
-        searchTerms: Array.isArray(nextContext?.searchTerms) ? nextContext.searchTerms.slice(0, 4) : [],
-      });
-      this._persistState();
-    }
-    return nextContext;
   }
 
   async run({
@@ -2263,9 +1410,9 @@ class QueryEngine {
       let runContext = this.runtime.beginRun({
         prompt,
         selectedFilePath: this.selectedFilePath,
+        engineQuestionOverride: this.engineQuestionOverride,
       });
       this._resetRepairState();
-      runContext = await this._enrichRunContextWithContract(runContext, { signal });
       const userBlocks = buildUserBlocks(
         toStringValue(runContext?.prompt || prompt),
         toStringValue(runContext?.selectedFilePath || this.selectedFilePath),
@@ -2320,34 +1467,6 @@ class QueryEngine {
           throw new Error('Cancelled');
         }
 
-        const compacted = compactMessages(this.state.messages);
-        if (compacted.compacted) {
-          this.state.messages = compacted.messages;
-          this.state.totalUsage.compactions += 1;
-          this.state.compactBoundaries = [...(Array.isArray(this.state.compactBoundaries) ? this.state.compactBoundaries : []), {
-            timestamp: new Date().toISOString(),
-            reason: 'message_budget',
-            turn,
-          }].slice(-MAX_TRANSITIONS);
-          this._recordTranscript({ kind: 'compaction', turn });
-          this._recordTransition('message_budget_compaction', { turn });
-          this._persistState();
-        }
-
-        const toolBudget = applyToolResultBudget(this.state.messages);
-        if (toolBudget.compacted) {
-          this.state.messages = toolBudget.messages;
-          this.state.totalUsage.tool_result_compactions += 1;
-          this.state.compactBoundaries = [...(Array.isArray(this.state.compactBoundaries) ? this.state.compactBoundaries : []), {
-            timestamp: new Date().toISOString(),
-            reason: 'tool_result_budget',
-            turn,
-            removed: toolBudget.removed,
-          }].slice(-MAX_TRANSITIONS);
-          this._recordTransition('tool_result_budget_compaction', { turn, removed: toolBudget.removed });
-          this._persistState();
-        }
-
         const controlState = this._loopControlState(turn);
         const activeToolNames = controlState.activeToolNames;
         const toolDefinitions = await this._describeTools(activeToolNames);
@@ -2356,13 +1475,6 @@ class QueryEngine {
           selectedFilePath: this.selectedFilePath,
           toolDefinitions,
           requestContext: this.runtime?.requestContext || {},
-        });
-        await this._compactMessagesToSoftBudget({
-          systemPrompt,
-          turn,
-          boundaryReason: 'approx_token_budget_compaction',
-          transitionName: 'approx_token_budget_compaction',
-          signal,
         });
 
         await onStatus({
@@ -2402,21 +1514,6 @@ class QueryEngine {
             assistantText: streamedAssistantText,
             reason: signal?.aborted ? 'cancelled' : 'model_error',
           });
-          const message = error instanceof Error ? error.message : String(error);
-          if (/context|maximum context|prompt too long|token/i.test(message)) {
-            const reactiveCompaction = await this._compactMessagesToSoftBudget({
-              systemPrompt,
-              turn,
-              boundaryReason: 'reactive_context_compaction',
-              transitionName: 'reactive_compact_retry',
-              reactive: true,
-              errorMessage: message,
-              signal,
-            });
-            if (reactiveCompaction.compacted) {
-              continue;
-            }
-          }
           throw error;
         }
 
@@ -2500,57 +1597,7 @@ class QueryEngine {
         const assistantBlocks = parsed.blocks;
         const assistantText = extractTextFromBlocks(assistantBlocks);
         const toolUses = toolUseBlocks(assistantBlocks);
-        const draftVerificationAllowedTools = new Set(['read_file', 'write', 'edit', 'notebook_edit']);
-        const disallowedDraftVerificationTools = (
-          this.state.phaseLock?.kind === 'draft_verification'
-            ? toolUses.filter((item) => !draftVerificationAllowedTools.has(toStringValue(item?.name)))
-            : []
-        );
         const finalAnswerPolicyToolLockActive = this.state.finalAnswerPolicyLock?.kind === 'answer_only';
-        if (
-          this.state.phaseLock?.kind === 'draft_verification'
-          && (toolUses.length === 0 || disallowedDraftVerificationTools.length > 0)
-        ) {
-          const targetPaths = Array.isArray(this.state.phaseLock.targetPaths) ? this.state.phaseLock.targetPaths : [];
-          this._pushMetaUserMessage(
-            disallowedDraftVerificationTools.length > 0
-              ? (
-                targetPaths.length > 0
-                  ? `Do not use ${disallowedDraftVerificationTools.map((item) => toStringValue(item?.name)).filter(Boolean).join(', ')} during verification repair. Read and patch ${targetPaths[0]} directly. Reply only with read_file, edit, or write tool calls until verification passes.`
-                  : `Do not use ${disallowedDraftVerificationTools.map((item) => toStringValue(item?.name)).filter(Boolean).join(', ')} during verification repair. Reply only with read_file, edit, or write tool calls until verification passes.`
-              )
-              : (
-                targetPaths.length > 0
-                  ? `Do not summarize yet. Read and patch ${targetPaths[0]} directly. Reply only with read_file, edit, or write tool calls until verification passes.`
-                  : 'Do not summarize yet. Reply only with read_file, edit, or write tool calls until verification passes.'
-              ),
-            {
-              turn,
-              hook: disallowedDraftVerificationTools.length > 0
-                ? 'draft_verification_restricted_tool'
-                : 'draft_verification_tool_only',
-              targetPaths: targetPaths.slice(0, 4),
-              disallowedTools: disallowedDraftVerificationTools
-                .map((item) => toStringValue(item?.name))
-                .filter(Boolean)
-                .slice(0, 4),
-            },
-          );
-          this._recordTransition(
-            disallowedDraftVerificationTools.length > 0
-              ? 'draft_verification_restricted_tool'
-              : 'draft_verification_tool_only',
-            {
-            turn,
-            targetPaths: targetPaths.slice(0, 4),
-            disallowedTools: disallowedDraftVerificationTools
-              .map((item) => toStringValue(item?.name))
-              .filter(Boolean)
-              .slice(0, 4),
-          });
-          this._persistState();
-          continue;
-        }
         if (finalAnswerPolicyToolLockActive && toolUses.length > 0) {
           this._pushMetaUserMessage(
             'Do not call tools now. Answer directly from the evidence already collected, or explicitly mark the missing detail as unverified.',
@@ -2651,7 +1698,6 @@ class QueryEngine {
         this.state.maxOutputTokensRecoveryCount = 0;
         this.state.maxOutputTokensOverride = 0;
         this.state.ungroundedAnswerRetries = 0;
-        this.state.createVerificationRetries = 0;
         const {
           toolExecutions,
           toolResultBlocks,
@@ -2729,7 +1775,6 @@ class QueryEngine {
         failedStep: failed,
       });
       this.state.terminalReason = resolvedTerminalReason;
-      this.state.phaseLock = null;
       await onToken(fallbackAnswer);
       this._recordTranscript({
         kind: 'fallback',

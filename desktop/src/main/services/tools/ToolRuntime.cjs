@@ -158,120 +158,46 @@ function summarizeObservationForModel(toolName, observation = {}) {
     return lines.join('\n').trim();
   }
 
-  if (name === 'wiki_evidence_search') {
-    lines.push('reference_origin: backend_server');
-    const searchStatus = toStringValue(payload.search_status || payload.searchStatus);
-    const negativeEvidence = toStringValue(payload.negative_evidence || payload.negativeEvidence);
-    const workflowBundle = payload?.workflow_bundle && typeof payload.workflow_bundle === 'object'
-      ? payload.workflow_bundle
-      : {};
-    const matchedApi = payload.matched_api && typeof payload.matched_api === 'object'
-      ? payload.matched_api
-      : (payload.matchedApi && typeof payload.matchedApi === 'object' ? payload.matchedApi : null);
-    const relatedApis = Array.isArray(payload.related_apis || payload.relatedApis)
-      ? (payload.related_apis || payload.relatedApis)
-      : [];
-    if (searchStatus) {
-      lines.push(`search_status: ${searchStatus}`);
-    }
-    if (matchedApi && toStringValue(matchedApi.qualifiedSymbol || matchedApi.qualified_symbol)) {
-      lines.push(`matched_api: ${toStringValue(matchedApi.qualifiedSymbol || matchedApi.qualified_symbol)}`);
-    }
-    if (negativeEvidence) {
-      lines.push(`negative_evidence: ${negativeEvidence}`);
-    }
-    const relatedApiLines = summarizePathItems(relatedApis, (item) => {
-      const qualifiedSymbol = toStringValue(item?.qualifiedSymbol || item?.qualified_symbol);
-      const headingPath = toStringValue(item?.headingPath || item?.heading_path);
-      return [qualifiedSymbol, headingPath ? `@ ${headingPath}` : ''].filter(Boolean).join(' ');
-    }, 5);
-    if (relatedApiLines.length > 0) {
-      lines.push('related_apis:');
-      lines.push(...relatedApiLines.map((item) => `- ${item}`));
-    }
-    const workflowRequiredSymbols = Array.isArray(workflowBundle.required_symbols)
-      ? workflowBundle.required_symbols
-      : [];
-    const workflowVerificationRules = Array.isArray(workflowBundle.verification_rules)
-      ? workflowBundle.verification_rules
-      : [];
-    const workflowForbiddenPatterns = Array.isArray(workflowBundle.forbidden_answer_patterns)
-      ? workflowBundle.forbidden_answer_patterns
-      : [];
-    const workflowRequiredFacts = Array.isArray(workflowBundle.required_facts)
-      ? workflowBundle.required_facts
-      : [];
-    const workflowRequiredSymbolLines = summarizePathItems(workflowRequiredSymbols, (item) => item, 8);
-    if (workflowRequiredSymbolLines.length > 0) {
-      lines.push('workflow_required_symbols:');
-      lines.push(...workflowRequiredSymbolLines.map((item) => `- ${item}`));
-    }
-    const workflowVerificationRuleLines = summarizePathItems(workflowVerificationRules, (item) => item, 8);
-    if (workflowVerificationRuleLines.length > 0) {
-      lines.push('workflow_verification_rules:');
-      lines.push(...workflowVerificationRuleLines.map((item) => `- ${item}`));
-    }
-    const workflowForbiddenPatternLines = summarizePathItems(workflowForbiddenPatterns, (item) => item, 8);
-    if (workflowForbiddenPatternLines.length > 0) {
-      lines.push('workflow_forbidden_answer_patterns:');
-      lines.push(...workflowForbiddenPatternLines.map((item) => `- ${item}`));
-    }
-    const workflowRequiredFactLines = summarizePathItems(workflowRequiredFacts, (item) => {
-      const symbol = toStringValue(item?.symbol);
-      const declaration = toStringValue(item?.declaration)
-        || toStringValue(Array.isArray(item?.declaration_candidates) ? item.declaration_candidates[0]?.declaration : '');
-      const source = toStringValue(item?.source);
-      return [symbol, declaration ? `-> ${declaration}` : '', source ? `@ ${source}` : ''].filter(Boolean).join(' ');
-    }, 6);
-    if (workflowRequiredFactLines.length > 0) {
-      lines.push('workflow_required_facts:');
-      lines.push(...workflowRequiredFactLines.map((item) => `- ${item}`));
-    }
-    const matches = summarizePathItems(payload.matches, (item) => {
+  if (name === 'wiki_search') {
+    lines.push('reference_origin: backend_wiki');
+    const results = summarizePathItems(payload.results, (item) => {
       const pathValue = toStringValue(item?.path);
-      const lineRange = toStringValue(item?.lineRange);
-      const evidenceType = toStringValue(item?.evidenceType);
-      const text = clipModelText(item?.text || '', 180).replace(/\s+/g, ' ');
-      return [['backend_code', [pathValue, lineRange].filter(Boolean).join(':')].filter(Boolean).join(' '), evidenceType ? `[${evidenceType}]` : '', text].filter(Boolean).join(' ');
-    }, 8);
-    if (matches.length > 0) {
-      lines.push('matches:');
-      lines.push(...matches.map((item) => `- ${item}`));
+      const title = toStringValue(item?.title);
+      const summary = clipModelText(item?.summary || item?.excerpt || '', 220).replace(/\s+/g, ' ');
+      return [pathValue, title ? `:: ${title}` : '', summary ? `:: ${summary}` : ''].filter(Boolean).join(' ');
+    }, 10);
+    if (results.length > 0) {
+      lines.push('results:');
+      lines.push(...results.map((item) => `- ${item}`));
     }
-    const windows = summarizePathItems(payload.windows, (item) => {
-      const pathValue = toStringValue(item?.path);
-      const lineRange = toStringValue(item?.lineRange);
-      const evidenceType = toStringValue(item?.evidenceType);
-      const content = clipModelText(item?.content || '', 700).replace(/\s+/g, ' ');
-      return [['backend_code', [pathValue, lineRange].filter(Boolean).join(':')].filter(Boolean).join(' '), evidenceType ? `[${evidenceType}]` : '', content].filter(Boolean).join(' ');
-    }, 3);
-    if (windows.length > 0) {
-      lines.push('windows:');
-      lines.push(...windows.map((item) => `- ${item}`));
+    return lines.join('\n').trim();
+  }
+
+  if (name === 'wiki_read') {
+    lines.push('reference_origin: backend_wiki');
+    const relatedPages = Array.isArray(payload.related_pages) ? payload.related_pages : [];
+    if (relatedPages.length > 0) {
+      lines.push('related_pages:');
+      lines.push(...relatedPages.slice(0, 4).map((item) => {
+        const pathValue = toStringValue(item?.path);
+        const title = toStringValue(item?.title);
+        const relation = toStringValue(item?.relation);
+        return `- ${pathValue}${title ? ` :: ${title}` : ''}${relation ? ` [${relation}]` : ''}`;
+      }));
     }
-    const sources = summarizePathItems(payload.sources, (item) => {
-      const pathValue = toStringValue(item?.file_path || item?.source_url || item?.path);
-      const heading = toStringValue(item?.heading_path || item?.paragraph_range);
-      const text = clipModelText(item?.text || '', 240).replace(/\s+/g, ' ');
-      return [['backend_doc', [pathValue, heading].filter(Boolean).join(' @ ')].filter(Boolean).join(' '), text].filter(Boolean).join(' ');
-    }, 4);
-    if (sources.length > 0) {
-      lines.push('sources:');
-      lines.push(...sources.map((item) => `- ${item}`));
+    const content = clipModelText(payload.content || '', 3600);
+    if (content) {
+      lines.push('content:');
+      lines.push(content);
     }
-    const apiFacts = summarizePathItems(payload.api_facts || payload.apiFacts, (item) => {
-      const signature = toStringValue(item?.stubSignature || item?.signature);
-      const location = [toStringValue(item?.path), toStringValue(item?.lineRange || item?.line_range)].filter(Boolean).join(':');
-      return [signature, location ? `@ ${location}` : ''].filter(Boolean).join(' ');
-    }, 6);
-    if (apiFacts.length > 0) {
-      lines.push('verified_api_facts:');
-      lines.push(...apiFacts.map((item) => `- ${item}`));
-    }
-    const factSheet = toStringValue(payload.fact_sheet || payload.factSheet);
-    if (factSheet) {
-      lines.push('fact_sheet:');
-      lines.push(clipModelText(factSheet, 1000));
+    for (const item of relatedPages.slice(0, 3)) {
+      const relatedPath = toStringValue(item?.path);
+      const relatedContent = clipModelText(item?.content || item?.summary || '', 1200);
+      if (!relatedPath || !relatedContent) {
+        continue;
+      }
+      lines.push(`related_content: ${relatedPath}`);
+      lines.push(relatedContent);
     }
     return lines.join('\n').trim();
   }
@@ -374,12 +300,13 @@ class ToolRuntime {
     return this;
   }
 
-  beginRun({ prompt = '', selectedFilePath = '' } = {}) {
+  beginRun({ prompt = '', selectedFilePath = '', engineQuestionOverride = null } = {}) {
     this.selectedFilePath = toStringValue(selectedFilePath) || this.selectedFilePath;
     this.requestContext = processUserInput({
       prompt,
       workspacePath: this.workspacePath,
       selectedFilePath: this.selectedFilePath,
+      engineQuestionOverride: typeof engineQuestionOverride === 'boolean' ? engineQuestionOverride : null,
     });
     return this.requestContext;
   }

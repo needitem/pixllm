@@ -3,202 +3,26 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.agent
-    image: infrastructure-agent-api
-    container_name: pixllm-agent
+    image: pixllm-wiki-api
+    container_name: pixllm-wiki-api
     restart: unless-stopped
-    ipc: host
-    shm_size: "16gb"
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: ["gpu"]
     ports:
-      - "8000:8000"
+      - "${AGENT_API_HOST_PORT:-8000}:8000"
     environment:
-      QDRANT_URL: ${QDRANT_URL:-http://pixllm-qdrant:6333}
-      REDIS_URL: ${REDIS_URL:-redis://:${REDIS_PASSWORD:-CHANGE_ME_REDIS_PASSWORD}@pixllm-redis:6379/0}
-      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-pixllm-minio:9000}
-      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-pixllm}
-      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-pixllm2024!}
-      MINIO_BUCKET: ${MINIO_BUCKET:-documents}
-      VLLM_URL: ${VLLM_URL:-http://192.168.2.212:8001}
-      # Default to the official Qwen 3.5 model family. Keep the served model alias
-      # on the vLLM side as `qwen3.5-27b` if desktop clients reference that name.
-      VLLM_MODEL: ${VLLM_MODEL:-Qwen/Qwen3.5-27B}
-      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-BAAI/bge-m3}
-      EMBEDDING_DEVICE: ${EMBEDDING_DEVICE:-cuda}
-      EMBEDDING_USE_FP16: ${EMBEDDING_USE_FP16:-true}
-      EMBEDDING_BATCH_SIZE: ${EMBEDDING_BATCH_SIZE:-64}
-      API_SESSION_TOKEN: ${API_SESSION_TOKEN:-pixllm-desktop-local}
-      PIPELINE_API_TOKEN: ${PIPELINE_API_TOKEN:-}
-      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
-      NVIDIA_DRIVER_CAPABILITIES: ${NVIDIA_DRIVER_CAPABILITIES:-compute,utility}
-      TOOL_POLICY_STRICT: ${TOOL_POLICY_STRICT:-true}
-      CODE_SEARCH_ROOTS: ${CODE_SEARCH_ROOTS:-/workspace_host/pixoneer_source}
-      IMPORT_DOCS_ROOT: ${IMPORT_DOCS_ROOT:-/workspace_host/pixoneer_project}
-      IMPORT_CODE_ROOT: ${IMPORT_CODE_ROOT:-/workspace_host/pixoneer_source}
-      IMPORT_CODE_RESTORE_ON_START: ${IMPORT_CODE_RESTORE_ON_START:-true}
-      SVN_BIN: ${SVN_BIN:-svn}
-      TF_BIN: ${TF_BIN:-tf}
-      TFS_DOCS_SYNC_COMMAND: ${TFS_DOCS_SYNC_COMMAND:-}
+      PIXLLM_APP_NAME: ${PIXLLM_APP_NAME:-PIXLLM Wiki API}
+      PIXLLM_API_PREFIX: ${PIXLLM_API_PREFIX:-/api/v1}
+      WIKI_PROFILE_DIR: ${WIKI_PROFILE_DIR:-.profiles}
+      WORKFLOW_CLASSIFIER_URL: ${WORKFLOW_CLASSIFIER_URL:-http://192.168.2.238:8003}
+      WORKFLOW_CLASSIFIER_MODEL: ${WORKFLOW_CLASSIFIER_MODEL:-workflow-classifier-qwen}
     volumes:
-      - ${WORKSPACE_HOST_ROOT:-../}:/workspace_host
-      - hf_model_cache:/root/.cache/huggingface
-    depends_on:
-      qdrant:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
+      - ./.profiles:/app/.profiles
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8000/api/v1/health/ready"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 180s
-    networks:
-      - pixllm-net
-
-  prometheus:
-    image: prom/prometheus:v2.54.1
-    container_name: pixllm-prometheus
-    restart: unless-stopped
-    ports:
-      - "${PROMETHEUS_HOST_PORT:-9090}:9090"
-    command:
-      - --config.file=/etc/prometheus/prometheus.yml
-      - --storage.tsdb.path=/prometheus
-      - --web.enable-lifecycle
-    volumes:
-      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - prometheus_data:/prometheus
-    depends_on:
-      agent-api:
-        condition: service_healthy
-    networks:
-      - pixllm-net
-
-  grafana:
-    image: grafana/grafana:11.1.4
-    container_name: pixllm-grafana
-    restart: unless-stopped
-    ports:
-      - "${GRAFANA_HOST_PORT:-3001}:3000"
-    environment:
-      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-CHANGE_ME_GRAFANA_PASSWORD}
-      GF_USERS_ALLOW_SIGN_UP: "false"
-      GF_SERVER_ROOT_URL: ${GRAFANA_ROOT_URL:-http://localhost:3001}
-    volumes:
-      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
-      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
-      - grafana_data:/var/lib/grafana
-    depends_on:
-      prometheus:
-        condition: service_started
-    networks:
-      - pixllm-net
-
-  qdrant:
-    image: qdrant/qdrant:latest
-    container_name: pixllm-qdrant
-    restart: unless-stopped
-    ports:
-      - "6333:6333"
-      - "6334:6334"
-    volumes:
-      - qdrant_data:/qdrant/storage
-    healthcheck:
-      test: ["CMD-SHELL", "test -f /qdrant/entrypoint.sh"]
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/ready').read()"
       interval: 30s
       timeout: 10s
       retries: 5
       start_period: 10s
-    networks:
-      - pixllm-net
-
-  redis:
-    image: redis:7-alpine
-    container_name: pixllm-redis
-    restart: unless-stopped
-    ports:
-      - "6379:6379"
-    environment:
-      REDIS_PASSWORD: ${REDIS_PASSWORD:-CHANGE_ME_REDIS_PASSWORD}
-    command: ["sh", "-c", "redis-server --appendonly yes --requirepass \"${REDIS_PASSWORD:-CHANGE_ME_REDIS_PASSWORD}\""]
-    volumes:
-      - redis_data:/data
-    healthcheck:
-      test: ["CMD-SHELL", "redis-cli -a \"${REDIS_PASSWORD:-CHANGE_ME_REDIS_PASSWORD}\" ping"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 10s
-    networks:
-      - pixllm-net
-
-  minio:
-    image: minio/minio:latest
-    container_name: pixllm-minio
-    restart: unless-stopped
-    ports:
-      - "9000:9000"
-      - "9001:9001"
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-pixllm}
-      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-pixllm2024!}
-    command: server /data --console-address ":9001"
-    volumes:
-      - minio_data:/data
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:9000/minio/health/live"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 10s
-    networks:
-      - pixllm-net
-
-  neo4j:
-    image: neo4j:5-community
-    container_name: pixllm-neo4j
-    restart: unless-stopped
-    ports:
-      - "7474:7474"
-      - "7687:7687"
-    environment:
-      NEO4J_AUTH: ${NEO4J_AUTH:-neo4j/pixllm2024}
-      NEO4J_PLUGINS: '["apoc"]'
-      NEO4J_apoc_import_file_enabled: "true"
-      NEO4J_apoc_export_file_enabled: "true"
-      NEO4J_apoc_import_file_use__neo4j__config: "true"
-      NEO4J_dbms_security_procedures_unrestricted: apoc.*
-      NEO4J_dbms_security_procedures_allowlist: apoc.*
-      NEO4J_dbms_memory_heap_initial__size: 512M
-      NEO4J_dbms_memory_heap_max__size: 2G
-      NEO4J_dbms_memory_pagecache_size: 512M
-    volumes:
-      - neo4j_data:/data
-      - neo4j_logs:/logs
-      - neo4j_plugins:/plugins
-    networks:
-      - pixllm-net
-
-volumes:
-  qdrant_data:
-  redis_data:
-  minio_data:
-  hf_model_cache:
-  prometheus_data:
-  grafana_data:
-  neo4j_data:
-  neo4j_logs:
-  neo4j_plugins:
-
-networks:
-  pixllm-net:
-    name: pixllm-net

@@ -27,6 +27,9 @@ env/
 .DS_Store
 Thumbs.db
 
+# 로컬 원본 데이터
+.profiles/wiki/raw_source/
+
 # pytest
 .pytest_cache/
 htmlcov/

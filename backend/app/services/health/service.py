@@ -1,15 +1,40 @@
-import urllib.request
-import shutil
-import inspect
-from pathlib import Path
 from datetime import datetime, timezone
+from pathlib import Path
 
 from ... import config
-from ...utils.health import aggregate_status
+from ..wiki.service import wiki_parent_root
 
 
 def _timestamp() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _wiki_stats() -> dict:
+    root = wiki_parent_root()
+    page_count = 0
+    wiki_ids: list[str] = []
+
+    if root.exists() and root.is_dir():
+        for child in sorted(root.iterdir()):
+            if not child.is_dir():
+                continue
+            wiki_ids.append(child.name)
+            page_count += len(list(Path(child).rglob("*.md")))
+
+    return {
+        "root_path": str(root),
+        "wiki_ids": wiki_ids,
+        "page_count": page_count,
+        "present": root.exists() and root.is_dir(),
+    }
+
+
+def _raw_source_stats() -> dict:
+    root = Path(config.RAW_SOURCE_ROOT)
+    return {
+        "root_path": str(root),
+        "present": root.exists() and root.is_dir(),
+    }
 
 
 def build_liveness_response() -> dict:
@@ -20,110 +45,31 @@ def build_liveness_response() -> dict:
     }
 
 
-def check_http(url: str, timeout: int = 2) -> bool:
-    try:
-        with urllib.request.urlopen(url, timeout=timeout) as r:
-            return r.status == 200
-    except Exception:
-        return False
-
-
-async def _maybe_await(value):
-    if inspect.isawaitable(value):
-        return await value
-    return value
-
-
-async def build_health_response(
-    state_obj=None,
-    *,
-    redis=None,
-    minio=None,
-    search_svc=None,
-    embed_model=None,
-    vllm_client=None,
-    code_tools=None,
-) -> dict:
-    if state_obj is not None:
-        redis = redis if redis is not None else getattr(state_obj, "redis", None)
-        minio = minio if minio is not None else getattr(state_obj, "minio", None)
-        search_svc = search_svc if search_svc is not None else getattr(state_obj, "search_svc", None)
-        embed_model = embed_model if embed_model is not None else getattr(state_obj, "embed_model", None)
-        vllm_client = vllm_client if vllm_client is not None else getattr(state_obj, "vllm_client", None)
-        code_tools = code_tools if code_tools is not None else getattr(state_obj, "code_tools", None)
-
-    components = {}
-
-    try:
-        qdrant = getattr(search_svc, "qdrant", None) if search_svc else None
-        if qdrant is None:
-            raise RuntimeError("qdrant unavailable")
-        collections = await _maybe_await(qdrant.get_collections()) if hasattr(qdrant, "get_collections") else None
-        collection_count = len(getattr(collections, "collections", []) or [])
-        components["qdrant"] = {"status": "ok", "collection_count": collection_count}
-    except Exception:
-        components["qdrant"] = {"status": "error"}
-
-    components["llm"] = {
-        "status": "ok" if check_http(f"{config.VLLM_URL}/v1/models") else "error",
-        "model": config.VLLM_MODEL,
-        "url": config.VLLM_URL,
-    }
-
-    if code_tools is not None:
-        try:
-            status_payload = code_tools.status() if hasattr(code_tools, "status") else {}
-        except Exception:
-            status_payload = {}
-        status = str(status_payload.get("status") or "ok")
-        components["code_tools"] = {"status": status or "ok", **status_payload}
-    elif config.CODE_TOOL_ENABLED:
-        rg_ok = bool(shutil.which("rg"))
-        roots = [str(Path(p)) for p in config.effective_code_search_roots()]
-        available = [p for p in roots if Path(p).exists() and Path(p).is_dir()]
-        components["code_tools"] = {
-            "status": "ok" if (rg_ok and len(available) > 0) else "error",
-            "rg": "ok" if rg_ok else "error",
-            "roots_available": available,
-        }
-    else:
-        components["code_tools"] = {"status": "disabled"}
-
-    try:
-        redis_client = redis
-        if redis_client is None:
-            raise RuntimeError("redis unavailable")
-        await _maybe_await(redis_client.ping())
-        components["redis"] = {"status": "ok"}
-    except Exception:
-        components["redis"] = {"status": "error"}
-
-    try:
-        if minio is None:
-            raise RuntimeError("minio unavailable")
-        bucket_exists = await _maybe_await(minio.bucket_exists(config.MINIO_BUCKET))
-        components["minio"] = {"status": "ok" if bucket_exists else "error", "bucket": config.MINIO_BUCKET}
-    except Exception:
-        components["minio"] = {"status": "error"}
-
-    embedding_model = (
-        getattr(embed_model, "model_name_or_path", None)
-        or getattr(embed_model, "model_name", None)
-        or config.EMBEDDING_MODEL
-    )
-
+async def build_health_response() -> dict:
+    wiki = _wiki_stats()
+    raw_source = _raw_source_stats()
     return {
-        "status": aggregate_status(components),
+        "status": "ok" if (wiki["present"] and raw_source["present"]) else "degraded",
         "service": config.APP_NAME,
-        "components": components,
-        "embedding_model": embedding_model,
         "checked_at": _timestamp(),
+        "components": {
+            "wiki_store": {
+                "status": "ok" if wiki["present"] else "error",
+                "root_path": wiki["root_path"],
+                "wiki_ids": wiki["wiki_ids"],
+                "page_count": wiki["page_count"],
+            },
+            "raw_source_store": {
+                "status": "ok" if raw_source["present"] else "error",
+                "root_path": raw_source["root_path"],
+            }
+        },
     }
 
 
-async def build_readiness_response(**kwargs) -> dict:
-    payload = await build_health_response(**kwargs)
+async def build_readiness_response() -> dict:
+    payload = await build_health_response()
     return {
         **payload,
-        "ready": str(payload.get("status") or "") == "ok",
+        "ready": payload["status"] == "ok",
     }

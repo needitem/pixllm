@@ -75,7 +75,7 @@ PIXLLM은 로컬 코드베이스를 기준으로 질문하고, 실행 로그와 
 
 ## NXImageView 질문 응답 예시
 
-아래 캡처는 기존 세션을 모두 비운 뒤 `TEST` 워크스페이스에서 `nximageview 써서, 이미지 로드한다음 보여주는 프로그램 만들어줘`를 다시 실행한 실제 앱 화면입니다. 이 실행에서는 `company_reference_search` 이후 `write` 단계까지 진행되며 `TEST/NXImageViewExample.cpp` 파일이 생성됐습니다.
+아래 캡처는 `TEST` 워크스페이스에서 `nximageview 써서, 이미지 로드한다음 보여주는 흐름 설명해줘` 같은 질문을 실행한 실제 앱 화면입니다. 현재 데스크톱은 위키와 검증된 참조를 바탕으로 설명과 근거를 정리하는 데 초점을 두며, 실행 가능한 새 프로그램 파일을 생성하는 계약은 포함하지 않습니다.
 
 ![TEST 워크스페이스 NXImageView 응답 화면](docs/assets/pixllm-desktop-test-nximageview-response.png)
 
@@ -94,16 +94,6 @@ docker compose up -d --build
 ```bash
 curl http://127.0.0.1:8000/api/v1/health
 ```
-
-메트릭과 대시보드:
-
-```bash
-curl http://127.0.0.1:8000/api/v1/metrics
-```
-
-- Prometheus: `http://127.0.0.1:9090`
-- Grafana: `http://127.0.0.1:3001`
-- Grafana 기본 계정: `.env`의 `GRAFANA_ADMIN_USER`, `GRAFANA_ADMIN_PASSWORD`
 
 ### 데스크톱 실행
 
@@ -128,7 +118,7 @@ npm run dist:portable
 ## 저장소 구조
 
 - `desktop/`: Electron 기반 데스크톱 앱
-- `backend/`: FastAPI 기반 API와 검색, 실행 오케스트레이션
+- `backend/`: FastAPI 기반 위키 저장/검색 API
 - `docs/`: 참고 문서와 이미지 자산
 
 자주 보게 되는 파일은 아래와 같습니다.
@@ -145,3 +135,4 @@ cd desktop
 npm run check
 npm run build
 ```
+

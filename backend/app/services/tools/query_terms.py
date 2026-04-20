@@ -183,10 +183,6 @@ def extract_query_compacts(query: str, limit: int = 12) -> List[str]:
     return filtered[: max(1, int(limit or 1))]
 
 
-def extract_query_score_tokens(query: str, limit: int = 6) -> List[str]:
-    return extract_query_compacts(query, limit=limit)
-
-
 def _looks_like_explicit_symbol_token(token: str) -> bool:
     raw = str(token or "").strip()
     if not raw:

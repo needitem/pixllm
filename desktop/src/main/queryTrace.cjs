@@ -168,28 +168,19 @@ function symbolOutlinesFromTrace(trace) {
 
 function referencePathsFromTrace(trace) {
   const paths = [];
-  for (const step of successfulSteps(trace, 'wiki_evidence_search')) {
+  for (const step of successfulSteps(trace, 'wiki_search')) {
     const observation = step?.observation && typeof step.observation === 'object' ? step.observation : {};
-    for (const item of Array.isArray(observation.matches) ? observation.matches : []) {
+    for (const item of Array.isArray(observation.results) ? observation.results : []) {
       paths.push(item?.path);
-    }
-    for (const item of Array.isArray(observation.windows) ? observation.windows : []) {
-      paths.push(item?.path);
-    }
-    for (const item of Array.isArray(observation.sources) ? observation.sources : []) {
       paths.push(item?.file_path);
-      paths.push(item?.path);
     }
-    for (const item of Array.isArray(observation.doc_results) ? observation.doc_results : []) {
+  }
+  for (const step of successfulSteps(trace, 'wiki_read')) {
+    const observation = step?.observation && typeof step.observation === 'object' ? step.observation : {};
+    paths.push(observation?.path);
+    for (const item of Array.isArray(observation.related_pages) ? observation.related_pages : []) {
+      paths.push(item?.path);
       paths.push(item?.file_path);
-      paths.push(item?.path);
-    }
-    for (const item of Array.isArray(observation.doc_chunks) ? observation.doc_chunks : []) {
-      paths.push(item?.file_path);
-      paths.push(item?.path);
-    }
-    for (const item of Array.isArray(observation.citations) ? observation.citations : []) {
-      paths.push(item?.path);
     }
   }
   return uniq(
@@ -320,84 +311,41 @@ function summarizeObservation(toolName, observation, maxChars = 16000) {
       message: payload.message || '',
     };
   }
-  if (toolName === 'wiki_evidence_search') {
+  if (toolName === 'wiki_search') {
     return {
       ok: Boolean(payload.ok),
       query: payload.query || '',
-      matches: Array.isArray(payload.matches)
-        ? payload.matches.slice(0, 20).map((item) => ({
+      total: Number(payload.total || 0),
+      results: Array.isArray(payload.results)
+        ? payload.results.slice(0, 12).map((item) => ({
           path: item?.path || '',
-          lineRange: item?.lineRange || item?.line_range || '',
-          line: Number(item?.line || 0),
-          text: String(item?.text || item?.match || '').slice(0, 240),
-          symbol: item?.symbol || '',
-          matchKind: item?.matchKind || item?.match_kind || '',
-          evidenceType: item?.evidenceType || item?.evidence_type || '',
-        }))
-        : [],
-      windows: Array.isArray(payload.windows)
-        ? payload.windows.slice(0, 6).map((item) => ({
-          path: item?.path || '',
-          lineRange: item?.lineRange || item?.line_range || '',
-          truncated: Boolean(item?.truncated),
-          matchKind: item?.matchKind || item?.match_kind || '',
-          evidenceType: item?.evidenceType || item?.evidence_type || '',
-          content: String(item?.content || '').slice(0, Math.min(1800, maxChars)),
-        }))
-        : [],
-      sources: Array.isArray(payload.sources)
-        ? payload.sources.slice(0, 8).map((item) => ({
-          doc_id: item?.doc_id || '',
-          chunk_id: item?.chunk_id || '',
-          file_path: item?.file_path || '',
-          source_url: item?.source_url || '',
-          heading_path: item?.heading_path || '',
-          paragraph_range: item?.paragraph_range || '',
-          text: String(item?.text || '').slice(0, 900),
-          truncated: Boolean(item?.truncated),
-        }))
-        : [],
-      reference_anchors: Array.isArray(payload.reference_anchors)
-        ? payload.reference_anchors.slice(0, 12).map((item) => ({
-          path: item?.path || '',
-          lineRange: item?.lineRange || item?.line_range || '',
-          evidenceType: item?.evidenceType || item?.evidence_type || '',
-          snippet: String(item?.snippet || '').slice(0, 240),
-        }))
-        : [],
-      examples: Array.isArray(payload.examples)
-        ? payload.examples.slice(0, 2).map((item) => ({
-          language: item?.language || '',
-          source_url: item?.sourceUrl || item?.source_url || '',
-          heading_path: item?.headingPath || item?.heading_path || '',
-          code: String(item?.code || '').slice(0, Math.min(2400, maxChars)),
-          truncated: Boolean(item?.truncated),
-        }))
-        : [],
-      api_facts: Array.isArray(payload.api_facts || payload.apiFacts)
-        ? (payload.api_facts || payload.apiFacts).slice(0, 20).map((item) => ({
+          title: item?.title || '',
           kind: item?.kind || '',
-          namespace: item?.namespace || '',
-          typeName: item?.typeName || '',
-          qualifiedType: item?.qualifiedType || '',
-          memberName: item?.memberName || '',
-          signature: String(item?.signature || '').slice(0, 320),
-          stubSignature: String(item?.stubSignature || '').slice(0, 320),
-          path: item?.path || '',
-          lineRange: item?.lineRange || item?.line_range || '',
-          evidenceType: item?.evidenceType || item?.evidence_type || '',
+          summary: String(item?.summary || item?.excerpt || '').slice(0, 240),
         }))
         : [],
-      fact_sheet: String(payload.fact_sheet || payload.factSheet || '').slice(0, Math.min(2400, maxChars)),
-      known_types: Array.isArray(payload.known_types || payload.knownTypes)
-        ? (payload.known_types || payload.knownTypes).slice(0, 20).map((item) => ({
-          qualifiedType: item?.qualifiedType || '',
-          namespace: item?.namespace || '',
-          typeName: item?.typeName || '',
-          kind: item?.kind || '',
-        }))
+      error: payload.error || '',
+      message: payload.message || '',
+    };
+  }
+  if (toolName === 'wiki_read') {
+    return {
+      ok: Boolean(payload.ok),
+      path: payload.path || '',
+      title: payload.title || '',
+      kind: payload.kind || '',
+      summary: String(payload.summary || '').slice(0, 320),
+      content: String(payload.content || '').slice(0, Math.min(3200, maxChars)),
+      related_pages: Array.isArray(payload.related_pages)
+        ? payload.related_pages.slice(0, 4).map((item) => ({
+            path: item?.path || '',
+            title: item?.title || '',
+            kind: item?.kind || '',
+            relation: item?.relation || '',
+            summary: String(item?.summary || '').slice(0, 220),
+            content: String(item?.content || '').slice(0, Math.min(1200, maxChars)),
+          }))
         : [],
-      citations: Array.isArray(payload.citations) ? payload.citations.slice(0, 12) : [],
       error: payload.error || '',
       message: payload.message || '',
     };

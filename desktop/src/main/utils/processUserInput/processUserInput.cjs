@@ -1,64 +1,30 @@
 const path = require('node:path');
 
-const TOOL_GROUPS = {
-  todo: [
-    'todo_read',
-    'todo_write',
-  ],
-  runtime_tasks: [
-    'terminal_capture',
-    'task_get',
-    'task_list',
-    'task_output',
-  ],
-  workspace_discovery: [
-    'list_files',
-    'glob',
-    'grep',
-    'project_context_search',
-    'find_symbol',
-    'find_callers',
-    'find_references',
-  ],
-  focused_workspace_discovery: [
-    'grep',
-    'find_symbol',
-  ],
-  path_read: [
-    'lsp',
-    'read_symbol_span',
-    'symbol_outline',
-    'symbol_neighborhood',
-    'read_file',
-  ],
-  mutation: [
-    'write',
-    'edit',
-    'notebook_edit',
-  ],
-  execution: [
-    'run_build',
-    'bash',
-    'powershell',
-    'task_create',
-    'task_update',
-    'task_stop',
-  ],
-  reference: [
-    'wiki_evidence_search',
-  ],
-  wiki: [
-    'wiki_search',
-    'wiki_read',
-    'wiki_write',
-    'wiki_rebuild_index',
-    'wiki_lint',
-    'wiki_writeback',
-  ],
-  config: [
-    'config',
-  ],
-};
+const WIKI_TOOLS = [
+  'wiki_search',
+  'wiki_read',
+];
+
+const LOCAL_DISCOVERY_TOOLS = [
+  'list_files',
+  'glob',
+  'grep',
+  'find_symbol',
+  'find_callers',
+  'find_references',
+];
+
+const LOCAL_READ_TOOLS = [
+  'lsp',
+  'read_symbol_span',
+  'symbol_outline',
+  'symbol_neighborhood',
+  'read_file',
+];
+
+const LOCAL_EDIT_TOOLS = [
+  'edit',
+];
 
 function toStringValue(value) {
   return String(value || '').trim();
@@ -70,30 +36,31 @@ function normalizePath(value) {
 
 function uniq(items) {
   const seen = new Set();
-  const out = [];
+  const output = [];
   for (const item of Array.isArray(items) ? items : []) {
     const normalized = normalizePath(item);
     if (!normalized) continue;
     const key = normalized.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
-    out.push(normalized);
+    output.push(normalized);
   }
-  return out;
+  return output;
 }
 
-function uniqStrings(items) {
+function uniqStrings(items, limit = 24) {
   const seen = new Set();
-  const out = [];
+  const output = [];
   for (const item of Array.isArray(items) ? items : []) {
     const normalized = toStringValue(item);
     if (!normalized) continue;
     const key = normalized.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
-    out.push(normalized);
+    output.push(normalized);
+    if (output.length >= limit) break;
   }
-  return out;
+  return output;
 }
 
 function detectLanguageProfile(prompt = '') {
@@ -147,215 +114,87 @@ function extractPathCandidates(prompt) {
   return uniq(tokens);
 }
 
-function parsePromptDirectives(prompt) {
-  const source = toStringValue(prompt).toLowerCase();
-  return {
-    workspace: /(?:^|\s)\/workspace\b/.test(source),
-    analysis: /(?:^|\s)\/analysis\b/.test(source),
-    change: /(?:^|\s)\/change\b/.test(source),
-    exec: /(?:^|\s)\/exec\b/.test(source),
-    config: /(?:^|\s)\/config\b/.test(source),
-  };
-}
-
-function normalizeIntent(intent = {}) {
-  return {
-    wantsChanges: Boolean(intent?.wantsChanges),
-    wantsExecution: Boolean(intent?.wantsExecution),
-    wantsAnalysis: Boolean(intent?.wantsAnalysis),
-    createLikely: Boolean(intent?.createLikely),
-    compareLikely: Boolean(intent?.compareLikely),
-  };
-}
-
-function analyzeIntent(prompt, directives = {}) {
-  const source = toStringValue(prompt);
-  const wantsExplanation = Boolean(
-    /\b(how|how to|explain|guide|guidance|tell me)\b/i.test(source)
-    || /알려줘|방법|설명|어떻게/.test(source)
-  );
-  const explicitCreate = Boolean(
-    /\b(create|make|build|generate|implement|scaffold)\b/i.test(source)
-    || /만들|구현|생성|작성/.test(source)
-  );
-  return normalizeIntent({
-    wantsChanges: Boolean(
-      directives.change
-      || /\b(edit|change|modify|patch|update|rewrite|fix)\b/i.test(source)
-      || /수정|변경|고쳐|패치/.test(source)
-    ),
-    wantsExecution: Boolean(directives.exec),
-    wantsAnalysis: Boolean(
-      directives.analysis
-      || /\b(explain|analyze|investigate|trace|review|summarize)\b/i.test(source)
-      || /설명|분석|추적|검토|요약/.test(source)
-      || wantsExplanation
-    ),
-    createLikely: Boolean(
-      explicitCreate && !wantsExplanation
-    ),
-    compareLikely: false,
-  });
-}
-
-function normalizeFocus(focus = {}) {
-  return {
-    mentionsConfig: Boolean(focus?.mentionsConfig),
-    mentionsTodo: Boolean(focus?.mentionsTodo),
-    mentionsRuntimeTask: Boolean(focus?.mentionsRuntimeTask),
-    mentionsWiki: Boolean(focus?.mentionsWiki),
-  };
-}
-
-function analyzeFocus(prompt, directives = {}) {
-  const source = toStringValue(prompt);
-  const lowered = source.toLowerCase();
-  return normalizeFocus({
-    mentionsConfig: Boolean(directives.config),
-    mentionsTodo: false,
-    mentionsRuntimeTask: false,
-    mentionsWiki:
-      /\b(wiki|obsidian|backlink|knowledge ?base|index\.md|log\.md|schema\.md|vault)\b/i.test(lowered)
-      || /위키|옵시디언|백링크|지식\s*베이스|볼트/.test(source),
-  });
-}
-
 function extractIdentifierHints(prompt = '') {
   const source = toStringValue(prompt);
   return uniqStrings(
     source.match(/\b(?:[A-Z][A-Za-z0-9_]*[A-Z][A-Za-z0-9_]*|[a-z]+[A-Z][A-Za-z0-9_]*|[A-Za-z_][A-Za-z0-9_]*::[A-Za-z_][A-Za-z0-9_]*)\b/g) || [],
-  ).slice(0, 6);
+    6,
+  );
 }
 
-function addTools(target, items) {
-  for (const item of Array.isArray(items) ? items : []) {
-    target.add(toStringValue(item));
-  }
+function analyzeIntent(prompt = '') {
+  const source = toStringValue(prompt);
+  const wantsChanges = Boolean(
+    /\b(comment|comments|docstring|annotate|annotation|edit|change|modify|update|rewrite)\b/i.test(source)
+    || /주석|코멘트|어노테이션|수정|변경|고쳐|패치/.test(source),
+  );
+  return {
+    wantsChanges,
+    wantsExecution: false,
+    wantsAnalysis: Boolean(source),
+    createLikely: false,
+    compareLikely: false,
+  };
 }
 
-function deriveInitialToolNames({
-  intent = {},
-  focus = {},
-  explicitPaths = [],
-  selectedFilePath = '',
+function analyzeFocus(prompt = '') {
+  const source = toStringValue(prompt);
+  return {
+    mentionsConfig: false,
+    mentionsTodo: false,
+    mentionsRuntimeTask: false,
+    mentionsWiki: Boolean(
+      /\b(wiki|obsidian|backlink|knowledge ?base|index\.md|log\.md|schema\.md|vault)\b/i.test(source)
+      || /위키|옵시디언|백링크|지식\s*베이스|볼트/.test(source),
+    ),
+  };
+}
+
+function deriveMode({
   hasWorkspacePath = false,
-  hasFocusedSymbols = false,
+  engineQuestionOverride = null,
 } = {}) {
-  const names = new Set();
-  if (focus.mentionsConfig) {
-    addTools(names, TOOL_GROUPS.config);
-  }
-  if (focus.mentionsWiki) {
-    addTools(names, TOOL_GROUPS.wiki);
-  }
-  if (focus.mentionsTodo) {
-    addTools(names, TOOL_GROUPS.todo);
-  }
-  if (focus.mentionsRuntimeTask) {
-    addTools(names, TOOL_GROUPS.runtime_tasks);
-  }
-
-  const prefersFocusedWorkspaceDiscovery = hasWorkspacePath
-    && hasFocusedSymbols
-    && !intent.wantsChanges
-    && !intent.wantsExecution
-    && (!Array.isArray(explicitPaths) || explicitPaths.length === 0);
-  const hasDirectWorkspaceTarget = Boolean(
-    (Array.isArray(explicitPaths) && explicitPaths.length > 0)
-    || toStringValue(selectedFilePath),
-  );
-  const shouldEnableDirectWorkspaceRead = hasWorkspacePath && (
-    hasDirectWorkspaceTarget
-    || intent.wantsChanges
-    || intent.createLikely
-    || intent.wantsExecution
-  );
-  const shouldEnableMutation = hasWorkspacePath && (
-    intent.wantsChanges
-    || intent.createLikely
-  );
-  const shouldPreferWorkflowWiki = Boolean(
-    intent.wantsAnalysis
-    && !intent.wantsChanges
-    && !intent.createLikely
-    && hasFocusedSymbols,
-  );
-
-  if (hasWorkspacePath) {
-    addTools(
-      names,
-      prefersFocusedWorkspaceDiscovery
-        ? TOOL_GROUPS.focused_workspace_discovery
-        : TOOL_GROUPS.workspace_discovery,
-    );
-    if (shouldEnableDirectWorkspaceRead) {
-      addTools(names, TOOL_GROUPS.path_read);
+  if (typeof engineQuestionOverride === 'boolean') {
+    if (engineQuestionOverride) {
+      return 'wiki';
     }
-    if (shouldEnableMutation) {
-      addTools(names, TOOL_GROUPS.mutation);
-    }
-  }
-  if (shouldPreferWorkflowWiki || focus.mentionsWiki) {
-    addTools(names, TOOL_GROUPS.wiki);
-  }
-  if (shouldPreferWorkflowWiki || focus.mentionsWiki) {
-    addTools(names, TOOL_GROUPS.reference);
+    return hasWorkspacePath ? 'local' : 'wiki';
   }
 
-  if (focus.mentionsWiki && hasWorkspacePath) {
-    addTools(names, TOOL_GROUPS.workspace_discovery);
-    addTools(names, TOOL_GROUPS.path_read);
-    if (intent.wantsChanges || intent.createLikely) {
-      addTools(names, TOOL_GROUPS.mutation);
-    }
+  return hasWorkspacePath ? 'local' : 'wiki';
+}
+
+function deriveInitialToolNames({ mode = 'wiki', wantsChanges = false, hasWorkspacePath = false } = {}) {
+  if (mode === 'wiki' || !hasWorkspacePath) {
+    return WIKI_TOOLS.slice();
   }
 
-  if (intent.wantsExecution) {
-    addTools(names, TOOL_GROUPS.execution);
-    addTools(names, TOOL_GROUPS.runtime_tasks);
-  }
-  return Array.from(names);
+  return [
+    ...LOCAL_DISCOVERY_TOOLS,
+    ...LOCAL_READ_TOOLS,
+    ...(wantsChanges ? LOCAL_EDIT_TOOLS : []),
+  ];
 }
 
 function summarizeRequestContext(context = {}) {
   const lines = [];
-  const intent = context.intent && typeof context.intent === 'object' ? context.intent : {};
-  const directives = context.directives && typeof context.directives === 'object' ? context.directives : {};
-  const labels = [];
-  if (intent.wantsAnalysis) labels.push('analysis');
-  if (intent.wantsChanges) labels.push('change');
-  if (intent.wantsExecution) labels.push('execution');
-  if (intent.compareLikely) labels.push('compare');
-  if (labels.length > 0) {
-    lines.push(`Request intent: ${labels.join(', ')}`);
-  }
-
   const languageProfile = context.languageProfile && typeof context.languageProfile === 'object'
     ? context.languageProfile
     : {};
-  const primaryLanguage = toStringValue(languageProfile.primaryLanguage);
-  if (primaryLanguage) {
-    lines.push(`User language: ${primaryLanguage}`);
+
+  const mode = toStringValue(context.mode || 'wiki');
+  lines.push(`Request mode: ${mode === 'wiki' ? 'backend_wiki_guidance' : 'local_code_review'}`);
+
+  if (languageProfile.primaryLanguage) {
+    lines.push(`User language: ${toStringValue(languageProfile.primaryLanguage)}`);
   }
   if (languageProfile.avoidLanguageSwitch) {
-    lines.push('Do not ask the user to switch to English. Continue in the user language and translate Korean technical phrases into likely English code-search terms when needed.');
+    lines.push('Continue in the user language and translate Korean technical phrases into likely English code-search terms when needed.');
   }
 
   const symbolHints = Array.isArray(context.symbolHints) ? context.symbolHints.filter(Boolean) : [];
   if (symbolHints.length > 0) {
     lines.push(`Symbol hint terms: ${symbolHints.slice(0, 6).join(', ')}`);
-  }
-
-  const searchTerms = Array.isArray(context.searchTerms) ? context.searchTerms.filter(Boolean) : [];
-  if (searchTerms.length > 0) {
-    lines.push(`Search hint terms: ${searchTerms.slice(0, 6).join(', ')}`);
-  }
-
-  const directiveLabels = Object.entries(directives)
-    .filter(([, enabled]) => Boolean(enabled))
-    .map(([key]) => `/${key}`);
-  if (directiveLabels.length > 0) {
-    lines.push(`Directives: ${directiveLabels.join(', ')}`);
   }
 
   const paths = Array.isArray(context.explicitPaths) ? context.explicitPaths : [];
@@ -368,32 +207,15 @@ function summarizeRequestContext(context = {}) {
     lines.push(`Selected file: ${selected}`);
   }
 
-  if (paths.length > 0 || selected) {
-    lines.push('User-referenced paths and the selected file may be used directly. Discover any other workspace path before reading or editing it.');
-  }
-
-  if (context.focus?.mentionsWiki) {
-    lines.push('Wiki requests should use the backend wiki tools.');
-    lines.push('For wiki maintenance, prefer `wiki_search` and `wiki_read` before `wiki_write`, `wiki_rebuild_index`, `wiki_lint`, or `wiki_writeback`.');
-    lines.push('Keep `SCHEMA.md`, `index.md`, and `log.md` consistent with page updates.');
-  }
-  if (context.workflowPlan?.preferWikiFirst) {
-    lines.push('Workflow-first guidance: search wiki workflow pages first, read the best matching workflow page next, then inspect the implementation or methods pages referenced by that workflow before using broader evidence search.');
-    lines.push('For workflow-first answers that include code or API signatures, gather verified API facts and stay inside the workflow Required Facts instead of inventing convenience APIs.');
+  if (mode === 'wiki') {
+    lines.push('Use backend wiki/reference evidence first and answer with usage guidance grounded in wiki pages and verified declarations from the pages you read.');
+  } else {
+    lines.push('Use local workspace code for review, explanation, and limited comment-oriented edits on existing files.');
   }
 
   const initialToolNames = Array.isArray(context.initialToolNames) ? context.initialToolNames : [];
   if (initialToolNames.length > 0) {
-    lines.push(`Initial tool scope: ${initialToolNames.slice(0, 14).join(', ')}`);
-  }
-
-  if (context.artifactPlan?.requiresWorkspaceArtifact) {
-    lines.push('The request is expected to produce a workspace artifact, not just an in-chat explanation.');
-    lines.push('Before finalizing generated code, gather a verified API fact sheet and prefer compile/build verification over prose-only confidence.');
-  }
-  const likelyPaths = Array.isArray(context.artifactPlan?.likelyPaths) ? context.artifactPlan.likelyPaths : [];
-  if (likelyPaths.length > 0) {
-    lines.push(`Likely artifact paths: ${likelyPaths.slice(0, 4).join(', ')}`);
+    lines.push(`Initial tool scope: ${initialToolNames.join(', ')}`);
   }
 
   return lines.join('\n').trim();
@@ -402,117 +224,82 @@ function summarizeRequestContext(context = {}) {
 function buildRequestContext(context = {}) {
   const prompt = toStringValue(context.prompt);
   const workspacePath = toStringValue(context.workspacePath);
-  const directives = context.directives && typeof context.directives === 'object'
-    ? context.directives
-    : parsePromptDirectives(prompt);
   const languageProfile = context.languageProfile && typeof context.languageProfile === 'object'
     ? context.languageProfile
     : detectLanguageProfile(prompt);
-  const intent = normalizeIntent(context.intent);
-  const focus = normalizeFocus(context.focus);
+  const intent = context.intent && typeof context.intent === 'object'
+    ? {
+        wantsChanges: Boolean(context.intent.wantsChanges),
+        wantsExecution: false,
+        wantsAnalysis: true,
+        createLikely: false,
+        compareLikely: false,
+      }
+    : analyzeIntent(prompt);
+  const focus = context.focus && typeof context.focus === 'object'
+    ? {
+        mentionsConfig: false,
+        mentionsTodo: false,
+        mentionsRuntimeTask: false,
+        mentionsWiki: Boolean(context.focus.mentionsWiki),
+      }
+    : analyzeFocus(prompt);
   const explicitPaths = uniq(
     (Array.isArray(context.explicitPaths) ? context.explicitPaths : extractPathCandidates(prompt))
       .map((candidate) => toWorkspaceRelativePath(workspacePath, candidate) || normalizePath(candidate))
       .filter(Boolean),
   );
-  const promptIdentifierHints = extractIdentifierHints(prompt);
-  const normalizedSelectedFilePath = toWorkspaceRelativePath(workspacePath, context.selectedFilePath) || normalizePath(context.selectedFilePath);
-  const allowedDirectPaths = uniq([
-    ...(Array.isArray(context.allowedDirectPaths) ? context.allowedDirectPaths : []),
-    ...explicitPaths,
-    normalizedSelectedFilePath,
-    ...(Array.isArray(context?.artifactPlan?.likelyPaths) ? context.artifactPlan.likelyPaths : []),
-  ]);
-  const hasWorkspacePath = Boolean(toStringValue(workspacePath));
-  const artifactPlan = {
-    requiresWorkspaceArtifact: Boolean(context?.artifactPlan?.requiresWorkspaceArtifact),
-    likelyPaths: uniq(
-      Array.isArray(context?.artifactPlan?.likelyPaths)
-        ? context.artifactPlan.likelyPaths
-        : [],
-    ),
-  };
-  const workflowPlan = {
-    preferWikiFirst: Boolean(
-      context?.workflowPlan?.preferWikiFirst
-      || (
-        intent.wantsAnalysis
-        && !intent.wantsChanges
-        && !intent.createLikely
-        && promptIdentifierHints.length > 0
-      )
-    ),
-  };
-  const initialToolNames = uniqStrings(deriveInitialToolNames({
-    intent,
-    focus,
-    explicitPaths,
-    selectedFilePath: normalizedSelectedFilePath,
-    hasWorkspacePath,
-    hasFocusedSymbols: promptIdentifierHints.length > 0,
-  }));
-  const narrowingPreferred = Boolean(
-    hasWorkspacePath
-      && promptIdentifierHints.length > 0
-      && !intent.wantsChanges
-      && !intent.wantsExecution
-      && !artifactPlan.requiresWorkspaceArtifact
-      && allowedDirectPaths.length === 0,
-  );
+  const selectedFilePath = toWorkspaceRelativePath(workspacePath, context.selectedFilePath) || normalizePath(context.selectedFilePath);
   const symbolHints = uniqStrings([
-    ...promptIdentifierHints,
+    ...extractIdentifierHints(prompt),
     ...(Array.isArray(context.symbolHints) ? context.symbolHints : []),
   ], 6);
   const searchTerms = uniqStrings(Array.isArray(context.searchTerms) ? context.searchTerms : [], 6);
+  const hasWorkspacePath = Boolean(workspacePath);
+  const engineQuestionOverride = typeof context.engineQuestionOverride === 'boolean'
+    ? context.engineQuestionOverride
+    : null;
+  const mode = deriveMode({
+    hasWorkspacePath,
+    engineQuestionOverride,
+  });
+  const initialToolNames = deriveInitialToolNames({
+    mode,
+    wantsChanges: intent.wantsChanges,
+    hasWorkspacePath,
+  });
 
-  return {
-    prompt: toStringValue(prompt),
-    workspacePath: toStringValue(workspacePath),
-    selectedFilePath: normalizedSelectedFilePath,
-    explicitPaths,
-    allowedDirectPaths,
-    intent,
-    focus,
-    directives,
-    languageProfile,
-    narrowingPreferred,
-    symbolHints,
-    searchTerms,
-    artifactPlan,
-    workflowPlan,
-    initialToolNames,
-    summary: summarizeRequestContext({
-      explicitPaths,
-      selectedFilePath: normalizedSelectedFilePath,
-      intent,
-      focus,
-      directives,
-      languageProfile,
-      narrowingPreferred,
-      symbolHints,
-      searchTerms,
-      artifactPlan,
-      workflowPlan,
-      initialToolNames,
-    }),
-  };
-}
-
-function createRunRequestContext({ prompt = '', workspacePath = '', selectedFilePath = '' } = {}) {
-  const directives = parsePromptDirectives(prompt);
-  return buildRequestContext({
+  const requestContext = {
     prompt,
     workspacePath,
     selectedFilePath,
-    directives,
-    intent: analyzeIntent(prompt, directives),
-    focus: analyzeFocus(prompt, directives),
-    languageProfile: detectLanguageProfile(prompt),
-  });
+    explicitPaths,
+    allowedDirectPaths: uniq([selectedFilePath, ...explicitPaths]),
+    intent,
+    focus,
+    directives: {},
+    languageProfile,
+    narrowingPreferred: false,
+    symbolHints,
+    searchTerms,
+    artifactPlan: {
+      requiresWorkspaceArtifact: false,
+      likelyPaths: [],
+    },
+    workflowPlan: {
+      preferWikiFirst: mode === 'wiki',
+    },
+    engineQuestionOverride,
+    mode,
+    initialToolNames,
+  };
+
+  requestContext.summary = summarizeRequestContext(requestContext);
+  return requestContext;
 }
 
 function processUserInput({ prompt = '', workspacePath = '', selectedFilePath = '' } = {}) {
-  return createRunRequestContext({
+  return buildRequestContext({
     prompt,
     workspacePath,
     selectedFilePath,

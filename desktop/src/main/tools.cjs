@@ -8,24 +8,18 @@ const {
   symbolNeighborhoodInWorkspace,
   symbolOutlineInWorkspace,
 } = require('./workspace.cjs');
-const { defineLocalTool, findToolByName, normalizeToolInvocation, validateToolOutput } = require('./Tool.cjs');
-const { FileReadTool } = require('./tools/FileReadTool/FileReadTool.cjs');
-const { FileWriteTool } = require('./tools/FileWriteTool/FileWriteTool.cjs');
-const { FileEditTool } = require('./tools/FileEditTool/FileEditTool.cjs');
-const { BashTool } = require('./tools/BashTool/BashTool.cjs');
-const { WikiEvidenceSearchTool } = require('./tools/WikiEvidenceSearchTool/WikiEvidenceSearchTool.cjs');
-const { LspTool } = require('./tools/LspTool/LspTool.cjs');
-const { NotebookEditTool } = require('./tools/NotebookEditTool/NotebookEditTool.cjs');
-const { RunBuildTool } = require('./tools/RunBuildTool/RunBuildTool.cjs');
-const { PowerShellTool } = require('./tools/PowerShellTool/PowerShellTool.cjs');
-const { createTaskTools } = require('./tools/TaskTools/TaskTools.cjs');
 const {
-  WikiLintTool,
+  defineLocalTool,
+  findToolByName,
+  normalizeToolInvocation,
+  validateToolOutput,
+} = require('./Tool.cjs');
+const { FileReadTool } = require('./tools/FileReadTool/FileReadTool.cjs');
+const { FileEditTool } = require('./tools/FileEditTool/FileEditTool.cjs');
+const { LspTool } = require('./tools/LspTool/LspTool.cjs');
+const {
   WikiReadTool,
-  WikiRebuildIndexTool,
   WikiSearchTool,
-  WikiWritebackTool,
-  WikiWriteTool,
 } = require('./tools/WikiTools/WikiTools.cjs');
 const {
   toPositiveInt,
@@ -33,13 +27,7 @@ const {
   objectSchema,
   stringSchema,
   integerSchema,
-  booleanSchema,
-  arraySchema,
-  enumSchema,
 } = require('./tools/shared/schema.cjs');
-const { readTodos, writeTodos } = require('./utils/todoStore.cjs');
-const { loadSettings, saveSettings } = require('./settings.cjs');
-const { searchProjectContext } = require('./utils/projectContext/searchProjectContext.cjs');
 
 const DEFAULT_LIMITS = Object.freeze({
   maxListLimit: 5000,
@@ -53,12 +41,6 @@ const DEFAULT_LIMITS = Object.freeze({
   maxCallerLimit: 20,
   maxReferenceLimit: 24,
 });
-
-function clampInt(value, low, high, fallback) {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return fallback;
-  return Math.max(low, Math.min(high, Math.floor(parsed)));
-}
 
 function escapeRegExp(value) {
   return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -74,290 +56,11 @@ function wildcardToRegExp(pattern) {
   return new RegExp(`^${escaped}$`, 'i');
 }
 
-async function toolSearchCall(input, context) {
-  const query = toStringValue(input.query);
-  const limit = Math.max(1, Math.min(Number(input.limit || 10), 30));
-  const items = [];
-  for (const tool of Array.isArray(context.tools) ? context.tools : []) {
-    const description = typeof tool?.description === 'function'
-      ? await tool.description()
-      : toStringValue(tool?.searchHint);
-    const haystack = [
-      toStringValue(tool?.name),
-      ...(Array.isArray(tool?.aliases) ? tool.aliases.map((item) => toStringValue(item)) : []),
-      toStringValue(tool?.searchHint),
-      toStringValue(description),
-    ].join(' ').toLowerCase();
-    if (query && !haystack.includes(query.toLowerCase())) continue;
-    items.push({
-      name: toStringValue(tool?.name),
-      aliases: Array.isArray(tool?.aliases) ? tool.aliases : [],
-      description: toStringValue(description),
-      kind: toStringValue(tool?.kind),
-    });
-    if (items.length >= limit) break;
-  }
-  return {
-    ok: true,
-    query,
-    items,
-  };
-}
-
-async function projectContextSearchCall(input, context) {
-  try {
-    const result = await searchProjectContext({
-      workspacePath: context.workspacePath,
-      selectedFilePath: toStringValue(context?.requestContext?.selectedFilePath),
-      explicitPaths: Array.isArray(context?.requestContext?.explicitPaths) ? context.requestContext.explicitPaths : [],
-      category: toStringValue(input.category || 'all'),
-      query: toStringValue(input.query),
-      limit: clampInt(input.limit, 1, 50, 8),
-      includeContent: Boolean(input.include_content ?? input.includeContent),
-    });
-    return {
-      ok: true,
-      ...result,
-    };
-  } catch (error) {
-    return {
-      ok: false,
-      error: 'project_context_search_failed',
-      message: error instanceof Error ? error.message : String(error),
-    };
-  }
-}
-
-async function configCall(input) {
-  const action = toStringValue(input.action || 'get').toLowerCase();
-  const allowedKeys = new Set(['serverBaseUrl', 'llmBaseUrl', 'workspacePath', 'selectedModel', 'wikiId']);
-  if (action === 'get') {
-    const settings = loadSettings();
-    const key = toStringValue(input.key);
-    if (key && allowedKeys.has(key)) {
-      return { ok: true, key, value: settings[key] };
-    }
-    const values = {};
-    for (const item of allowedKeys) {
-      values[item] = settings[item];
-    }
-    return { ok: true, values };
-  }
-  if (action === 'set') {
-    const key = toStringValue(input.key);
-    if (!allowedKeys.has(key)) {
-      return { ok: false, error: 'config_key_not_allowed', key };
-    }
-    const saved = saveSettings({ [key]: toStringValue(input.value) });
-    return { ok: true, key, value: saved[key] };
-  }
-  return { ok: false, error: 'unsupported_config_action', action };
-}
-
-async function briefCall(input, context) {
-  const bridge = context.runtimeBridge && typeof context.runtimeBridge === 'object' ? context.runtimeBridge : {};
-  if (typeof bridge.sendBrief === 'function') {
-    await bridge.sendBrief({
-      title: toStringValue(input.title || 'Agent message'),
-      message: toStringValue(input.message || input.content),
-      level: toStringValue(input.level || 'info'),
-    });
-  }
-  return {
-    ok: true,
-    delivered: true,
-  };
-}
-
-async function sleepCall(input) {
-  const durationMs = Math.max(50, Math.min(Number(input.durationMs || input.duration_ms || input.ms || 1000), 30000));
-  await new Promise((resolve) => setTimeout(resolve, durationMs));
-  return {
-    ok: true,
-    slept_ms: durationMs,
-  };
-}
-
 function getAllLocalBaseTools(limits = {}) {
   const resolved = { ...DEFAULT_LIMITS, ...(limits || {}) };
   return [
-    defineLocalTool({
-      name: 'todo_read',
-      aliases: ['TodoRead'],
-      kind: 'read',
-      inputSchema: objectSchema({}),
-      searchHint: 'read the current task list for this session',
-      laneAffinity: ['read', 'review', 'change', 'failure'],
-      isReadOnly: () => true,
-      isConcurrencySafe: () => true,
-      async description() {
-        return 'Read the current session todo list';
-      },
-      async call(_input, context) {
-        const items = readTodos({
-          sessionId: context.sessionId,
-          workspacePath: context.workspacePath,
-        });
-        return {
-          ok: true,
-          items,
-          total: items.length,
-        };
-      },
-    }),
-    defineLocalTool({
-      name: 'todo_write',
-      aliases: ['TodoWrite'],
-      kind: 'write',
-      inputSchema: objectSchema({
-        items: arraySchema(
-          objectSchema({
-            content: stringSchema('Todo item content'),
-            status: stringSchema('Todo item status such as pending, in_progress, or completed'),
-            priority: stringSchema('Todo item priority such as high, medium, or low'),
-          }),
-          'Replacement todo items for the current session',
-        ),
-      }, ['items']),
-      searchHint: 'replace or update the current task list for this session',
-      laneAffinity: ['review', 'change', 'failure'],
-      isReadOnly: () => false,
-      isConcurrencySafe: () => false,
-      async description() {
-        return 'Replace the current session todo list with structured items';
-      },
-      async call(input, context) {
-        const items = Array.isArray(input.items) ? input.items : [];
-        const normalized = writeTodos({
-          sessionId: context.sessionId,
-          workspacePath: context.workspacePath,
-          items,
-        });
-        return {
-          ok: true,
-          items: normalized,
-          total: normalized.length,
-        };
-      },
-    }),
-    defineLocalTool({
-      name: 'brief',
-      aliases: ['SendUserMessage', 'Brief'],
-      kind: 'runtime',
-      inputSchema: objectSchema({
-        title: stringSchema('Short message title'),
-        message: stringSchema('Message to show to the user'),
-        level: enumSchema(['info', 'warning', 'error'], 'Message severity'),
-      }, ['message']),
-      searchHint: 'send a short message to the user without waiting for input',
-      laneAffinity: ['read', 'review', 'change', 'failure'],
-      isReadOnly: () => true,
-      isConcurrencySafe: () => false,
-      async description() {
-        return 'Send a short message to the user';
-      },
-      async call(input, context) {
-        return briefCall(input, context);
-      },
-    }),
-    defineLocalTool({
-      name: 'sleep',
-      aliases: ['Sleep'],
-      kind: 'runtime',
-      inputSchema: objectSchema({
-        durationMs: integerSchema('Delay in milliseconds', { minimum: 1 }),
-      }),
-      searchHint: 'wait briefly before the next action',
-      laneAffinity: ['failure', 'change'],
-      isConcurrencySafe: () => false,
-      async description() {
-        return 'Pause for a short duration';
-      },
-      async call(input) {
-        return sleepCall(input);
-      },
-    }),
-    defineLocalTool({
-      name: 'tool_search',
-      aliases: ['ToolSearch'],
-      kind: 'read',
-      inputSchema: objectSchema({
-        query: stringSchema('Tool name or description search query'),
-        limit: integerSchema('Maximum number of tools to return', { minimum: 1 }),
-      }),
-      searchHint: 'find an available tool by name or capability',
-      laneAffinity: ['read', 'review', 'change', 'failure'],
-      isReadOnly: () => true,
-      isConcurrencySafe: () => true,
-      async description() {
-        return 'Search available runtime tools';
-      },
-      async call(input, context) {
-        return toolSearchCall(input, context);
-      },
-    }),
-    defineLocalTool({
-      name: 'project_context_search',
-      aliases: ['skill_search', 'command_search', 'agent_search', 'memory_search'],
-      kind: 'read',
-      inputSchema: objectSchema({
-        category: enumSchema(['all', 'memory', 'settings', 'skill', 'command', 'agent'], 'Project context category to search'),
-        query: stringSchema('Plain text query. Use re:<pattern> for regex search'),
-        limit: integerSchema('Maximum number of results to return', { minimum: 1 }),
-        include_content: booleanSchema('Include clipped full content instead of short excerpts'),
-      }),
-      searchHint: 'search project MEMORY.md context, settings, skills, commands, and agents',
-      laneAffinity: ['read', 'flow', 'review'],
-      isReadOnly: () => true,
-      isConcurrencySafe: () => true,
-      getObservationEvidenceKinds: () => ['discovery'],
-      async description() {
-        return 'Search project context files such as MEMORY.md plus any discovered settings, skills, commands, and agents';
-      },
-      async call(input, context) {
-        return projectContextSearchCall(input, context);
-      },
-    }),
     WikiSearchTool(),
     WikiReadTool(),
-    WikiWriteTool(),
-    WikiRebuildIndexTool(),
-    WikiLintTool(),
-    WikiWritebackTool(),
-    defineLocalTool({
-      name: 'config',
-      aliases: ['Config'],
-      kind: 'runtime',
-      inputSchema: objectSchema({
-        action: enumSchema(['get', 'set'], 'Whether to read or change a config value'),
-        key: stringSchema('Config key'),
-        value: stringSchema('New config value for set actions'),
-      }),
-      outputSchema: {
-        type: 'object',
-        properties: {
-          ok: booleanSchema('Whether the config action succeeded'),
-          key: stringSchema('Config key'),
-          value: stringSchema('Config value'),
-          error: stringSchema('Error code'),
-          message: stringSchema('Human-readable status'),
-        },
-      },
-      searchHint: 'read or change desktop runtime configuration',
-      laneAffinity: ['read', 'change', 'failure'],
-      isReadOnly: () => false,
-      isConcurrencySafe: () => false,
-      async description() {
-        return 'Read or update desktop runtime settings';
-      },
-      async call(input) {
-        return configCall(input);
-      },
-    }),
-    WikiEvidenceSearchTool(),
-    LspTool({ limits: resolved }),
-    NotebookEditTool(),
-    ...createTaskTools(),
     defineLocalTool({
       name: 'list_files',
       aliases: ['list_directory', 'ls', 'dir'],
@@ -365,8 +68,8 @@ function getAllLocalBaseTools(limits = {}) {
       inputSchema: objectSchema({
         limit: integerSchema('Maximum number of files to list', { minimum: 1 }),
       }),
-      searchHint: 'workspace files',
-      laneAffinity: ['read', 'flow', 'compare', 'review', 'failure', 'change'],
+      searchHint: 'list files in the current workspace',
+      laneAffinity: ['read', 'flow', 'review'],
       isReadOnly: () => true,
       isConcurrencySafe: () => true,
       getObservationEvidenceKinds: () => ['discovery'],
@@ -381,14 +84,14 @@ function getAllLocalBaseTools(limits = {}) {
     }),
     defineLocalTool({
       name: 'glob',
-      aliases: ['glob_files', 'Glob', 'search_files', 'find_files'],
+      aliases: ['glob_files', 'search_files', 'find_files'],
       kind: 'list',
       inputSchema: objectSchema({
         pattern: stringSchema('Wildcard path pattern such as src/**/*.ts'),
         limit: integerSchema('Maximum number of files to return', { minimum: 1 }),
       }, ['pattern']),
       searchHint: 'match files by wildcard path pattern',
-      laneAffinity: ['read', 'review', 'change', 'failure'],
+      laneAffinity: ['read', 'review'],
       isReadOnly: () => true,
       isConcurrencySafe: () => true,
       getObservationEvidenceKinds: () => ['discovery'],
@@ -417,8 +120,8 @@ function getAllLocalBaseTools(limits = {}) {
         query: stringSchema('Search string or simple regex-like pattern'),
         limit: integerSchema('Maximum number of search hits to return', { minimum: 1 }),
       }, ['query']),
-      searchHint: 'search text',
-      laneAffinity: ['read', 'flow', 'compare', 'review', 'failure', 'change'],
+      searchHint: 'search workspace text',
+      laneAffinity: ['read', 'flow', 'review'],
       isReadOnly: () => true,
       isConcurrencySafe: () => true,
       getObservationEvidenceKinds: () => ['discovery'],
@@ -443,7 +146,7 @@ function getAllLocalBaseTools(limits = {}) {
         pathFilter: stringSchema('Optional path substring to restrict matches'),
       }, ['symbol']),
       searchHint: 'find symbol definitions',
-      laneAffinity: ['read', 'flow', 'compare', 'failure'],
+      laneAffinity: ['read', 'flow', 'review'],
       isReadOnly: () => true,
       isConcurrencySafe: () => true,
       getObservationEvidenceKinds: () => ['discovery'],
@@ -465,8 +168,8 @@ function getAllLocalBaseTools(limits = {}) {
         limit: integerSchema('Maximum number of matches to return', { minimum: 1 }),
         pathFilter: stringSchema('Optional path substring to restrict matches'),
       }, ['symbol']),
-      searchHint: 'trace callers',
-      laneAffinity: ['flow', 'failure'],
+      searchHint: 'trace callers of a symbol',
+      laneAffinity: ['flow', 'review'],
       isReadOnly: () => true,
       isConcurrencySafe: () => true,
       getObservationEvidenceKinds: () => ['discovery'],
@@ -488,8 +191,8 @@ function getAllLocalBaseTools(limits = {}) {
         limit: integerSchema('Maximum number of matches to return', { minimum: 1 }),
         pathFilter: stringSchema('Optional path substring to restrict matches'),
       }, ['symbol']),
-      searchHint: 'trace references',
-      laneAffinity: ['flow', 'compare', 'failure', 'review'],
+      searchHint: 'trace symbol references',
+      laneAffinity: ['flow', 'review'],
       isReadOnly: () => true,
       isConcurrencySafe: () => true,
       getObservationEvidenceKinds: () => ['discovery'],
@@ -515,7 +218,7 @@ function getAllLocalBaseTools(limits = {}) {
         pathFilter: stringSchema('Optional path substring to restrict symbol resolution'),
       }, ['path', 'symbol']),
       searchHint: 'read symbol body',
-      laneAffinity: ['read', 'flow', 'compare', 'review', 'failure'],
+      laneAffinity: ['read', 'flow', 'review'],
       isReadOnly: () => true,
       isConcurrencySafe: () => true,
       getObservationEvidenceKinds: () => ['inspection'],
@@ -545,8 +248,8 @@ function getAllLocalBaseTools(limits = {}) {
         limit: integerSchema('Maximum number of outline items to return', { minimum: 1 }),
         pathFilter: stringSchema('Optional path substring to restrict matches'),
       }, ['path']),
-      searchHint: 'list declarations',
-      laneAffinity: ['read', 'flow', 'compare'],
+      searchHint: 'list declarations in a file',
+      laneAffinity: ['read', 'flow', 'review'],
       isReadOnly: () => true,
       isConcurrencySafe: () => true,
       getObservationEvidenceKinds: () => ['inspection'],
@@ -572,8 +275,8 @@ function getAllLocalBaseTools(limits = {}) {
         limit: integerSchema('Maximum number of nearby declarations to return', { minimum: 1 }),
         pathFilter: stringSchema('Optional path substring to restrict matches'),
       }, ['path', 'lineHint']),
-      searchHint: 'read enclosing symbol',
-      laneAffinity: ['flow', 'failure', 'review'],
+      searchHint: 'read the enclosing symbol around a line',
+      laneAffinity: ['read', 'flow', 'review'],
       isReadOnly: () => true,
       isConcurrencySafe: () => true,
       getObservationEvidenceKinds: () => ['inspection'],
@@ -590,11 +293,8 @@ function getAllLocalBaseTools(limits = {}) {
       },
     }),
     FileReadTool({ limits: resolved }),
-    FileWriteTool({ limits: resolved }),
     FileEditTool({ limits: resolved }),
-    RunBuildTool(),
-    BashTool({ limits: resolved }),
-    PowerShellTool(),
+    LspTool({ limits: resolved }),
   ];
 }
 

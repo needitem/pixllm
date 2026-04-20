@@ -74,22 +74,6 @@ function inferWorkspaceTargetPath(context = {}, { preferredExtensions = [] } = {
   return candidates[0] || '';
 }
 
-function normalizeBuildInput(input = {}) {
-  const normalized = input && typeof input === 'object' ? { ...input } : {};
-  const toolName = toStringValue(normalized.tool).toLowerCase();
-  const args = Array.isArray(normalized.args) ? normalized.args.map((item) => toStringValue(item)).filter(Boolean) : [];
-
-  if (toolName === 'dotnet') {
-    while (args[0] && args[0].toLowerCase() === 'build') {
-      args.shift();
-    }
-  }
-
-  normalized.args = args;
-  return normalized;
-}
-
 module.exports = {
   inferWorkspaceTargetPath,
-  normalizeBuildInput,
 };

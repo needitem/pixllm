@@ -2,7 +2,7 @@
 
 import os
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 try:
     import yaml
@@ -42,11 +42,6 @@ def load() -> Dict[str, Any]:
     return _CONFIG_CACHE
 
 
-def _get(section: str, key: str, default: Any = None) -> Any:
-    cfg = load()
-    return cfg.get(section, {}).get(key, default)
-
-
 def _coerce_like(value: Any, default: Any) -> Any:
     if isinstance(default, bool):
         if isinstance(value, bool):
@@ -82,24 +77,3 @@ def heuristics_weights(name: str, defaults: Dict[str, Any]) -> Dict[str, Any]:
         if key in raw:
             merged[key] = _coerce_like(raw.get(key), default)
     return merged
-
-
-def routing_doc_first_response_types() -> List[str]:
-    return list(_get("routing", "doc_first_response_types", ["doc_lookup"]))
-
-
-def retrieval_query_rewrite_enabled() -> bool:
-    v = os.getenv("CHAT_QUERY_REWRITE_ENABLED")
-    if v is not None and str(v).strip() != "":
-        return str(v).strip().lower() in {"1", "true", "yes", "on"}
-    return bool(_get("retrieval", "query_rewrite_enabled", True))
-
-
-def retrieval_query_rewrite_max_candidates() -> int:
-    v = os.getenv("CHAT_QUERY_REWRITE_MAX_CANDIDATES")
-    if v is not None and str(v).strip() != "":
-        try:
-            return max(1, int(v))
-        except ValueError:
-            pass
-    return max(1, int(_get("retrieval", "query_rewrite_max_candidates", 3)))

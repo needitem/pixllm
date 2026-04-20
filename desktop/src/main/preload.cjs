@@ -11,16 +11,16 @@ if (window.location.protocol === 'file:' || allowedHostnames.includes(window.loc
     getSession: (sessionId) => ipcRenderer.invoke('sessions:get', sessionId),
     createSession: (workspacePath, title) => ipcRenderer.invoke('sessions:create', workspacePath, title),
     saveSession: (session) => ipcRenderer.invoke('sessions:save', session),
-    apiHealth: (baseUrl, apiToken) => ipcRenderer.invoke('api:health', baseUrl, apiToken),
-    apiRuns: (baseUrl, apiToken) => ipcRenderer.invoke('api:runs', baseUrl, apiToken),
-    apiRun: (baseUrl, apiToken, runId) => ipcRenderer.invoke('api:run', baseUrl, apiToken, runId),
-    apiCancelRun: (baseUrl, apiToken, runId, reason) => ipcRenderer.invoke('api:cancel-run', baseUrl, apiToken, runId, reason),
-    apiResumeRun: (baseUrl, apiToken, runId, fromTaskKey, fromStepKey) =>
-      ipcRenderer.invoke('api:resume-run', baseUrl, apiToken, runId, fromTaskKey, fromStepKey),
-    apiApproveRun: (baseUrl, apiToken, runId, approvalId, note) =>
-      ipcRenderer.invoke('api:approve-run', baseUrl, apiToken, runId, approvalId, note),
-    apiRejectRun: (baseUrl, apiToken, runId, approvalId, note) =>
-      ipcRenderer.invoke('api:reject-run', baseUrl, apiToken, runId, approvalId, note),
+    apiHealth: (baseUrl) => ipcRenderer.invoke('api:health', baseUrl),
+    apiRuns: (baseUrl) => ipcRenderer.invoke('api:runs', baseUrl),
+    apiRun: (baseUrl, runId) => ipcRenderer.invoke('api:run', baseUrl, runId),
+    apiCancelRun: (baseUrl, runId, reason) => ipcRenderer.invoke('api:cancel-run', baseUrl, runId, reason),
+    apiResumeRun: (baseUrl, runId, fromTaskKey, fromStepKey) =>
+      ipcRenderer.invoke('api:resume-run', baseUrl, runId, fromTaskKey, fromStepKey),
+    apiApproveRun: (baseUrl, runId, approvalId, note) =>
+      ipcRenderer.invoke('api:approve-run', baseUrl, runId, approvalId, note),
+    apiRejectRun: (baseUrl, runId, approvalId, note) =>
+      ipcRenderer.invoke('api:reject-run', baseUrl, runId, approvalId, note),
     agentChatStreamStart: (payload) => ipcRenderer.invoke('agent:chat-stream-start', payload),
     agentChatStreamCancel: (requestId) => ipcRenderer.invoke('agent:chat-stream-cancel', requestId),
     answerAgentQuestion: (requestId, questionId, answer) =>

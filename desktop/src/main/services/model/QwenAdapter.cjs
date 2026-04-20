@@ -852,18 +852,16 @@ function buildSystemPrompt({
   const intent = requestContext?.intent && typeof requestContext.intent === 'object'
     ? requestContext.intent
     : {};
-  const prefersWorkspaceArtifact = Boolean(
-    intent.wantsChanges
-    || intent.createLikely
-    || requestContext?.artifactPlan?.requiresWorkspaceArtifact,
-  );
+  const prefersWorkspaceArtifact = Boolean(intent.wantsChanges);
   const prefersDirectChatGuidance = Boolean(
     requestContext?.intent?.wantsAnalysis
     && !prefersWorkspaceArtifact,
   );
   const prefersWorkflowFirst = Boolean(requestContext?.workflowPlan?.preferWikiFirst);
+  const requestMode = toStringValue(requestContext?.mode || (prefersWorkflowFirst ? 'wiki' : 'local'));
   return [
     'You are the desktop coding engine for a Qwen-based local coding agent.',
+    'This desktop agent supports only two request lanes: backend wiki guidance and local code review/explanation.',
     'Decide whether to answer directly or call tools.',
     'The user may write in Korean. Answer in the user language when possible and translate Korean technical phrases into likely English code terms yourself when searching.',
     '# Enabled tools',
@@ -879,26 +877,23 @@ function buildSystemPrompt({
     '- Do not wrap tool calls in markdown fences. You may emit multiple independent <tool_call> blocks.',
     '- After the last </tool_call>, write nothing else. Tool results will arrive inside <tool_response> blocks.',
     '- Prefer dedicated tools over shell commands. Use discovery tools for search, read tools for inspection, and write/edit tools for file changes.',
-    prefersWorkspaceArtifact
-      ? '- The request expects workspace changes. Prefer producing or editing the needed workspace files instead of only answering in chat.'
-      : '- If the user is asking for explanation, guidance, review, or analysis, answer directly in chat. Do not create workspace files unless the user explicitly asks for code, a file, or an edit.',
+    requestMode === 'local'
+      ? '- Local-code requests use the workspace for review, explanation, and limited comment-oriented edits on existing files. Do not create new files.'
+      : '- Wiki requests use backend wiki/reference evidence to explain usage. Do not edit local workspace files in wiki mode.',
     prefersDirectChatGuidance
       ? '- For explanation-style requests, prefer verified reference/wiki evidence over pre-existing workspace samples. Do not treat an existing workspace example as authoritative unless the user explicitly asked about that file or path.'
       : '',
     prefersWorkflowFirst
-      ? '- Workflow-first guidance requests must follow this order: (1) search wiki workflow pages, (2) read the best matching workflow page, (3) inspect the implementation or methods pages referenced by that workflow, (4) gather verified API facts with wiki_evidence_search before emitting code or concrete signatures, and only then (5) use broader reference search if necessary.'
+      ? '- Workflow-first guidance requests must follow this order: (1) search wiki workflow pages, (2) read the best matching workflow page, (3) search and read any directly referenced workflow or methods pages needed for the answer, (4) extract Required Facts, verified declarations, and verification rules from the pages you read before emitting code or concrete signatures, and only then (5) use broader wiki search if necessary.'
       : '',
     prefersWorkflowFirst && prefersDirectChatGuidance
       ? '- For broad workflow guidance, converge once a workflow page and verified code facts are available. Prefer one short explanation path, at most one compact code sketch, and stop searching instead of expanding into every related API.'
       : '',
-    '- When a workflow page or workflow_bundle exposes Required Facts, verification rules, or verified API facts, treat them as an allowlist for example code. Do not invent overloads, namespaces, convenience properties, short static helpers, or direct object relationships that are not present in the verified facts.',
+    '- When a workflow page exposes Required Facts, verification rules, or verified declarations, treat them as an allowlist for example code. Do not invent overloads, namespaces, convenience properties, short static helpers, or direct object relationships that are not present in the verified facts.',
     '- If a workflow describes a non-obvious enum or integer mapping, prefer named enum members in code examples. If you must use integers, state the verified mapping explicitly instead of implying a conventional order.',
-    '- If a wiki_evidence_search result says `search_status: no_exact_match`, do not claim that the queried API exists. Use the reported `negative_evidence`, and mention `related_apis` only as possible alternatives.',
-    '- For technical guidance, methods pages and verified API facts are more authoritative than sample snippets or inferred usage patterns. If signatures disagree, follow the verified signatures or say the detail is unverified.',
-    '- Do not use bash or powershell to create or edit files when write/edit tools are enabled.',
-    '- Use wiki_evidence_search only for backend-hosted reference material outside the workspace and treat it as read-only guidance until verified by code evidence or workspace inspection.',
-    '- Paths returned from wiki_evidence_search belong to backend reference sources, not the local workspace. Do not pass those paths to local file tools or shell commands.',
-    '- For wiki maintenance work, use wiki_search/wiki_read before wiki_write/wiki_rebuild_index/wiki_lint/wiki_writeback.',
+    '- For technical guidance, workflow Required Facts and methods pages are more authoritative than sample snippets or inferred usage patterns. If signatures disagree, follow the verified declarations or say the detail is unverified.',
+    '- Do not create new files. The only allowed local mutation is editing an existing file when the user explicitly asks for comment-style or explanatory edits.',
+    '- Wiki page paths belong to the backend-managed reference corpus, not the local workspace. Do not pass wiki paths to local file tools or shell commands.',
     '- Ground claims in tool responses already shown in the transcript. If a tool fails, report the exact blocker from that response.',
     workspacePath ? `Workspace: ${workspacePath}` : '',
     selectedFilePath ? `Selected file: ${selectedFilePath}` : '',

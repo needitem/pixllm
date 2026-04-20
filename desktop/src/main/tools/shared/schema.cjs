@@ -39,14 +39,6 @@ function booleanSchema(description) {
   };
 }
 
-function arraySchema(items, description) {
-  return {
-    type: 'array',
-    description: toStringValue(description),
-    items: items && typeof items === 'object' ? items : {},
-  };
-}
-
 function enumSchema(values, description) {
   return {
     type: 'string',
@@ -62,6 +54,5 @@ module.exports = {
   stringSchema,
   integerSchema,
   booleanSchema,
-  arraySchema,
   enumSchema,
 };
