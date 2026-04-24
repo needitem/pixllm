@@ -69,6 +69,11 @@ function toolUseKey(toolUse = {}) {
   return `${toStringValue(toolUse?.name)}:${stableSerialize(toolUse?.input || {})}`;
 }
 
+const WIKI_SEARCH_MODEL_CHAR_LIMIT = 7000;
+const WIKI_READ_MODEL_CHAR_LIMIT = 12000;
+const ANSWER_GROUNDING_FACT_LIMIT = 6;
+const ANSWER_GROUNDING_SNIPPET_FACT_LIMIT = 4;
+
 function buildToolExecutionResult(toolUse, observation) {
   const summarized = summarizeObservation(toolUse?.name, observation, 12000);
   return {
@@ -120,7 +125,7 @@ function summarizeAnswerGroundingForModel(pack = {}) {
     : (Array.isArray(pack.method_declarations) ? pack.method_declarations : []);
   if (facts.length > 0) {
     lines.push('facts:');
-    for (const item of facts.slice(0, 8)) {
+    for (const [index, item] of facts.slice(0, ANSWER_GROUNDING_FACT_LIMIT).entries()) {
       const symbol = toStringValue(item?.symbol || item?.title || item?.path);
       const declaration = toStringValue(item?.declaration) || (Array.isArray(item?.declarations)
         ? item.declarations.map((value) => toStringValue(value)).filter(Boolean).join(' | ')
@@ -137,8 +142,11 @@ function summarizeAnswerGroundingForModel(pack = {}) {
       if (sourceRefs.length > 0) {
         lines.push(`  source_refs: ${sourceRefs.join(', ')}`);
       }
+      if (index >= ANSWER_GROUNDING_SNIPPET_FACT_LIMIT) {
+        continue;
+      }
       for (const snippet of (Array.isArray(item?.source_snippets) ? item.source_snippets : []).slice(0, 2)) {
-        const content = clipModelText(snippet?.content || '', 1100);
+        const content = clipModelText(snippet?.content || '', 650);
         if (!content) continue;
         const role = toStringValue(snippet?.role);
         const snippetPath = toStringValue(snippet?.path);
@@ -182,9 +190,10 @@ function summarizeEvidencePackForModel(pack = {}) {
   }
 
   const methodDeclarations = Array.isArray(pack.method_declarations) ? pack.method_declarations : [];
-  if (methodDeclarations.length > 0) {
+  const hasGroundingFacts = Array.isArray(pack?.answer_grounding?.facts) && pack.answer_grounding.facts.length > 0;
+  if (methodDeclarations.length > 0 && !hasGroundingFacts) {
     lines.push('method_declarations:');
-    for (const item of methodDeclarations.slice(0, 10)) {
+    for (const item of methodDeclarations.slice(0, 6)) {
       const symbol = toStringValue(item?.symbol || item?.title || item?.path);
       const declaration = toStringValue(item?.declaration) || (Array.isArray(item?.declarations) && item.declarations.length > 0
         ? item.declarations.map((value) => toStringValue(value)).filter(Boolean).join(' | ')
@@ -205,7 +214,7 @@ function summarizeEvidencePackForModel(pack = {}) {
         const snippetPath = toStringValue(snippet?.path);
         const snippetRange = toStringValue(snippet?.line_range);
         const role = toStringValue(snippet?.role);
-        const content = clipModelText(snippet?.content || '', 1000);
+        const content = clipModelText(snippet?.content || '', 650);
         if (!content) {
           continue;
         }
@@ -236,11 +245,11 @@ function summarizeEvidencePackForModel(pack = {}) {
 
   if (workflow?.content) {
     lines.push('workflow_content:');
-    lines.push(clipModelText(workflow.content, 2600));
+    lines.push(clipModelText(workflow.content, 1600));
   }
   for (const item of bundlePages.slice(0, 3)) {
     const pathValue = toStringValue(item?.path);
-    const content = clipModelText(item?.content || '', 900);
+    const content = clipModelText(item?.content || '', 600);
     if (!pathValue || !content) continue;
     lines.push(`bundle_content: ${pathValue}`);
     lines.push(content);
@@ -328,7 +337,7 @@ function summarizeObservationForModel(toolName, observation = {}) {
       lines.push('results:');
       lines.push(...results.map((item) => `- ${item}`));
     }
-    return lines.join('\n').trim();
+    return clipModelText(lines.join('\n').trim(), WIKI_SEARCH_MODEL_CHAR_LIMIT);
   }
 
   if (name === 'wiki_read') {
@@ -358,7 +367,7 @@ function summarizeObservationForModel(toolName, observation = {}) {
       lines.push(`related_content: ${relatedPath}`);
       lines.push(relatedContent);
     }
-    return lines.join('\n').trim();
+    return clipModelText(lines.join('\n').trim(), WIKI_READ_MODEL_CHAR_LIMIT);
   }
 
   if (['edit', 'replace_in_file'].includes(name)) {

@@ -56,6 +56,8 @@ const REQUEST_TOKEN_SAFETY_MARGIN = 64;
 const MAX_FILE_CACHE_ENTRIES = 24;
 const MAX_PROMPT_TOKEN_CACHE_ENTRIES = 32;
 const MAX_TRANSITIONS = 64;
+const MAX_HISTORY_MESSAGES_FOR_NEW_RUN = 8;
+const MAX_HISTORY_TEXT_CHARS = 3000;
 const NO_WORKSPACE_TOOL_NAMES = Object.freeze([
   'wiki_search',
   'wiki_read',
@@ -241,6 +243,55 @@ class QueryEngine {
       workspacePath: this.workspacePath,
       payload: this._serializeState(),
     });
+  }
+
+  _compactMessageForNewRun(message = {}) {
+    const role = toStringValue(message?.role).toLowerCase() === 'user' ? 'user' : 'assistant';
+    const text = (Array.isArray(message?.content) ? message.content : [])
+      .filter((block) => block?.type === 'text')
+      .map((block) => toStringValue(block?.text))
+      .filter(Boolean)
+      .join('\n\n')
+      .trim();
+    if (!text) return null;
+    if (
+      role === 'assistant'
+      && /You passed\s+\d+\s+input tokens[\s\S]*maximum input length/i.test(text)
+    ) {
+      return null;
+    }
+    const boundedText = text.length > MAX_HISTORY_TEXT_CHARS
+      ? `${text.slice(0, Math.max(0, MAX_HISTORY_TEXT_CHARS - 20))}\n...[history truncated]`
+      : text;
+    return {
+      role,
+      content: [createTextBlock(boundedText)],
+    };
+  }
+
+  _compactStateForNewUserRun() {
+    const beforeCount = Array.isArray(this.state.messages) ? this.state.messages.length : 0;
+    const compacted = (Array.isArray(this.state.messages) ? this.state.messages : [])
+      .map((message) => this._compactMessageForNewRun(message))
+      .filter(Boolean)
+      .slice(-MAX_HISTORY_MESSAGES_FOR_NEW_RUN);
+    const changed = compacted.length !== beforeCount
+      || compacted.some((message) => toStringValue(message?.content?.[0]?.text).includes('[history truncated]'));
+    if (!changed) {
+      return;
+    }
+    this.state.messages = compacted;
+    this.state.pendingToolUseSummary = '';
+    this.state.pendingAssistantContinuation = '';
+    this.state.maxOutputTokensRecoveryCount = 0;
+    this.state.maxOutputTokensOverride = 0;
+    this.state.terminalReason = '';
+    this.promptTokenCountCache.clear();
+    this._recordTransition('history_compacted_for_new_run', {
+      beforeMessages: beforeCount,
+      afterMessages: compacted.length,
+    });
+    this._persistState();
   }
 
   _recordTranscript(entry = {}) {
@@ -895,6 +946,7 @@ class QueryEngine {
     onBrief = async () => {},
     signal = null,
   } = {}) {
+    this._compactStateForNewUserRun();
     const traceStartIndex = this.state.trace.length;
     const transcriptStartIndex = Array.isArray(this.state.transcript) ? this.state.transcript.length : 0;
     this.runtimeHandlers = { onTransition, onUserQuestion, onBrief };
