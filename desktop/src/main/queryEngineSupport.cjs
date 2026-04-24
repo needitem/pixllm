@@ -352,6 +352,7 @@ module.exports = {
   buildUserBlocks,
   describeTools,
   deriveLoopControlState,
+  estimateTokens,
   evaluateFinalAnswerState,
   hasSubstantiveUserQueryMessage,
   hashText,

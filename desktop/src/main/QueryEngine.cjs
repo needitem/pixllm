@@ -32,6 +32,7 @@ const {
   buildUserBlocks,
   describeTools,
   deriveLoopControlState,
+  estimateTokens,
   evaluateFinalAnswerState,
   hasSubstantiveUserQueryMessage,
   hashText,

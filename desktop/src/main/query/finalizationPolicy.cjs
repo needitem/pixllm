@@ -167,6 +167,8 @@ function requestNeedsGroundedChangeEvidence(requestContext = {}) {
     ? requestContext.intent
     : {};
   return Boolean(
+    toStringValue(requestContext?.mode) !== 'wiki'
+    &&
     intent.wantsChanges,
   );
 }
@@ -176,6 +178,8 @@ function requestRequiresWorkspaceEdit(requestContext = {}) {
     ? requestContext.intent
     : {};
   return Boolean(
+    toStringValue(requestContext?.mode) !== 'wiki'
+    &&
     intent.wantsChanges,
   );
 }
