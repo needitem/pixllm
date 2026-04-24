@@ -4,26 +4,9 @@ const { ensureDesktopDataRoot } = require('./storage_paths.cjs');
 
 const SETTINGS_KEYS = ['serverBaseUrl', 'llmBaseUrl', 'workspacePath', 'selectedModel', 'wikiId', 'engineQuestionDefault', 'recentWorkspaces'];
 const DEFAULT_MODEL = 'Qwen/Qwen3.6-27B';
-const LEGACY_MODEL_NAMES = new Set([
-  'qwen3.5-27b',
-  'qwen/qwen3.5-27b',
-  'qwen3.6-27b',
-  'qwen/qwen3.6-27b',
-]);
 
 function settingsPath() {
   return path.join(ensureDesktopDataRoot(), 'settings.json');
-}
-
-function normalizeSelectedModel(value) {
-  const normalized = typeof value === 'string' ? value.trim() : '';
-  if (!normalized) {
-    return '';
-  }
-  if (LEGACY_MODEL_NAMES.has(normalized.toLowerCase())) {
-    return DEFAULT_MODEL;
-  }
-  return normalized;
 }
 
 function defaultSettings() {
@@ -58,7 +41,9 @@ function normalizeWorkspaceList(list) {
 
 function finalizeSettings(source) {
   const workspacePath = typeof source?.workspacePath === 'string' ? source.workspacePath.trim() : '';
-  const selectedModel = normalizeSelectedModel(source?.selectedModel) || DEFAULT_MODEL;
+  const selectedModel = typeof source?.selectedModel === 'string'
+    ? source.selectedModel.trim() || DEFAULT_MODEL
+    : DEFAULT_MODEL;
   const wikiId = typeof source?.wikiId === 'string' ? source.wikiId.trim() : '';
   const recentWorkspaces = normalizeWorkspaceList([
     workspacePath,
@@ -82,7 +67,7 @@ function normalizeSettings(source) {
     } else if (key === 'engineQuestionDefault') {
       normalized[key] = Boolean(source?.engineQuestionDefault);
     } else if (key === 'selectedModel') {
-      normalized[key] = normalizeSelectedModel(source?.[key]);
+      normalized[key] = typeof source?.[key] === 'string' ? source[key].trim() : '';
     } else if (key === 'wikiId') {
       normalized[key] = typeof source?.wikiId === 'string' ? source.wikiId : '';
     } else if (typeof source?.[key] === 'string') {
