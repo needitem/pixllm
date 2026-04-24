@@ -260,11 +260,13 @@ function summarizeWikiEvidence(trace = []) {
   let hasVerifiedCodeEvidence = false;
   const workflowForbiddenAnswerPatterns = [];
   const workflowMissingSlots = [];
+  const workflowRequiredSymbols = [];
   const evidenceTypes = new Set();
   const evidenceSymbols = [];
   const evidenceDeclarations = [];
   const evidencePaths = [];
   const evidenceFacts = [];
+  let lastStepNewEvidenceCount = 0;
 
   const addEvidenceString = (target, value, limit = 160) => {
     const normalized = toStringValue(value);
@@ -288,6 +290,7 @@ function summarizeWikiEvidence(trace = []) {
     if (step?.observation?.ok === false) {
       continue;
     }
+    const beforeEvidenceCount = evidenceFacts.length + evidenceSymbols.length + evidenceDeclarations.length + evidencePaths.length;
     const toolName = toStringValue(step?.tool);
     const observation = step?.observation && typeof step.observation === 'object'
       ? step.observation
@@ -312,6 +315,7 @@ function summarizeWikiEvidence(trace = []) {
         addEvidenceString(evidencePaths, pathValue);
         for (const symbol of requiredSymbols) {
           addEvidenceString(evidenceSymbols, symbol);
+          addEvidenceString(workflowRequiredSymbols, symbol);
         }
 
         if (isWorkflowPath(pathValue) || toStringValue(page.kind) === 'workflow') {
@@ -325,6 +329,14 @@ function summarizeWikiEvidence(trace = []) {
           }
           workflowRequiredSymbolCount += requiredSymbols.length;
           apiEvidenceCount += requiredSymbols.length;
+          for (const slot of parsedSpec.missingSlots) {
+            if (!workflowMissingSlots.includes(slot)) {
+              workflowMissingSlots.push(slot);
+            }
+          }
+          if (parsedSpec.hasBlock && parsedSpec.missingSlots.length === 0) {
+            workflowSlotsComplete = true;
+          }
           continue;
         }
 
@@ -337,10 +349,15 @@ function summarizeWikiEvidence(trace = []) {
           apiEvidenceCount += Math.max(1, requiredSymbols.length);
         }
       }
+      lastStepNewEvidenceCount = Math.max(
+        0,
+        evidenceFacts.length + evidenceSymbols.length + evidenceDeclarations.length + evidencePaths.length - beforeEvidenceCount,
+      );
       continue;
     }
 
     if (toolName !== 'wiki_read') {
+      lastStepNewEvidenceCount = 0;
       continue;
     }
 
@@ -360,6 +377,7 @@ function summarizeWikiEvidence(trace = []) {
       addEvidenceString(evidencePaths, pathValue);
       for (const symbol of requiredSymbols) {
         addEvidenceString(evidenceSymbols, symbol);
+        addEvidenceString(workflowRequiredSymbols, symbol);
       }
 
       if (isWorkflowPath(pathValue)) {
@@ -421,6 +439,10 @@ function summarizeWikiEvidence(trace = []) {
         }
       }
     }
+    lastStepNewEvidenceCount = Math.max(
+      0,
+      evidenceFacts.length + evidenceSymbols.length + evidenceDeclarations.length + evidencePaths.length - beforeEvidenceCount,
+    );
   }
 
   const hasDocEvidence = searchCount > 0 || readCount > 0 || docResultCount > 0;
@@ -445,10 +467,12 @@ function summarizeWikiEvidence(trace = []) {
     workflowBundleSeen,
     workflowSlotsComplete,
     workflowMissingSlots,
+    workflowRequiredSymbols,
     evidenceSymbols,
     evidenceDeclarations,
     evidencePaths,
     evidenceFacts,
+    lastStepNewEvidenceCount,
   };
 }
 

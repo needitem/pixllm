@@ -20,14 +20,6 @@ function uniqueStrings(items = [], limit = 160) {
   return output;
 }
 
-function evidenceHaystack(referenceEvidence = {}) {
-  return [
-    ...(Array.isArray(referenceEvidence.evidenceSymbols) ? referenceEvidence.evidenceSymbols : []),
-    ...(Array.isArray(referenceEvidence.evidenceDeclarations) ? referenceEvidence.evidenceDeclarations : []),
-    ...(Array.isArray(referenceEvidence.evidencePaths) ? referenceEvidence.evidencePaths : []),
-  ].map((item) => toStringValue(item).toLowerCase()).filter(Boolean).join('\n');
-}
-
 function evidenceItems(referenceEvidence = {}) {
   const symbols = Array.isArray(referenceEvidence.evidenceSymbols) ? referenceEvidence.evidenceSymbols : [];
   const declarations = Array.isArray(referenceEvidence.evidenceDeclarations) ? referenceEvidence.evidenceDeclarations : [];
@@ -41,102 +33,71 @@ function evidenceItems(referenceEvidence = {}) {
   ], 160);
 }
 
-function matchesAny(text = '', patterns = []) {
-  return (Array.isArray(patterns) ? patterns : []).some((pattern) => pattern.test(text));
+function canonicalSymbol(value = '') {
+  return toStringValue(value)
+    .replace(/[^\w.]+/g, '')
+    .toLowerCase();
 }
 
-function buildWikiCoverageSlots(requestContext = {}) {
-  const prompt = toStringValue(requestContext?.prompt).toLowerCase();
-  const hints = (Array.isArray(requestContext?.symbolHints) ? requestContext.symbolHints : [])
-    .map((item) => toStringValue(item).toLowerCase())
-    .filter(Boolean)
-    .join(' ');
-  const source = `${prompt} ${hints}`.trim();
-  const mentionsImageView = /\b(?:nx)?imageview\b/.test(source);
-  const mentionsXdm = /\bxdm\b/.test(source);
-  const wantsLoad = /\b(?:load|open|read|file)\b/.test(source)
-    || /(?:\uB85C\uB4DC|\uBD88\uB7EC|\uC77D|\uD30C\uC77C)/.test(source);
-  const wantsDisplay = /\b(?:display|show|view|draw|render|visuali[sz]e)\b/.test(source)
-    || /(?:\uB3C4\uC2DC|\uD45C\uC2DC|\uD654\uBA74|\uBCF4\uC5EC)/.test(source);
-  const wantsFit = /\b(?:zoomfit|fit|full|screen)\b/.test(source)
-    || /(?:\uB9DE|\uC804\uCCB4)/.test(source);
-  const slots = [];
-
-  if (mentionsImageView || wantsDisplay) {
-    slots.push({
-      name: 'view_layer_display',
-      patterns: [
-        /\bnximageview\b/,
-        /\baddimagelayer\b/,
-        /\bnximagelayer(?:composites)?\b/,
-      ],
-    });
-  }
-  if (mentionsXdm && wantsLoad) {
-    slots.push({
-      name: 'xdm_file_load',
-      patterns: [
-        /\bxrasterio\.loadrawfile\b/,
-        /\bxrsloadfile\.getbandat\b/,
-        /\bloadrawfile\b/,
-        /\bgetbandat\b/,
-      ],
-    });
-  }
-  if (mentionsXdm && (wantsLoad || wantsDisplay)) {
-    slots.push({
-      name: 'xdm_composite_binding',
-      patterns: [
-        /\bgetxdmcompmanager\b/,
-        /\bxdmcompmanager\.addxdmcomposite\b/,
-        /\bxdmcomposite\.setband\b/,
-        /\baddxdmcomposite\b/,
-        /\bsetband\b/,
-      ],
-    });
-  }
-  if (wantsFit) {
-    slots.push({
-      name: 'zoom_fit',
-      patterns: [
-        /\bzoomfit\b/,
-      ],
-    });
-  }
-  return slots;
+function evidenceCoversSymbol(symbol = '', items = []) {
+  const target = canonicalSymbol(symbol);
+  if (!target) return false;
+  return (Array.isArray(items) ? items : []).some((item) => {
+    const candidate = canonicalSymbol(item);
+    return candidate === target
+      || candidate.endsWith(`.${target}`)
+      || candidate.includes(target)
+      || candidate.includes(`${target}::`)
+      || candidate.includes(`${target}(`);
+  });
 }
 
 function evaluateWikiEvidenceCoverage(requestContext = {}, referenceEvidence = {}) {
-  const slots = buildWikiCoverageSlots(requestContext);
-  const haystack = evidenceHaystack(referenceEvidence);
-  const coveredSlots = [];
-  const missingSlots = [];
-  const slotEvidence = {};
   const items = evidenceItems(referenceEvidence);
-  for (const slot of slots) {
-    const matchedItems = items
-      .filter((item) => matchesAny(toStringValue(item).toLowerCase(), slot.patterns))
-      .slice(0, 4);
-    if (matchedItems.length > 0 || matchesAny(haystack, slot.patterns)) {
-      coveredSlots.push(slot.name);
-      slotEvidence[slot.name] = matchedItems;
-    } else {
-      missingSlots.push(slot.name);
-    }
-  }
-  const ready = slots.length > 0
-    ? missingSlots.length === 0
-    : Boolean(
-        referenceEvidence.hasVerifiedCodeEvidence
-        || Number(referenceEvidence.apiEvidenceCount || 0) > 0
-        || Number(referenceEvidence.methodSourceCount || 0) > 0,
-      );
+  const workflowMissingSlots = Array.isArray(referenceEvidence.workflowMissingSlots)
+    ? referenceEvidence.workflowMissingSlots.map((item) => toStringValue(item)).filter(Boolean)
+    : [];
+  const requiredSymbols = uniqueStrings(
+    Array.isArray(referenceEvidence.workflowRequiredSymbols) ? referenceEvidence.workflowRequiredSymbols : [],
+    80,
+  );
+  const concreteFacts = (Array.isArray(referenceEvidence.evidenceFacts) ? referenceEvidence.evidenceFacts : [])
+    .filter((item) => /::\s*\S/.test(toStringValue(item)));
+  const coveredRequiredSymbols = requiredSymbols
+    .filter((symbol) => evidenceCoversSymbol(symbol, concreteFacts))
+    .slice(0, 24);
+  const missingRequiredSymbols = requiredSymbols
+    .filter((symbol) => !coveredRequiredSymbols.some((covered) => canonicalSymbol(covered) === canonicalSymbol(symbol)))
+    .slice(0, 24);
+  const expectedSlots = [
+    ...(requiredSymbols.length > 0 ? ['workflow_required_symbols'] : []),
+    ...(workflowMissingSlots.length > 0 ? ['workflow_missing_slots'] : []),
+    ...(items.length > 0 ? ['collected_evidence_facts'] : []),
+  ];
+  const coveredSlots = [
+    ...(coveredRequiredSymbols.length > 0 ? ['workflow_required_symbols'] : []),
+    ...(workflowMissingSlots.length === 0 && Number(referenceEvidence.workflowSourceCount || 0) > 0 ? ['workflow_missing_slots'] : []),
+    ...(items.length > 0 ? ['collected_evidence_facts'] : []),
+  ];
+  const missingSlots = [
+    ...workflowMissingSlots,
+    ...missingRequiredSymbols.slice(0, 8),
+  ];
+  const ready = Boolean(
+    referenceEvidence.hasVerifiedCodeEvidence
+    && workflowMissingSlots.length === 0
+    && missingRequiredSymbols.length === 0
+    && Number(referenceEvidence.lastStepNewEvidenceCount || 0) > 0,
+  );
   return {
     ready,
-    expectedSlots: slots.map((slot) => slot.name),
+    expectedSlots,
     coveredSlots,
     missingSlots,
-    slotEvidence,
+    slotEvidence: {
+      workflow_required_symbols: coveredRequiredSymbols.slice(0, 8),
+      collected_evidence_facts: items.slice(0, 8),
+    },
   };
 }
 
@@ -166,10 +127,10 @@ function deriveLoopControlState({
     || Number(referenceEvidence.docResultCount || 0) >= 3,
   );
   const wikiEvidenceCoverage = evaluateWikiEvidenceCoverage(requestContext, referenceEvidence);
-  const wikiEvidenceReady = Boolean(
+  const evidenceStalled = Boolean(
     isWikiMode
-    && hasUsableWikiEvidence
-    && wikiEvidenceCoverage.ready,
+    && Number(referenceEvidence.searchCount || 0) >= 2
+    && Number(referenceEvidence.lastStepNewEvidenceCount || 0) === 0
   );
   const wikiSearchBudgetReached = Boolean(
     isWikiMode
@@ -177,6 +138,7 @@ function deriveLoopControlState({
     && (
       Number(referenceEvidence.searchCount || 0) >= 8
       || (turn >= 7 && Number(referenceEvidence.docResultCount || 0) > 0)
+      || evidenceStalled
     ),
   );
   const workflowEvidenceComplete = Boolean(
@@ -192,9 +154,8 @@ function deriveLoopControlState({
   const workflowAnswerLocked = Boolean(
     !requiresWorkspaceArtifact
     && (
-      (turn >= 2 && wikiEvidenceReady)
-      || (turn >= 4 && workflowEvidenceComplete && wikiEvidenceCoverage.expectedSlots.length === 0)
-      || wikiSearchBudgetReached
+      wikiSearchBudgetReached
+      || (turn >= 5 && workflowEvidenceComplete && Number(referenceEvidence.lastStepNewEvidenceCount || 0) === 0)
     ),
   );
 
