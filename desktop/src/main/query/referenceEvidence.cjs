@@ -173,9 +173,20 @@ function collectEvidencePackPages(pack = {}) {
     append(item);
   }
   for (const item of Array.isArray(pack.method_declarations) ? pack.method_declarations : []) {
+    const sourceSnippetText = (Array.isArray(item?.source_snippets) ? item.source_snippets : [])
+      .map((snippet) => [
+        snippet?.path ? `Source snippet: ${snippet.path}:${snippet.line_range || ''}` : '',
+        snippet?.content || '',
+      ].filter(Boolean).join('\n'))
+      .filter(Boolean)
+      .join('\n\n');
     append({
       path: item?.path,
-      content: item?.content,
+      content: [
+        item?.content,
+        item?.declaration ? `Verified declaration: ${item.declaration}` : '',
+        sourceSnippetText,
+      ].filter(Boolean).join('\n\n'),
       kind: 'method',
       summary: item?.title || item?.symbol,
     }, 'method');

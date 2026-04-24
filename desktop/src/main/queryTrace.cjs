@@ -223,14 +223,33 @@ function summarizeEvidencePackPayload(pack, maxChars = 16000) {
         }))
       : [],
     method_declarations: Array.isArray(pack.method_declarations)
-      ? pack.method_declarations.slice(0, 14).map((item) => ({
-          symbol: item?.symbol || '',
-          title: item?.title || '',
-          path: item?.path || '',
-          reason: item?.reason || '',
-          declarations: Array.isArray(item?.declarations) ? item.declarations.slice(0, 4) : [],
-          content: String(item?.content || '').slice(0, Math.min(900, maxChars)),
-        }))
+      ? pack.method_declarations.slice(0, 14).map((item) => {
+          const sourceRefs = Array.isArray(item?.source_refs)
+            ? item.source_refs.slice(0, 4).map((sourceRef) => ({
+                path: sourceRef?.path || '',
+                line_range: sourceRef?.line_range || '',
+              }))
+            : [];
+          const sourceSnippets = Array.isArray(item?.source_snippets)
+            ? item.source_snippets.slice(0, 3).map((snippet) => ({
+                path: snippet?.path || '',
+                line_range: snippet?.line_range || '',
+                role: snippet?.role || '',
+                content: String(snippet?.content || '').slice(0, Math.min(1200, maxChars)),
+              }))
+            : [];
+          return {
+            symbol: item?.symbol || '',
+            title: item?.title || '',
+            path: item?.path || '',
+            reason: item?.reason || '',
+            declaration: String(item?.declaration || '').slice(0, 800),
+            source_refs: sourceRefs,
+            source_snippets: sourceSnippets,
+            declarations: Array.isArray(item?.declarations) ? item.declarations.slice(0, 4) : [],
+            content: String(item?.content || '').slice(0, Math.min(900, maxChars)),
+          };
+        })
       : [],
     source_anchors: Array.isArray(pack.source_anchors) ? pack.source_anchors.slice(0, 32) : [],
     answer_rules: Array.isArray(pack.answer_rules) ? pack.answer_rules.slice(0, 8) : [],

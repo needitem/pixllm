@@ -73,6 +73,19 @@ function evaluateFinalAnswerState({
   groundedPaths = [],
   describeTool = () => null,
 } = {}) {
+  if (toStringValue(requestContext?.mode) === 'wiki') {
+    return {
+      ok: true,
+      type: 'final',
+      details: {
+        postAnswerValidationSkipped: true,
+        reason: 'wiki_mode_uses_evidence_first_pack',
+        referenceEvidence: summarizeWikiEvidence(trace),
+        groundingWarnings: [],
+      },
+    };
+  }
+
   const policyResult = evaluateFinalAnswerPolicy({
     requestContext,
     trace,

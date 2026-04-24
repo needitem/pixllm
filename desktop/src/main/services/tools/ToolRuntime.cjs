@@ -132,13 +132,40 @@ function summarizeEvidencePackForModel(pack = {}) {
     lines.push('method_declarations:');
     for (const item of methodDeclarations.slice(0, 10)) {
       const symbol = toStringValue(item?.symbol || item?.title || item?.path);
-      const declaration = Array.isArray(item?.declarations) && item.declarations.length > 0
+      const declaration = toStringValue(item?.declaration) || (Array.isArray(item?.declarations) && item.declarations.length > 0
         ? item.declarations.map((value) => toStringValue(value)).filter(Boolean).join(' | ')
-        : clipModelText(item?.content || '', 260).replace(/\s+/g, ' ');
+        : clipModelText(item?.content || '', 260).replace(/\s+/g, ' '));
       if (symbol || declaration) {
         lines.push(`- ${[symbol, declaration].filter(Boolean).join(' :: ')}`);
       }
+      const sourceRefs = Array.isArray(item?.source_refs)
+        ? item.source_refs
+          .slice(0, 4)
+          .map((sourceRef) => `${toStringValue(sourceRef?.path)}:${toStringValue(sourceRef?.line_range)}`.replace(/:$/, ''))
+          .filter(Boolean)
+        : [];
+      if (sourceRefs.length > 0) {
+        lines.push(`  source_refs: ${sourceRefs.join(', ')}`);
+      }
+      for (const snippet of (Array.isArray(item?.source_snippets) ? item.source_snippets : []).slice(0, 2)) {
+        const snippetPath = toStringValue(snippet?.path);
+        const snippetRange = toStringValue(snippet?.line_range);
+        const role = toStringValue(snippet?.role);
+        const content = clipModelText(snippet?.content || '', 1000);
+        if (!content) {
+          continue;
+        }
+        lines.push(`  source_snippet${role ? `(${role})` : ''}: ${snippetPath}${snippetRange ? `:${snippetRange}` : ''}`);
+        lines.push(content);
+      }
     }
+  }
+
+  const answerRules = Array.isArray(pack.answer_rules)
+    ? pack.answer_rules.map((item) => toStringValue(item)).filter(Boolean)
+    : [];
+  if (answerRules.length > 0) {
+    lines.push(`answer_rules: ${answerRules.slice(0, 8).join('; ')}`);
   }
 
   const bundlePages = Array.isArray(pack.bundle_pages) ? pack.bundle_pages : [];

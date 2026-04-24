@@ -2,9 +2,9 @@ import re
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
-from .methods_index import build_method_page_results_for_root, load_methods_index_for_root
+from .methods_index import build_method_page_results_for_root, load_methods_index_for_root, _read_source_text
 from .wiki_bundle import _extract_section_yaml
-from .wiki_core import _SOURCE_ANCHOR_RE
+from .wiki_core import _SOURCE_ANCHOR_RE, raw_source_root
 from .wiki_manifest import _load_runtime_manifest_for_root, _resolve_method_records_for_symbols
 from .wiki_pages import _page_payload
 
@@ -15,8 +15,11 @@ _BACKTICK_RE = re.compile(r"`([^`]{2,160})`")
 _WORKFLOW_CONTENT_LIMIT = 5600
 _BUNDLE_CONTENT_LIMIT = 1600
 _METHOD_CONTENT_LIMIT = 1200
+_METHOD_SOURCE_SNIPPET_LIMIT = 2200
 _MAX_BUNDLE_PAGES = 4
 _MAX_METHOD_DECLARATIONS = 14
+_MAX_SOURCE_SNIPPETS_PER_METHOD = 3
+_SOURCE_TEXT_CACHE: Dict[str, Dict[str, Any]] = {}
 
 _BUNDLE_RELATION_PRIORITY = {
     "family_howto": 0,
@@ -56,6 +59,82 @@ def _clip_text(value: str, limit: int) -> str:
     if len(text) <= limit:
         return text
     return f"{text[: max(0, limit - 15)]}\n...[truncated]"
+
+
+def _parse_start_line(line_range: str) -> int:
+    match = re.match(r"^\s*(\d+)", str(line_range or ""))
+    if not match:
+        return 0
+    return max(1, int(match.group(1) or 0))
+
+
+def _source_file_for_ref(source_path: str) -> Optional[Path]:
+    normalized = str(source_path or "").strip().replace("\\", "/")
+    if not normalized.startswith("Source/"):
+        return None
+    relative = normalized[len("Source/") :]
+    if not relative or relative.startswith("/") or relative == ".." or relative.startswith("../"):
+        return None
+    return raw_source_root() / PurePosixPath(relative).as_posix()
+
+
+def _source_lines(target: Path) -> List[str]:
+    try:
+        stat = target.stat()
+    except OSError:
+        return []
+    cache_key = target.resolve().as_posix()
+    cached = _SOURCE_TEXT_CACHE.get(cache_key)
+    if cached and cached.get("mtime") == stat.st_mtime:
+        return cached.get("lines") if isinstance(cached.get("lines"), list) else []
+    try:
+        lines = _read_source_text(target).splitlines()
+    except Exception:
+        lines = []
+    _SOURCE_TEXT_CACHE[cache_key] = {"mtime": stat.st_mtime, "lines": lines}
+    if len(_SOURCE_TEXT_CACHE) > 64:
+        _SOURCE_TEXT_CACHE.pop(next(iter(_SOURCE_TEXT_CACHE)), None)
+    return lines
+
+
+def _source_snippet_from_ref(source_ref: Dict[str, Any], *, role: str) -> Optional[Dict[str, Any]]:
+    source_path = str(source_ref.get("path") or "").strip().replace("\\", "/")
+    start_line = _parse_start_line(str(source_ref.get("line_range") or ""))
+    target = _source_file_for_ref(source_path)
+    if not target or start_line <= 0 or not target.exists() or not target.is_file():
+        return None
+    lines = _source_lines(target)
+    if not lines:
+        return None
+
+    before = 6 if role == "declaration" else 0
+    after = 8 if role == "declaration" else 32
+    start_index = max(0, start_line - 1 - before)
+    end_index = min(len(lines), start_line - 1 + after + 1)
+    rendered = "\n".join(
+        f"{index + 1}: {lines[index]}"
+        for index in range(start_index, end_index)
+    )
+    return {
+        "path": source_path,
+        "line_range": f"{start_index + 1}-{end_index}",
+        "role": role,
+        "content": _clip_text(rendered, _METHOD_SOURCE_SNIPPET_LIMIT),
+    }
+
+
+def _source_snippets_for_record(record: Dict[str, Any]) -> List[Dict[str, Any]]:
+    snippets: List[Dict[str, Any]] = []
+    for index, source_ref in enumerate(record.get("source_refs") if isinstance(record.get("source_refs"), list) else []):
+        if not isinstance(source_ref, dict):
+            continue
+        role = "declaration" if index == 0 else "implementation"
+        snippet = _source_snippet_from_ref(source_ref, role=role)
+        if snippet:
+            snippets.append(snippet)
+        if len(snippets) >= _MAX_SOURCE_SNIPPETS_PER_METHOD:
+            break
+    return snippets
 
 
 def _unique_strings(values: Iterable[str], *, limit: int = 64) -> List[str]:
@@ -142,11 +221,36 @@ def _prioritize_method_tokens(tokens: Sequence[str], query: str) -> List[str]:
 def _method_payload_from_record(record: Dict[str, Any], *, reason: str) -> Dict[str, Any]:
     text = str(record.get("text") or "")
     qualified_symbol = str(record.get("qualified_symbol") or "").strip()
+    declaration = str(record.get("declaration") or "").strip()
+    raw_source_refs = record.get("source_refs") if isinstance(record.get("source_refs"), list) else []
+    source_refs = [
+        {
+            "path": str(item.get("path") or "").strip(),
+            "line_range": str(item.get("line_range") or "").strip(),
+        }
+        for item in raw_source_refs
+        if isinstance(item, dict) and str(item.get("path") or "").strip()
+    ]
     declaration_lines = [
         line.strip()
         for line in text.splitlines()
         if line.strip().lower().startswith(("- declaration:", "- implementation:"))
     ]
+    source_snippets = _source_snippets_for_record(record)
+    content_lines = [text]
+    if declaration:
+        content_lines.append(f"- Verified declaration: `{declaration}`")
+    for snippet in source_snippets:
+        content_lines.append(
+            "\n".join(
+                [
+                    f"- Source snippet ({snippet.get('role')}): `{snippet.get('path')}:{snippet.get('line_range')}`",
+                    "```",
+                    str(snippet.get("content") or ""),
+                    "```",
+                ]
+            )
+        )
     return {
         "symbol": qualified_symbol,
         "member_name": str(record.get("member_name") or "").strip(),
@@ -154,14 +258,27 @@ def _method_payload_from_record(record: Dict[str, Any], *, reason: str) -> Dict[
         "title": str(record.get("heading_path") or qualified_symbol).strip(),
         "path": f".runtime/methods_index.json#{qualified_symbol}" if qualified_symbol else ".runtime/methods_index.json",
         "reason": reason,
+        "declaration": declaration,
+        "source_refs": source_refs,
+        "source_snippets": source_snippets,
         "declarations": declaration_lines[:4],
-        "content": _clip_text(text, _METHOD_CONTENT_LIMIT),
+        "content": _clip_text("\n".join(content_lines), _METHOD_CONTENT_LIMIT),
     }
 
 
-def _method_payload_from_search_result(result: Dict[str, Any], *, reason: str) -> Dict[str, Any]:
+def _method_payload_from_search_result(
+    result: Dict[str, Any],
+    *,
+    reason: str,
+    methods_index: Sequence[Dict[str, Any]],
+) -> Dict[str, Any]:
     path_value = str(result.get("path") or "").strip()
     symbol = path_value.split("#", 1)[1].strip() if "#" in path_value else ""
+    records = _resolve_method_records_for_symbols([symbol], methods_index)
+    if records:
+        payload = _method_payload_from_record(records[0], reason=reason)
+        payload["score"] = int(result.get("score") or 0)
+        return payload
     text = str(result.get("content") or result.get("excerpt") or "")
     declaration_lines = [
         line.strip()
@@ -174,6 +291,9 @@ def _method_payload_from_search_result(result: Dict[str, Any], *, reason: str) -
         "path": path_value,
         "reason": reason,
         "score": int(result.get("score") or 0),
+        "declaration": "",
+        "source_refs": [],
+        "source_snippets": [],
         "declarations": declaration_lines[:4],
         "content": _clip_text(text, _METHOD_CONTENT_LIMIT),
     }
@@ -235,7 +355,15 @@ def _build_method_declarations(
         if len(output) >= _MAX_METHOD_DECLARATIONS:
             break
         for result in build_method_page_results_for_root(root, query=term, limit=3, include_content=True):
-            _append_method_payload(output, seen, _method_payload_from_search_result(result, reason="method_search"))
+            _append_method_payload(
+                output,
+                seen,
+                _method_payload_from_search_result(
+                    result,
+                    reason="method_search",
+                    methods_index=methods_index,
+                ),
+            )
             if len(output) >= _MAX_METHOD_DECLARATIONS:
                 break
     return output
@@ -328,6 +456,12 @@ def build_workflow_evidence_pack(
                 for method_item in method_declarations
                 for anchor in _SOURCE_ANCHOR_RE.findall(str(method_item.get("content") or ""))
             ],
+            *[
+                f"{snippet.get('path')}:{_parse_start_line(str(snippet.get('line_range') or ''))}"
+                for method_item in method_declarations
+                for snippet in (method_item.get("source_snippets") if isinstance(method_item.get("source_snippets"), list) else [])
+                if isinstance(snippet, dict) and str(snippet.get("path") or "").strip()
+            ],
         ],
         limit=48,
     )
@@ -353,8 +487,10 @@ def build_workflow_evidence_pack(
         "answer_rules": [
             "Use the workflow as the routing authority.",
             "Use bundled pages for procedural context.",
-            "Use method_declarations as the signature allowlist for code examples.",
-            "If required signatures are absent from this pack, state the missing detail as unverified.",
+            "Use method_declarations.declaration and source_snippets as the signature and behavior allowlist for code examples.",
+            "Preserve ref/out/% parameters, property-vs-method form, and enum names exactly as shown in declarations.",
+            "Do not infer side effects, default layer choice, active/front behavior, convenience overloads, or object relationships unless source_snippets or declarations show them.",
+            "If required signatures or behavior are absent from this pack, state the missing detail as unverified instead of guessing.",
         ],
     }
 
