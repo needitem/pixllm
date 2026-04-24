@@ -78,24 +78,8 @@ def _build_workflow_manifest_entry(
     )
     frontmatter_symbols = _normalize_string_list(meta.get("symbols"))
     required_symbols = _normalize_string_list(required_section.get("required_symbols"))
-    required_facts: List[Dict[str, Any]] = []
-    for item in required_section.get("required_facts") if isinstance(required_section.get("required_facts"), list) else []:
-        if not isinstance(item, dict):
-            continue
-        symbol = str(item.get("symbol") or "").strip()
-        if not symbol:
-            continue
-        required_facts.append(
-            {
-                "symbol": symbol,
-                "declaration": str(item.get("declaration") or "").strip() or None,
-                "declaration_candidates": item.get("declaration_candidates") if isinstance(item.get("declaration_candidates"), list) else None,
-                "source": str(item.get("source") or "").strip() or None,
-            }
-        )
-    explicit_symbols = _normalize_string_list([item.get("symbol") for item in required_facts if isinstance(item, dict)], limit=64)
     linked_records = _resolve_method_records_for_symbols(
-        [*explicit_symbols, *required_symbols],
+        required_symbols,
         methods_index,
     )
     route_terms = _normalize_string_list(
@@ -131,7 +115,6 @@ def _build_workflow_manifest_entry(
         "workflow_family": str(required_section.get("workflow_family") or "").strip(),
         "output_shape": str(required_section.get("output_shape") or "").strip(),
         "required_symbols": required_symbols,
-        "required_facts": required_facts,
         "verification_rules": _normalize_string_list(required_section.get("verification_rules")),
         "forbidden_answer_patterns": _normalize_string_list(required_section.get("forbidden_answer_patterns"), limit=64),
         "concept_terms": knowledge_bundle.get("concept_terms") if isinstance(knowledge_bundle.get("concept_terms"), list) else [],

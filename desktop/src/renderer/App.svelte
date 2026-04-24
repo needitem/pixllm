@@ -117,7 +117,7 @@
     serverBaseUrl: 'http://192.168.2.238:8000/api',
     llmBaseUrl: '',
     workspacePath: '',
-    selectedModel: 'qwen3.5-27b',
+    selectedModel: 'Qwen/Qwen3.6-27B',
     wikiId: 'engine',
     engineQuestionDefault: true,
     recentWorkspaces: []
@@ -948,7 +948,7 @@
           workspacePath: settings.workspacePath || '',
           prompt,
           engineQuestionOverride: engineQuestionChecked,
-          model: settings.selectedModel || 'qwen3.5-27b',
+          model: settings.selectedModel || 'Qwen/Qwen3.6-27B',
           baseUrl: settings.llmBaseUrl || settings.serverBaseUrl,
           serverBaseUrl: settings.serverBaseUrl,
           llmBaseUrl: settings.llmBaseUrl,
@@ -1831,7 +1831,7 @@
               </label>
               <label class="field">
                 <span>Chat Model</span>
-                <input bind:value={settingsForm.selectedModel} placeholder="qwen3.5-27b" />
+                <input bind:value={settingsForm.selectedModel} placeholder="Qwen/Qwen3.6-27B" />
               </label>
               <label class="field">
                 <span>LLM Wiki ID</span>

@@ -16,7 +16,7 @@ verification_rules:
 - `backend/.profiles/wiki/raw_source/source` is the canonical immutable raw source tree for runtime methods ingest and future curated ingest work.
 - Current answers must be grounded from the `engine` wiki only. The raw source tree is not queried directly yet.
 - `.runtime/methods_index.json` holds the generated symbol verification index with declaration and implementation anchors.
-- `workflows/wf-api-*.md` hold canonical API-family workflows with source-backed `required_facts` blocks for signature-sensitive answers.
+- `workflows/wf-api-*.md` hold canonical API-family workflows with source-backed `required_symbols` for signature-sensitive answers.
 - `pages/howtos/` holds user-task recipes that capture common "how do I do X" questions.
 - `pages/concepts/` holds reusable concept pages that explain cross-cutting ideas such as screen/world transforms, layer/composite pipelines, and provider/dataset boundaries.
 - `pages/` holds coordination pages plus the curated how-to and concept layers.
@@ -32,7 +32,7 @@ verification_rules:
 ## Operating Model
 - Prefer API-family workflow pages first when answering usage and implementation questions.
 - Treat API-family workflows as hub pages. A good answer should usually read the workflow plus its related how-to, concept, and source pages rather than relying on the workflow alone.
-- Use workflow `required_facts` to constrain overloads, enum literals, and `ref/out` directions.
+- Use workflow `required_symbols` and the runtime methods index to constrain overloads, enum literals, and `ref/out` directions.
 - Use methods pages to verify exact symbol existence, call shape, and source anchors.
 - When a stable answer captures a reusable task pattern, prefer filing it back into `pages/howtos/` or `pages/analyses/` so the wiki compounds over time.
 - Do not read directly from `raw_source/source` when answering. If the answer is missing from the wiki, leave the ingest gap visible in TODO pages instead of silently switching to raw code.

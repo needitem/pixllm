@@ -1,4 +1,4 @@
-﻿---
+---
 title: VideoView API Workflow
 description: Open video, bind channels, capture frames, extract KLV, and explain embedded video-layer handling.
 aliases:
@@ -142,40 +142,6 @@ required_symbols:
   - NXImageLayerVideo.SetInitialFrameSize
   - NXImageLayerVideo.ScreenToWorld
   - NXImageLayerVideo.WorldToScreen
-required_facts:
-  - symbol: XVideoIO.OpenFile
-    declaration: 'NXVideo::XVideo^ OpenFile(String^ strFilePath, String^ strDriverName, [OutAttribute] String^% strError);'
-    source: 'Source/NXVideo/XVideoIO.h:432'
-  - symbol: NXVideoView.SetVideoChannel
-    declaration: 'bool SetVideoChannel(XVideo^ video, int channelIndex);'
-    source: 'Source/NXVideo/NXVideoView.h:351'
-  - symbol: NXVideoView.ResetVideoChannel
-    declaration: 'void ResetVideoChannel();'
-    source: 'Source/NXVideo/NXVideoView.h:359'
-  - symbol: NXVideoView.RefreshScreen
-    declaration: 'bool RefreshScreen();'
-    source: 'Source/NXVideo/NXVideoView.h:193'
-  - symbol: NXVideoView.RequestRender
-    declaration: 'void RequestRender(UInt64 requestID);'
-    source: 'Source/NXVideo/NXVideoView.h:198'
-  - symbol: NXVideoView.AddRenderLayer
-    declaration: 'bool AddRenderLayer(NXVideoLayer^ layer);'
-    source: 'Source/NXVideo/NXVideoView.h:218'
-  - symbol: NXVideoView.CaptureFrame
-    declaration: 'cli::array<XTexture^>^ CaptureFrame(bool bPrimaryOnly);'
-    source: 'Source/NXVideo/NXVideoView.h:381'
-  - symbol: NXMpegTSAnalysis.GetKLVMetaData
-    declaration: 'bool GetKLVMetaData(cli::array<unsigned char>^ packet_data, int length, [OutAttribute] cli::array<unsigned char>^% meta_data);'
-    source: 'Source/NXVideo/NXMpegTSAnalysis.h:41'
-  - symbol: NXImageLayerVideo.SetVideoChannel
-    declaration: 'void SetVideoChannel(XVideoChannel^ channel);'
-    source: 'Source/NXVideo/NXImageLayerVideo.h:61'
-  - symbol: NXImageLayerVideo.ResetVideoChannel
-    declaration: 'void ResetVideoChannel();'
-    source: 'Source/NXVideo/NXImageLayerVideo.h:64'
-  - symbol: NXImageLayerVideo.SetInitialFrameSize
-    declaration: 'void SetInitialFrameSize(int width, int height);'
-    source: 'Source/NXVideo/NXImageLayerVideo.h:71'
 verification_rules:
   - use_this_workflow_as_primary_path
   - verify_method_vs_property_form

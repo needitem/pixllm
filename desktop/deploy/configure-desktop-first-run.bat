@@ -4,7 +4,7 @@ setlocal
 rem Ship this file next to the portable exe before first launch.
 if not defined SERVER_BASE_URL set "SERVER_BASE_URL=http://192.168.2.238:8000/api"
 if not defined LLM_BASE_URL set "LLM_BASE_URL="
-if not defined SELECTED_MODEL set "SELECTED_MODEL=qwen3.5-27b"
+if not defined SELECTED_MODEL set "SELECTED_MODEL=Qwen/Qwen3.6-27B"
 if not defined WORKSPACE_PATH set "WORKSPACE_PATH="
 if not defined SET_USER_ENVIRONMENT set "SET_USER_ENVIRONMENT=0"
 

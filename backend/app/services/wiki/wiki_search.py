@@ -1,35 +1,34 @@
+from ... import config
 from .wiki_core import *  # noqa: F401,F403
 from .wiki_manifest import _load_runtime_manifest_for_root
 from .wiki_pages import _page_payload
 
-_EXPLICIT_FAMILY_HINT_PATTERNS: Sequence[Tuple[str, Sequence[str]]] = (
-    ("api_videoview", ("videoview", "nxvideoview", "비디오 레이어", "동영상 채널", "klv")),
-    ("api_imageview", ("imageview", "nximageview")),
-    ("api_milmapview", ("milmapview", "milmap")),
-    ("api_planetview", ("planetview", "planet 엔진")),
-    ("api_scene_editor", ("scene 파일", "scene 객체", "scene 선택", "scene object", "scene editor", "scene")),
-    ("api_editor", ("편집 화면", "canvas editor", "canvas")),
-    ("api_dfs", ("dfs", "pbi", "pbe", "provider export")),
-    ("api_vector", ("벡터", "vector", "shp")),
-    ("api_raster", ("xrasterio", "xdm", "래스터", "raster")),
-    ("api_coordinate", ("좌표계", "epsg", "utm", "mgrs", "georef", "wkt", "proj4")),
-    ("api_sensor_model", ("sensor model", "영상 좌표", "image to ground", "ground to image")),
-    ("api_uspaceview", ("uspaceview", "uspace view")),
-    ("api_core", ("license", "라이선스", "config path", "설정 경로")),
-)
 _QUERY_ROUTER_TOKEN_CACHE: Dict[str, Dict[str, Any]] = {}
 _QUERY_ROUTER_TOKEN_CACHE_LIMIT = 128
-_EXPLICIT_FAMILY_HINT_CACHE: Dict[str, List[str]] = {}
-_PRIORITY_FAMILY_HINT_CACHE: Dict[str, List[str]] = {}
-_QUERY_HINT_CACHE_LIMIT = 128
-
-
-def _store_hint_cache(cache: Dict[str, List[str]], key: str, value: List[str]) -> List[str]:
-    cache[key] = list(value)
-    while len(cache) > _QUERY_HINT_CACHE_LIMIT:
-        oldest_key = next(iter(cache))
-        cache.pop(oldest_key, None)
-    return list(value)
+_WORKFLOW_ENTRY_PROFILE_CACHE: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
+_WORKFLOW_ENTRY_PROFILE_CACHE_LIMIT = 4096
+_WORKFLOW_FAMILY_RANK_MARGIN = max(0, int(getattr(config, "WORKFLOW_FAMILY_RANK_MARGIN", 18) or 18))
+_WORKFLOW_FAMILY_COUNT_SCORE_WEIGHTS: Tuple[Tuple[str, int], ...] = (
+    ("routing_hint_match_count", 40),
+    ("exact_name_match_count", 24),
+    ("exact_route_match_count", 18),
+    ("bundle_overlap_count", 14),
+    ("semantic_overlap_count", 8),
+)
+_WORKFLOW_FAMILY_BOOL_SCORE_WEIGHTS: Tuple[Tuple[str, int], ...] = (
+    ("symbol_match", 20),
+    ("bundle_match", 14),
+    ("semantic_match", 10),
+    ("family_literal_match", 8),
+    ("route_term_match", 6),
+)
+_WORKFLOW_FAMILY_PRIORITY_FIELDS = (
+    "routing_hint_match_count",
+    "exact_name_match_count",
+    "exact_route_match_count",
+    "bundle_overlap_count",
+    "symbol_match",
+)
 
 def _build_excerpt(content: str, query: str, limit: int = 420) -> str:
     source = str(content or "")
@@ -69,6 +68,81 @@ def _expand_manifest_match_tokens(values: Iterable[str]) -> List[str]:
     return _compact_values(expanded)
 
 
+def _manifest_string_list(value: Any) -> Tuple[str, ...]:
+    if not isinstance(value, list):
+        return ()
+    return tuple(str(item or "").strip() for item in value if str(item or "").strip())
+
+
+def _manifest_routing_hints(value: Any) -> Tuple[Tuple[Tuple[str, ...], Tuple[str, ...]], ...]:
+    if not isinstance(value, list):
+        return ()
+    hints: List[Tuple[Tuple[str, ...], Tuple[str, ...]]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        all_of = _manifest_string_list(item.get("all_of"))
+        any_of = _manifest_string_list(item.get("any_of"))
+        if all_of or any_of:
+            hints.append((all_of, any_of))
+    return tuple(hints)
+
+
+def _store_workflow_entry_profile_cache(key: Tuple[Any, ...], payload: Dict[str, Any]) -> Dict[str, Any]:
+    _WORKFLOW_ENTRY_PROFILE_CACHE[key] = payload
+    while len(_WORKFLOW_ENTRY_PROFILE_CACHE) > _WORKFLOW_ENTRY_PROFILE_CACHE_LIMIT:
+        oldest_key = next(iter(_WORKFLOW_ENTRY_PROFILE_CACHE))
+        _WORKFLOW_ENTRY_PROFILE_CACHE.pop(oldest_key, None)
+    return payload
+
+
+def _workflow_entry_match_profile(entry: Dict[str, Any]) -> Dict[str, Any]:
+    path_value = str(entry.get("path") or "").strip()
+    title = str(entry.get("title") or "").strip()
+    summary = str(entry.get("summary") or "").strip()
+    family = str(entry.get("workflow_family") or "").strip()
+    aliases = _manifest_string_list(entry.get("aliases"))
+    route_terms = _manifest_string_list(entry.get("route_terms"))
+    symbols = _manifest_string_list(entry.get("symbols"))
+    linked_method_symbols = _manifest_string_list(entry.get("linked_method_symbols"))
+    semantic_terms = _manifest_string_list(entry.get("semantic_terms"))
+    bundle_page_titles = _manifest_string_list(entry.get("bundle_page_titles"))
+    bundle_page_summaries = _manifest_string_list(entry.get("bundle_page_summaries"))
+    routing_hints = _manifest_routing_hints(entry.get("routing_hints"))
+    cache_key = (
+        path_value,
+        title,
+        summary,
+        family,
+        aliases,
+        route_terms,
+        symbols,
+        linked_method_symbols,
+        semantic_terms,
+        bundle_page_titles,
+        bundle_page_summaries,
+        routing_hints,
+    )
+    cached = _WORKFLOW_ENTRY_PROFILE_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    path_stem = PurePosixPath(path_value).stem
+    payload = {
+        "family": family,
+        "exact_candidates": tuple(_compact_values([title, path_stem, *aliases])),
+        "route_compacts": tuple(_expand_manifest_match_tokens([title, path_stem, family, *aliases, *route_terms, *symbols, *linked_method_symbols])),
+        "symbol_compacts": tuple(_expand_manifest_match_tokens([*symbols, *linked_method_symbols])),
+        "semantic_compacts": tuple(_expand_manifest_match_tokens([title, summary, *semantic_terms, *bundle_page_titles, *bundle_page_summaries])),
+        "bundle_compacts": tuple(_expand_manifest_match_tokens([*bundle_page_titles, *bundle_page_summaries])),
+        "semantic_terms": semantic_terms,
+        "bundle_page_titles": bundle_page_titles,
+        "bundle_page_summaries": bundle_page_summaries,
+        "routing_hints": routing_hints,
+    }
+    return _store_workflow_entry_profile_cache(cache_key, payload)
+
+
 def _query_router_tokens(query: str) -> Dict[str, Any]:
     raw_query = str(query or "").strip()
     cached = _QUERY_ROUTER_TOKEN_CACHE.get(raw_query)
@@ -94,69 +168,155 @@ def _query_router_tokens(query: str) -> Dict[str, Any]:
     return payload
 
 
-def _query_explicit_family_hints(query: str) -> List[str]:
-    lowered = str(query or "").strip().lower()
-    if not lowered:
+def _workflow_family_entry_score(flags: Dict[str, Any]) -> int:
+    return sum(
+        int(flags.get(name) or 0) * weight
+        for name, weight in _WORKFLOW_FAMILY_COUNT_SCORE_WEIGHTS
+    ) + sum(
+        weight if bool(flags.get(name)) else 0
+        for name, weight in _WORKFLOW_FAMILY_BOOL_SCORE_WEIGHTS
+    )
+
+
+def _manifest_family_score_table(
+    workflow_index: Sequence[Dict[str, Any]],
+    *,
+    query_info: Dict[str, Any],
+) -> Dict[str, Dict[str, int]]:
+    family_scores: Dict[str, Dict[str, int]] = {}
+    for entry in workflow_index:
+        if not isinstance(entry, dict):
+            continue
+        family = str(entry.get("workflow_family") or "").strip()
+        if not family:
+            continue
+        flags = _workflow_router_match_flags(entry, query_info)
+        if not (
+            bool(flags.get("exact_name_match"))
+            or bool(flags.get("route_term_match"))
+            or bool(flags.get("symbol_match"))
+            or bool(flags.get("bundle_match"))
+            or bool(flags.get("semantic_match"))
+            or bool(flags.get("family_literal_match"))
+            or int(flags.get("routing_hint_match_count") or 0) > 0
+        ):
+            continue
+        current = family_scores.setdefault(
+            family,
+            {
+                "score": 0,
+                "routing_hint_match_count": 0,
+                "exact_name_match_count": 0,
+                "exact_route_match_count": 0,
+                "bundle_overlap_count": 0,
+                "semantic_overlap_count": 0,
+                "symbol_match": 0,
+                "bundle_match": 0,
+                "semantic_match": 0,
+                "family_literal_match": 0,
+            },
+        )
+        current["score"] = max(current["score"], _workflow_family_entry_score(flags))
+        current["routing_hint_match_count"] = max(current["routing_hint_match_count"], int(flags.get("routing_hint_match_count") or 0))
+        current["exact_name_match_count"] = max(current["exact_name_match_count"], int(flags.get("exact_name_match_count") or 0))
+        current["exact_route_match_count"] = max(current["exact_route_match_count"], int(flags.get("exact_route_match_count") or 0))
+        current["bundle_overlap_count"] = max(current["bundle_overlap_count"], int(flags.get("bundle_overlap_count") or 0))
+        current["semantic_overlap_count"] = max(current["semantic_overlap_count"], int(flags.get("semantic_overlap_count") or 0))
+        current["symbol_match"] = max(current["symbol_match"], 1 if bool(flags.get("symbol_match")) else 0)
+        current["bundle_match"] = max(current["bundle_match"], 1 if bool(flags.get("bundle_match")) else 0)
+        current["semantic_match"] = max(current["semantic_match"], 1 if bool(flags.get("semantic_match")) else 0)
+        current["family_literal_match"] = max(current["family_literal_match"], 1 if bool(flags.get("family_literal_match")) else 0)
+    return family_scores
+
+
+def _ordered_manifest_family_scores(
+    family_scores: Dict[str, Dict[str, int]],
+) -> List[Tuple[str, Dict[str, int]]]:
+    return sorted(
+        family_scores.items(),
+        key=lambda item: (
+            -int(item[1]["score"]),
+            -int(item[1]["routing_hint_match_count"]),
+            -int(item[1]["exact_name_match_count"]),
+            -int(item[1]["exact_route_match_count"]),
+            -int(item[1]["bundle_overlap_count"]),
+            -int(item[1]["semantic_overlap_count"]),
+            item[0],
+        ),
+    )
+
+
+def _manifest_family_preferences(
+    root: Path,
+    *,
+    query: str,
+    workflow_index: Optional[Sequence[Dict[str, Any]]] = None,
+    rankings: Optional[Sequence[Dict[str, Any]]] = None,
+    limit: int = 6,
+) -> Dict[str, List[str]]:
+    preferred: List[str] = []
+    priority: List[str] = []
+    safe_limit = max(1, int(limit or 6))
+    if not isinstance(rankings, Sequence):
+        rankings = _manifest_family_rankings(
+            root,
+            query=query,
+            workflow_index=workflow_index,
+            limit=safe_limit,
+        )
+    for item in rankings:
+        if not isinstance(item, dict):
+            continue
+        family = str(item.get("family") or "").strip()
+        if not family:
+            continue
+        if len(preferred) < safe_limit:
+            preferred.append(family)
+        if (
+            any(int(item.get(field) or 0) > 0 for field in _WORKFLOW_FAMILY_PRIORITY_FIELDS)
+        ):
+            priority.append(family)
+        if len(preferred) >= safe_limit and len(priority) >= min(3, safe_limit):
+            break
+
+    return {
+        "preferred_families": preferred,
+        "priority_families": priority[: min(3, safe_limit)],
+    }
+
+
+def _manifest_family_rankings(
+    root: Path,
+    *,
+    query: str,
+    workflow_index: Optional[Sequence[Dict[str, Any]]] = None,
+    limit: int = 6,
+) -> List[Dict[str, Any]]:
+    if not isinstance(workflow_index, Sequence):
+        manifest = _load_runtime_manifest_for_root(root)
+        workflow_index = manifest.get("workflow_index") if isinstance(manifest.get("workflow_index"), list) else []
+    if not workflow_index:
         return []
-    cached = _EXPLICIT_FAMILY_HINT_CACHE.get(lowered)
-    if cached is not None:
-        return list(cached)
-    hints: List[str] = []
-    for family, patterns in _EXPLICIT_FAMILY_HINT_PATTERNS:
-        if any(pattern in lowered for pattern in patterns):
-            hints.append(family)
-    return _store_hint_cache(_EXPLICIT_FAMILY_HINT_CACHE, lowered, hints)
 
+    query_info = _query_router_tokens(query)
+    family_scores = _manifest_family_score_table(workflow_index, query_info=query_info)
+    ordered = _ordered_manifest_family_scores(family_scores)
 
-def _query_priority_family_hints(query: str) -> List[str]:
-    lowered = str(query or "").strip().lower()
-    if not lowered:
-        return []
-    cached = _PRIORITY_FAMILY_HINT_CACHE.get(lowered)
-    if cached is not None:
-        return list(cached)
-
-    def has_any(*parts: str) -> bool:
-        return any(part in lowered for part in parts)
-
-    if (
-        has_any("imageview", "milmapview", "planetview")
-        and has_any("비디오 레이어", "video layer", "동영상 채널", "채널 연결", "채널 해제", "초기 프레임", "동영상 프레임", "klv")
-    ):
-        families = ["api_videoview"]
-        if has_any("imageview"):
-            families.append("api_imageview")
-        if has_any("milmapview"):
-            families.append("api_milmapview")
-        if has_any("planetview"):
-            families.append("api_planetview")
-        return _store_hint_cache(_PRIORITY_FAMILY_HINT_CACHE, lowered, families)
-
-    if has_any("scene") and has_any("선택", "편집을 종료", "select none", "select all", "hit test", "scene object"):
-        return _store_hint_cache(_PRIORITY_FAMILY_HINT_CACHE, lowered, ["api_scene_editor"])
-
-    if has_any("dfs") and has_any("export", "진행률", "cancel"):
-        return _store_hint_cache(_PRIORITY_FAMILY_HINT_CACHE, lowered, ["api_dfs"])
-
-    if has_any("dfs", "provider group") and has_any("xdmcompmanager", "xdm comp manager", "xdmcompmanager를"):
-        return _store_hint_cache(_PRIORITY_FAMILY_HINT_CACHE, lowered, ["api_dfs"])
-
-    if has_any("합성 관리자", "comp manager", "compmanager", "합성 1 front", "합성 2 front"):
-        return _store_hint_cache(_PRIORITY_FAMILY_HINT_CACHE, lowered, ["api_imageview", "api_raster"])
-
-    if has_any("planetview", "planet 엔진") and has_any("shader", "cartoon", "sun follow"):
-        return _store_hint_cache(_PRIORITY_FAMILY_HINT_CACHE, lowered, ["api_planetview"])
-
-    if has_any("milmapview") and has_any("shader", "cartoon"):
-        return _store_hint_cache(_PRIORITY_FAMILY_HINT_CACHE, lowered, ["api_milmapview"])
-
-    if has_any("공간 좌표") and has_any("world 좌표", "화면 좌표", "screen 좌표"):
-        return _store_hint_cache(_PRIORITY_FAMILY_HINT_CACHE, lowered, ["api_uspaceview", "api_coordinate"])
-
-    if has_any("영상 중심점") and has_any("지도 좌표", "map coord"):
-        return _store_hint_cache(_PRIORITY_FAMILY_HINT_CACHE, lowered, ["api_sensor_model", "api_coordinate"])
-
-    return _store_hint_cache(_PRIORITY_FAMILY_HINT_CACHE, lowered, [])
+    results: List[Dict[str, Any]] = []
+    for family, stats in ordered[: max(1, int(limit or 6))]:
+        results.append(
+            {
+                "family": family,
+                "score": int(stats["score"]),
+                "routing_hint_match_count": int(stats["routing_hint_match_count"]),
+                "exact_name_match_count": int(stats["exact_name_match_count"]),
+                "exact_route_match_count": int(stats["exact_route_match_count"]),
+                "bundle_overlap_count": int(stats["bundle_overlap_count"]),
+                "semantic_overlap_count": int(stats["semantic_overlap_count"]),
+                "symbol_match": int(stats["symbol_match"]),
+            }
+        )
+    return results
 
 
 def _compact_query_matches(query_blob: str, query_compacts: Sequence[str], candidate: str) -> bool:
@@ -170,18 +330,16 @@ def _compact_query_matches(query_blob: str, query_compacts: Sequence[str], candi
     return False
 
 
-def _routing_hint_match_count(entry: Dict[str, Any], query_info: Dict[str, Any]) -> int:
-    hints = entry.get("routing_hints") if isinstance(entry.get("routing_hints"), list) else []
+def _routing_hint_match_count_from_hints(
+    hints: Sequence[Tuple[Sequence[str], Sequence[str]]],
+    query_info: Dict[str, Any],
+) -> int:
     if not hints:
         return 0
     query_blob = str(query_info.get("blob") or "")
     query_terms = query_info.get("semantic_tokens") if isinstance(query_info.get("semantic_tokens"), list) else []
     matched = 0
-    for item in hints:
-        if not isinstance(item, dict):
-            continue
-        all_of = [str(value or "").strip() for value in (item.get("all_of") if isinstance(item.get("all_of"), list) else []) if str(value or "").strip()]
-        any_of = [str(value or "").strip() for value in (item.get("any_of") if isinstance(item.get("any_of"), list) else []) if str(value or "").strip()]
+    for all_of, any_of in hints:
         all_match = all(_compact_query_matches(query_blob, query_terms, value) for value in all_of) if all_of else True
         any_match = any(_compact_query_matches(query_blob, query_terms, value) for value in any_of) if any_of else True
         if all_match and any_match:
@@ -189,24 +347,18 @@ def _routing_hint_match_count(entry: Dict[str, Any], query_info: Dict[str, Any])
     return matched
 
 
-def _workflow_router_match_flags(entry: Dict[str, Any], query_info: Dict[str, Any]) -> Dict[str, bool]:
-    path_value = str(entry.get("path") or "").strip()
-    title = str(entry.get("title") or "").strip()
-    aliases = [str(item or "").strip() for item in (entry.get("aliases") if isinstance(entry.get("aliases"), list) else []) if str(item or "").strip()]
-    route_terms = [str(item or "").strip() for item in (entry.get("route_terms") if isinstance(entry.get("route_terms"), list) else []) if str(item or "").strip()]
-    symbols = [str(item or "").strip() for item in (entry.get("symbols") if isinstance(entry.get("symbols"), list) else []) if str(item or "").strip()]
-    linked_method_symbols = [str(item or "").strip() for item in (entry.get("linked_method_symbols") if isinstance(entry.get("linked_method_symbols"), list) else []) if str(item or "").strip()]
-    semantic_terms = [str(item or "").strip() for item in (entry.get("semantic_terms") if isinstance(entry.get("semantic_terms"), list) else []) if str(item or "").strip()]
-    bundle_page_titles = [str(item or "").strip() for item in (entry.get("bundle_page_titles") if isinstance(entry.get("bundle_page_titles"), list) else []) if str(item or "").strip()]
-    bundle_page_summaries = [str(item or "").strip() for item in (entry.get("bundle_page_summaries") if isinstance(entry.get("bundle_page_summaries"), list) else []) if str(item or "").strip()]
-    family = str(entry.get("workflow_family") or "").strip()
-
-    path_stem = PurePosixPath(path_value).stem
-    exact_candidates = _compact_values([title, path_stem, *aliases])
-    route_compacts = _expand_manifest_match_tokens([title, path_stem, family, *aliases, *route_terms, *symbols, *linked_method_symbols])
-    symbol_compacts = _expand_manifest_match_tokens([*symbols, *linked_method_symbols])
-    semantic_compacts = _expand_manifest_match_tokens([title, str(entry.get("summary") or ""), *semantic_terms, *bundle_page_titles, *bundle_page_summaries])
-    bundle_compacts = _expand_manifest_match_tokens([*bundle_page_titles, *bundle_page_summaries])
+def _workflow_router_match_flags(entry: Dict[str, Any], query_info: Dict[str, Any]) -> Dict[str, Any]:
+    profile = _workflow_entry_match_profile(entry)
+    family = str(profile.get("family") or "")
+    exact_candidates = profile.get("exact_candidates") if isinstance(profile.get("exact_candidates"), tuple) else ()
+    route_compacts = profile.get("route_compacts") if isinstance(profile.get("route_compacts"), tuple) else ()
+    symbol_compacts = profile.get("symbol_compacts") if isinstance(profile.get("symbol_compacts"), tuple) else ()
+    semantic_compacts = profile.get("semantic_compacts") if isinstance(profile.get("semantic_compacts"), tuple) else ()
+    bundle_compacts = profile.get("bundle_compacts") if isinstance(profile.get("bundle_compacts"), tuple) else ()
+    semantic_terms = profile.get("semantic_terms") if isinstance(profile.get("semantic_terms"), tuple) else ()
+    bundle_page_titles = profile.get("bundle_page_titles") if isinstance(profile.get("bundle_page_titles"), tuple) else ()
+    bundle_page_summaries = profile.get("bundle_page_summaries") if isinstance(profile.get("bundle_page_summaries"), tuple) else ()
+    routing_hints = profile.get("routing_hints") if isinstance(profile.get("routing_hints"), tuple) else ()
 
     query_blob = str(query_info.get("blob") or "")
     query_compacts = query_info.get("compacts") if isinstance(query_info.get("compacts"), list) else []
@@ -223,7 +375,7 @@ def _workflow_router_match_flags(entry: Dict[str, Any], query_info: Dict[str, An
     family_literal_match = _compact_query_matches(query_blob, query_compacts, family)
     bundle_match = any(_compact_query_matches(query_blob, query_semantic, candidate) for candidate in [*bundle_page_titles, *bundle_page_summaries])
     semantic_match = bundle_match or len(semantic_hits) >= 2 or any(_compact_query_matches(query_blob, query_semantic, candidate) for candidate in semantic_terms)
-    routing_hint_match_count = _routing_hint_match_count(entry, query_info)
+    routing_hint_match_count = _routing_hint_match_count_from_hints(routing_hints, query_info)
 
     return {
         "exact_name_match": exact_name_match,
@@ -304,15 +456,24 @@ def _preferred_workflow_paths(
     families: Sequence[str],
     workflow_index: Optional[Sequence[Dict[str, Any]]] = None,
 ) -> List[str]:
-    items = _workflow_results_for_families(
-        root,
-        families=families,
-        include_content=False,
-        query="",
-        limit=50,
-        workflow_index=workflow_index,
-    )
-    return [str(item.get("path") or "").strip().lower() for item in items if str(item.get("path") or "").strip()]
+    if not isinstance(workflow_index, Sequence):
+        manifest = _load_runtime_manifest_for_root(root)
+        workflow_index = manifest.get("workflow_index") if isinstance(manifest.get("workflow_index"), list) else []
+    family_order = [str(item or "").strip() for item in families if str(item or "").strip()]
+    ordered: List[str] = []
+    seen = set()
+    for family in family_order:
+        for entry in workflow_index:
+            if not isinstance(entry, dict) or str(entry.get("workflow_family") or "").strip() != family:
+                continue
+            path_value = str(entry.get("path") or "").strip().lower()
+            if not path_value or path_value in seen:
+                continue
+            seen.add(path_value)
+            ordered.append(path_value)
+            if len(ordered) >= 50:
+                return ordered
+    return ordered
 
 
 def _route_workflow_results(
@@ -329,14 +490,22 @@ def _route_workflow_results(
     if not workflow_index:
         return []
 
-    preferred = _workflow_results_for_families(
-        root,
-        families=preferred_families or [],
-        include_content=include_content,
-        query=query,
-        limit=limit,
-        workflow_index=workflow_index,
-    )
+    safe_limit = max(1, min(int(limit or 12), 50))
+    preferred_payloads: Optional[List[Dict[str, Any]]] = None
+
+    def preferred_results() -> List[Dict[str, Any]]:
+        nonlocal preferred_payloads
+        if preferred_payloads is None:
+            preferred_payloads = _workflow_results_for_families(
+                root,
+                families=preferred_families or [],
+                include_content=include_content,
+                query=query,
+                limit=safe_limit,
+                workflow_index=workflow_index,
+            )
+        return preferred_payloads
+
     preferred_paths = _preferred_workflow_paths(root, families=preferred_families or [], workflow_index=workflow_index)
     preferred_priority = {path_value: index for index, path_value in enumerate(preferred_paths)}
     priority_paths = _preferred_workflow_paths(root, families=priority_families or [], workflow_index=workflow_index)
@@ -360,7 +529,7 @@ def _route_workflow_results(
             if int(flags.get("semantic_overlap_count") or 0) > 0 or bool(flags.get("semantic_match"))
         ]
         if not candidates:
-            return preferred[: max(1, min(int(limit or 12), 50))]
+            return preferred_results()[:safe_limit]
 
     priority_candidates = [
         (entry, flags)
@@ -390,11 +559,11 @@ def _route_workflow_results(
                 continue
             seen_priority.add(path_value)
             ordered_priority.append(_workflow_result_payload(entry, root, include_content=include_content, rank=0, query=query))
-            if len(ordered_priority) >= max(1, min(int(limit or 12), 50)):
+            if len(ordered_priority) >= safe_limit:
                 return ordered_priority
         if ordered_priority:
-            remaining = [item for item in preferred if str(item.get("path") or "").strip().lower() not in seen_priority]
-            return [*ordered_priority, *remaining][: max(1, min(int(limit or 12), 50))]
+            remaining = [item for item in preferred_results() if str(item.get("path") or "").strip().lower() not in seen_priority]
+            return [*ordered_priority, *remaining][:safe_limit]
 
     buckets = [
         lambda flags: bool(flags.get("exact_name_match")),
@@ -435,11 +604,11 @@ def _route_workflow_results(
                 continue
             seen.add(path_value)
             ordered.append(_workflow_result_payload(entry, root, include_content=include_content, rank=bucket_index, query=query))
-            if len(ordered) >= max(1, min(int(limit or 12), 50)):
+            if len(ordered) >= safe_limit:
                 return ordered
     if ordered:
-        return ordered[: max(1, min(int(limit or 12), 50))]
-    return preferred[: max(1, min(int(limit or 12), 50))]
+        return ordered[:safe_limit]
+    return preferred_results()[:safe_limit]
 
 
 def _page_match_tuple(page: Dict[str, Any], query: str) -> Optional[Tuple[int, int, int, int, str]]:

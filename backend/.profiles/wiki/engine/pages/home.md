@@ -14,7 +14,7 @@ verification_rules:
 - Current answer policy is `wiki-only`: answer from pages that already exist in this wiki.
 - Treat `D:/Pixoneer_Source/PIX_RAG_Source/backend/.profiles/wiki/raw_source/source` as ingest input and source-of-truth storage, not direct query ground truth.
 - Prefer workflow pages for usage and composition questions, but read them as family hubs together with related how-to and concept pages.
-- Prefer workflow `required_facts` when exact signatures matter.
+- Prefer workflow `required_symbols` plus the runtime methods index when exact signatures matter.
 - Prefer `.runtime/methods_index.json` for exact symbol existence, call shape, and source anchors.
 - For desktop UI answers, default to WPF unless the user explicitly asks for a different shell.
 

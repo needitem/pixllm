@@ -1,4 +1,4 @@
-﻿---
+---
 title: Scene Editor API Workflow
 description: Create, open, save, and select scene objects through the scene editor family.
 aliases:
@@ -102,28 +102,6 @@ required_symbols:
   - NXPlanetLayerSceneEditor.SelectAll
   - NXPlanetLayerSceneEditor.SelectObject
   - NXPlanetLayerSceneEditor.EditObjectEnd
-required_facts:
-  - symbol: NXPlanetLayerSceneEditor.New
-    declaration: 'bool New ();'
-    source: 'Source/NXDLscene/NXPlanetLayerSceneEditor.h:74'
-  - symbol: NXPlanetLayerSceneEditor.Open
-    declaration: 'bool Open (String^ strFile);'
-    source: 'Source/NXDLscene/NXPlanetLayerSceneEditor.h:83'
-  - symbol: NXPlanetLayerSceneEditor.Save
-    declaration: 'bool Save (String^ strFile);'
-    source: 'Source/NXDLscene/NXPlanetLayerSceneEditor.h:105'
-  - symbol: NXPlanetLayerSceneEditor.GetScene
-    declaration: 'XScene^ GetScene();'
-    source: 'Source/NXDLscene/NXPlanetLayerSceneEditor.h:109'
-  - symbol: NXPlanetLayerSceneEditor.CreateNewOBJ
-    declaration: 'XscObj^ CreateNewOBJ(String^ strType);'
-    source: 'Source/NXDLscene/NXPlanetLayerSceneEditor.h:139'
-  - symbol: NXPlanetLayerSceneEditor.HitTest
-    declaration: 'XscObj^ HitTest (XVertex3d^ vWorld, double dPixelSize, XHitFlag^% hit);'
-    source: 'Source/NXDLscene/NXPlanetLayerSceneEditor.h:121'
-  - symbol: NXPlanetLayerSceneEditor.SelectObject
-    declaration: 'bool SelectObject(XscObj^ pObj, bool bSingleSelect);'
-    source: 'Source/NXDLscene/NXPlanetLayerSceneEditor.h:153'
 verification_rules:
   - use_this_workflow_as_primary_path
   - verify_method_vs_property_form

@@ -1,4 +1,4 @@
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 
 def ok(data: Any) -> Dict[str, Any]:

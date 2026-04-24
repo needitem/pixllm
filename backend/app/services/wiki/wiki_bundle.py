@@ -238,19 +238,4 @@ def _bundle_relation_expected_kind(relation: str) -> Optional[str]:
     return None
 
 
-def _normalize_fact_signature(item: Dict[str, Any]) -> str:
-    declarations: List[str] = []
-    direct = str(item.get("declaration") or "").strip()
-    if direct:
-        declarations.append(direct)
-    for candidate in item.get("declaration_candidates") if isinstance(item.get("declaration_candidates"), list) else []:
-        if not isinstance(candidate, dict):
-            continue
-        declaration = str(candidate.get("declaration") or "").strip()
-        if declaration:
-            declarations.append(declaration)
-    source_value = str(item.get("source") or "").strip()
-    normalized_declarations = sorted({str(value or "").strip() for value in declarations if str(value or "").strip()})
-    return " | ".join([*normalized_declarations, source_value] if source_value else normalized_declarations)
-
 __all__ = [name for name in globals() if not name.startswith("__")]

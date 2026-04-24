@@ -1,4 +1,4 @@
-﻿---
+---
 title: Core Utilities API Workflow
 description: Handle license validation, config path switching, and progress/helper utilities outside view families.
 aliases:
@@ -83,19 +83,6 @@ required_symbols:
   - Xfn.SetConfigPath
   - Xfn.ValidateLicense
   - Xfn.IsValidLicense
-required_facts:
-  - symbol: XThread.SendMessagePercent
-    declaration: 'void SendMessagePercent(int nPercent);'
-    source: 'Source/NXDL/NXDL.h:2294'
-  - symbol: Xfn.SetConfigPath
-    declaration: 'static bool SetConfigPath(System::String^ strPath);'
-    source: 'Source/NXDL/NXDL.h:3238'
-  - symbol: Xfn.ValidateLicense
-    declaration: 'static bool ValidateLicense(String^ strSiteInfo);'
-    source: 'Source/NXDL/NXDL.h:3276'
-  - symbol: Xfn.IsValidLicense
-    declaration: 'static bool IsValidLicense(eLicenseType% type, String^% checkID, String^% dateExpire, String^% licensePath);'
-    source: 'Source/NXDL/NXDL.h:3284'
 verification_rules:
   - use_this_workflow_as_primary_path
   - verify_method_vs_property_form

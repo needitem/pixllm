@@ -32,17 +32,16 @@ function unquoteYamlScalar(value = '') {
   return text;
 }
 
-function extractRequiredFactsYaml(content = '') {
+function extractVerifiedFactsYaml(content = '') {
   const match = String(content || '').match(/##\s*Verified Facts\s*```ya?ml\s*([\s\S]*?)```/i);
   return match ? toStringValue(match[1]) : '';
 }
 
-function parseRequiredFactsYaml(content = '') {
-  const yaml = extractRequiredFactsYaml(content);
+function parseVerifiedFactsYaml(content = '') {
+  const yaml = extractVerifiedFactsYaml(content);
   const result = {
     hasBlock: Boolean(yaml),
     requiredSymbols: [],
-    requiredFacts: [],
     verificationRules: [],
     forbiddenAnswerPatterns: [],
     missingSlots: [],
@@ -52,7 +51,6 @@ function parseRequiredFactsYaml(content = '') {
   }
 
   let section = '';
-  let currentFact = null;
   for (const rawLine of yaml.split(/\r?\n/)) {
     const line = String(rawLine || '');
     const trimmed = line.trim();
@@ -63,7 +61,6 @@ function parseRequiredFactsYaml(content = '') {
     const topLevel = line.match(/^([A-Za-z_][A-Za-z0-9_]*):(?:\s*(.+))?$/);
     if (topLevel) {
       section = toStringValue(topLevel[1]);
-      currentFact = null;
       continue;
     }
 
@@ -97,31 +94,6 @@ function parseRequiredFactsYaml(content = '') {
         result.missingSlots.push(unquoteYamlScalar(itemMatch[1]));
       }
       continue;
-    }
-
-    if (section === 'required_facts') {
-      const symbolMatch = line.match(/^\s*-\s*symbol:\s*(.+)$/);
-      if (symbolMatch) {
-        currentFact = {
-          symbol: unquoteYamlScalar(symbolMatch[1]),
-          declaration: '',
-          source: '',
-        };
-        result.requiredFacts.push(currentFact);
-        continue;
-      }
-      if (!currentFact) {
-        continue;
-      }
-      const declarationMatch = line.match(/^\s*declaration:\s*(.+)$/);
-      if (declarationMatch) {
-        currentFact.declaration = unquoteYamlScalar(declarationMatch[1]);
-        continue;
-      }
-      const sourceMatch = line.match(/^\s*source:\s*(.+)$/);
-      if (sourceMatch) {
-        currentFact.source = unquoteYamlScalar(sourceMatch[1]);
-      }
     }
   }
 
@@ -177,8 +149,8 @@ function summarizeWikiEvidence(trace = []) {
   let docResultCount = 0;
   let workflowSourceCount = 0;
   let methodSourceCount = 0;
-  let workflowRequiredFactCount = 0;
-  let apiFactCount = 0;
+  let workflowRequiredSymbolCount = 0;
+  let apiEvidenceCount = 0;
   let workflowBundleSeen = false;
   let workflowSlotsComplete = false;
   let hasVerifiedCodeEvidence = false;
@@ -213,7 +185,7 @@ function summarizeWikiEvidence(trace = []) {
     for (const page of pages) {
       const pathValue = normalizePath(page.path);
       const content = String(page.content || '');
-      const parsedSpec = parseRequiredFactsYaml(content);
+      const parsedSpec = parseVerifiedFactsYaml(content);
       const verifiedBySource = hasVerifiedSourceMarkers(content);
 
       if (isWorkflowPath(pathValue)) {
@@ -221,12 +193,12 @@ function summarizeWikiEvidence(trace = []) {
         if (parsedSpec.hasBlock) {
           workflowBundleSeen = true;
         }
-        if (parsedSpec.requiredFacts.length > 0 || parsedSpec.requiredSymbols.length > 0 || verifiedBySource) {
+        if (parsedSpec.requiredSymbols.length > 0 || verifiedBySource) {
           hasVerifiedCodeEvidence = true;
           evidenceTypes.add('declaration');
         }
-        workflowRequiredFactCount += parsedSpec.requiredFacts.length;
-        apiFactCount += parsedSpec.requiredFacts.length;
+        workflowRequiredSymbolCount += parsedSpec.requiredSymbols.length;
+        apiEvidenceCount += parsedSpec.requiredSymbols.length;
         for (const pattern of parsedSpec.forbiddenAnswerPatterns) {
           if (!workflowForbiddenAnswerPatterns.includes(pattern)) {
             workflowForbiddenAnswerPatterns.push(pattern);
@@ -245,18 +217,18 @@ function summarizeWikiEvidence(trace = []) {
 
       if (isMethodPath(pathValue)) {
         methodSourceCount += 1;
-        if (parsedSpec.requiredFacts.length > 0 || parsedSpec.requiredSymbols.length > 0 || verifiedBySource) {
+        if (parsedSpec.requiredSymbols.length > 0 || verifiedBySource) {
           hasVerifiedCodeEvidence = true;
           evidenceTypes.add('declaration');
         }
-        apiFactCount += parsedSpec.requiredFacts.length;
+        apiEvidenceCount += parsedSpec.requiredSymbols.length;
         continue;
       }
 
-      if (parsedSpec.requiredFacts.length > 0 || parsedSpec.requiredSymbols.length > 0 || verifiedBySource) {
+      if (parsedSpec.requiredSymbols.length > 0 || verifiedBySource) {
         hasVerifiedCodeEvidence = true;
         evidenceTypes.add('declaration');
-        apiFactCount += parsedSpec.requiredFacts.length;
+        apiEvidenceCount += parsedSpec.requiredSymbols.length;
       }
     }
   }
@@ -268,10 +240,10 @@ function summarizeWikiEvidence(trace = []) {
     searchCount,
     readCount,
     docResultCount,
-    apiFactCount,
+    apiEvidenceCount,
     workflowSourceCount,
     methodSourceCount,
-    workflowRequiredFactCount,
+    workflowRequiredSymbolCount,
     workflowForbiddenAnswerPatterns,
     evidenceTypes: Array.from(evidenceTypes),
     hasCodeEvidence,

@@ -1,4 +1,4 @@
-﻿---
+---
 title: MilmapView API Workflow
 description: Control MilmapView scale, center, render layers, capture, and map display state.
 aliases:
@@ -93,28 +93,6 @@ required_symbols:
   - NXMilmapView.ChangeLayerOrder
   - NXMilmapView.GetDrawArgs
   - NXMilmapView.CaptureScreen
-required_facts:
-  - symbol: NXMilmapView.CheckMilmapData
-    declaration: 'bool CheckMilmapData(XVertex2d^ vGeo, int nScaleIndex);'
-    source: 'Source/NXMilmap/NXMilmapView.h:110'
-  - symbol: NXMilmapView.SetGeoToCenter
-    declaration: 'bool SetGeoToCenter(int nScaleIndex, XVertex2d^ vGeo);'
-    source: 'Source/NXMilmap/NXMilmapView.h:116'
-  - symbol: NXMilmapView.SearchScale
-    declaration: 'int SearchScale(String^ m);'
-    source: 'Source/NXMilmap/NXMilmapView.h:125'
-  - symbol: NXMilmapView.Zoom
-    declaration: 'bool Zoom(int scaleIndex, double factor);'
-    source: 'Source/NXMilmap/NXMilmapView.h:131'
-  - symbol: NXMilmapView.ZoomFitRect
-    declaration: 'bool ZoomFitRect(int scaleIndex, double llx, double lly, double urx, double ury, bool bAuto);'
-    source: 'Source/NXMilmap/NXMilmapView.h:141'
-  - symbol: NXMilmapView.AddRenderLayer
-    declaration: 'bool AddRenderLayer(NXMilmapLayer^% layer);'
-    source: 'Source/NXMilmap/NXMilmapView.h:165'
-  - symbol: NXMilmapView.ChangeLayerOrder
-    declaration: 'bool ChangeLayerOrder(cli::array<NXRenderLayer^>^% layers);'
-    source: 'Source/NXMilmap/NXMilmapView.h:231'
 verification_rules:
   - use_this_workflow_as_primary_path
   - verify_method_vs_property_form

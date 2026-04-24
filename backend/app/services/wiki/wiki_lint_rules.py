@@ -14,7 +14,6 @@ from .wiki_runtime import (
     _has_source_evidence,
     _inline_page_targets,
     _link_targets,
-    _normalize_fact_signature,
     _normalize_string_list,
     _page_search_terms,
     _read_frontmatter,
@@ -36,7 +35,6 @@ async def run_wiki_lint(service, wiki_id: str, *, repair: bool = False) -> Dict[
     concept_page_paths = [str(page.get("path") or "") for page in pages if str(page.get("kind") or "") == "concept"]
     howto_page_paths = [str(page.get("path") or "") for page in pages if str(page.get("kind") or "") == "howto"]
     inbound_links: Dict[str, set[str]] = defaultdict(set)
-    workflow_fact_claims: Dict[str, List[Dict[str, str]]] = defaultdict(list)
     findings: List[Dict[str, Any]] = []
 
     for missing in coordination_status.get("missing_paths") or []:
@@ -93,7 +91,6 @@ async def run_wiki_lint(service, wiki_id: str, *, repair: bool = False) -> Dict[
         required_section = _extract_section_yaml(content, "Verified Facts")
         knowledge_bundle = _extract_knowledge_bundle(content)
         required_symbols = _normalize_string_list(required_section.get("required_symbols"), limit=64)
-        required_facts = required_section.get("required_facts") if isinstance(required_section.get("required_facts"), list) else []
         bundle_pages = knowledge_bundle.get("bundle_pages") if isinstance(knowledge_bundle.get("bundle_pages"), list) else []
         has_family_concept = any(str(item.get("relation") or "").strip() == "family_concept" for item in bundle_pages if isinstance(item, dict))
         if knowledge_bundle.get("concept_terms") and not has_family_concept:
@@ -110,14 +107,6 @@ async def run_wiki_lint(service, wiki_id: str, *, repair: bool = False) -> Dict[
                     break
             if not covered:
                 findings.append({"severity": "warning", "code": "missing_concept_page", "path": path, "message": f"Workflow `{path}` concept terms are not clearly covered by bundled concept pages."})
-
-        for item in required_facts:
-            if not isinstance(item, dict):
-                continue
-            symbol = str(item.get("symbol") or "").strip()
-            normalized_signature = _normalize_fact_signature(item)
-            if symbol and normalized_signature:
-                workflow_fact_claims[symbol].append({"path": path, "signature": normalized_signature})
 
         if normalized_wiki_id == "engine":
             for symbol in required_symbols:
@@ -143,12 +132,6 @@ async def run_wiki_lint(service, wiki_id: str, *, repair: bool = False) -> Dict[
                     continue
                 if workflow_updated_ts and resolved.stat().st_mtime > workflow_updated_ts:
                     findings.append({"severity": "info", "code": "workflow_source_newer_than_page", "path": path, "target": source_path, "message": f"Raw source `{source_path}` is newer than workflow `{path}`."})
-
-    for symbol, claims in workflow_fact_claims.items():
-        unique_signatures = sorted({str(item.get("signature") or "").strip() for item in claims if str(item.get("signature") or "").strip()})
-        unique_paths = sorted({str(item.get("path") or "").strip() for item in claims if str(item.get("path") or "").strip()})
-        if len(unique_signatures) > 1:
-            findings.append({"severity": "info", "code": "workflow_fact_divergence", "path": unique_paths[0] if unique_paths else "", "target": symbol, "related_paths": unique_paths, "message": f"Workflow pages disagree on the exact required fact for `{symbol}`; clarify the intended overload or reconcile the contradiction."})
 
     repaired = False
     if repair:

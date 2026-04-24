@@ -3,9 +3,27 @@ const path = require('node:path');
 const { ensureDesktopDataRoot } = require('./storage_paths.cjs');
 
 const SETTINGS_KEYS = ['serverBaseUrl', 'llmBaseUrl', 'workspacePath', 'selectedModel', 'wikiId', 'engineQuestionDefault', 'recentWorkspaces'];
+const DEFAULT_MODEL = 'Qwen/Qwen3.6-27B';
+const LEGACY_MODEL_NAMES = new Set([
+  'qwen3.5-27b',
+  'qwen/qwen3.5-27b',
+  'qwen3.6-27b',
+  'qwen/qwen3.6-27b',
+]);
 
 function settingsPath() {
   return path.join(ensureDesktopDataRoot(), 'settings.json');
+}
+
+function normalizeSelectedModel(value) {
+  const normalized = typeof value === 'string' ? value.trim() : '';
+  if (!normalized) {
+    return '';
+  }
+  if (LEGACY_MODEL_NAMES.has(normalized.toLowerCase())) {
+    return DEFAULT_MODEL;
+  }
+  return normalized;
 }
 
 function defaultSettings() {
@@ -13,7 +31,7 @@ function defaultSettings() {
     serverBaseUrl: 'http://192.168.2.238:8000/api',
     llmBaseUrl: process.env.PIXLLM_LLM_BASE_URL || '',
     workspacePath: '',
-    selectedModel: 'qwen3.5-27b',
+    selectedModel: DEFAULT_MODEL,
     wikiId: 'engine',
     engineQuestionDefault: true,
     recentWorkspaces: []
@@ -40,6 +58,7 @@ function normalizeWorkspaceList(list) {
 
 function finalizeSettings(source) {
   const workspacePath = typeof source?.workspacePath === 'string' ? source.workspacePath.trim() : '';
+  const selectedModel = normalizeSelectedModel(source?.selectedModel) || DEFAULT_MODEL;
   const wikiId = typeof source?.wikiId === 'string' ? source.wikiId.trim() : '';
   const recentWorkspaces = normalizeWorkspaceList([
     workspacePath,
@@ -49,6 +68,7 @@ function finalizeSettings(source) {
   return {
     ...source,
     workspacePath,
+    selectedModel,
     wikiId,
     recentWorkspaces
   };
@@ -61,6 +81,8 @@ function normalizeSettings(source) {
       normalized[key] = normalizeWorkspaceList(source?.[key]);
     } else if (key === 'engineQuestionDefault') {
       normalized[key] = Boolean(source?.engineQuestionDefault);
+    } else if (key === 'selectedModel') {
+      normalized[key] = normalizeSelectedModel(source?.[key]);
     } else if (key === 'wikiId') {
       normalized[key] = typeof source?.wikiId === 'string' ? source.wikiId : '';
     } else if (typeof source?.[key] === 'string') {

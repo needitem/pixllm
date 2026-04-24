@@ -1,4 +1,4 @@
-﻿---
+---
 title: Coordinate API Workflow
 description: Convert coordinate codes, define spatial references, and transform points between coordinate systems.
 aliases:
@@ -105,34 +105,6 @@ required_symbols:
   - XSpatialReference.ExportToProj4
   - XSpatialReference.GetUTMZone
   - XSpatialReference.IsUTM
-required_facts:
-  - symbol: Xcc.WGP2UTM
-    declaration: 'static bool WGP2UTM(NXDL::XAngle^ lon, NXDL::XAngle^ lat, NXDL::XVertex2d^% pos, int% Zone);'
-    source: 'Source/NXDLcc/NXDLcc.h:344'
-  - symbol: Xcc.UTM2WGP
-    declaration: 'static bool UTM2WGP(NXDL::XVertex2d^ pos, int Zone, NXDL::XAngle^% lon, NXDL::XAngle^% lat);'
-    source: 'Source/NXDLcc/NXDLcc.h:464'
-  - symbol: Xcc.WGP2MGRS
-    declaration: 'static bool WGP2MGRS(NXDL::XAngle^ lon, NXDL::XAngle^ lat, String^% strMGRS);'
-    source: 'Source/NXDLcc/NXDLcc.h:419'
-  - symbol: Xcc.MGRS2UTM
-    declaration: 'static bool MGRS2UTM(String^ strMGRS, NXDL::XVertex2d^% pos, int% Zone);'
-    source: 'Source/NXDLcc/NXDLcc.h:522'
-  - symbol: Xcc.MGRS2WGP
-    declaration: 'static bool MGRS2WGP(String^ strMGRS, NXDL::XAngle^% lon, NXDL::XAngle^% lat);'
-    source: 'Source/NXDLcc/NXDLcc.h:541'
-  - symbol: XCoordinateTransformation.CreateCoordinateTransform
-    declaration: 'bool CreateCoordinateTransform(XSpatialReference^% SrIn, XSpatialReference^% SrOut);'
-    source: 'Source/NXDLcc/NXDLcc.h:291'
-  - symbol: XCoordinateTransformation.TransformPt
-    declaration: 'bool TransformPt(double xIn, double yIn, double% xOut, double% yOut);'
-    source: 'Source/NXDLcc/NXDLcc.h:301'
-  - symbol: XSpatialReference.GetUTMZone
-    declaration: 'int GetUTMZone();'
-    source: 'Source/NXDLcc/NXDLcc.h:194'
-  - symbol: XSpatialReference.IsUTM
-    declaration: 'bool IsUTM();'
-    source: 'Source/NXDLcc/NXDLcc.h:183'
 verification_rules:
   - use_this_workflow_as_primary_path
   - verify_method_vs_property_form

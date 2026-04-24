@@ -45,13 +45,45 @@ class WikiServiceQueryMixin:
 
         normalized_query = str(query or "").strip()
         if normalized_query and normalized_kind in {"", "workflow"}:
+            manifest = _load_runtime_manifest_for_root(root)
+            family_catalog = manifest.get("workflow_index") if isinstance(manifest.get("workflow_index"), list) else []
+            manifest_rankings = _manifest_family_rankings(
+                root,
+                query=normalized_query,
+                workflow_index=family_catalog,
+                limit=6,
+            )
+            family_preferences = _manifest_family_preferences(
+                root,
+                query=normalized_query,
+                workflow_index=family_catalog,
+                rankings=manifest_rankings,
+                limit=6,
+            )
+            preferred_families = [
+                str(item or "").strip()
+                for item in (family_preferences.get("preferred_families") if isinstance(family_preferences, dict) else [])
+                if str(item or "").strip()
+            ]
+            priority_families = [
+                str(item or "").strip()
+                for item in (family_preferences.get("priority_families") if isinstance(family_preferences, dict) else [])
+                if str(item or "").strip()
+            ]
             classified_families = []
             classifier_confidence = ""
-            explicit_families = _query_explicit_family_hints(normalized_query)
-            priority_families = _query_priority_family_hints(normalized_query)
-            if config.WORKFLOW_CLASSIFIER_URL and config.WORKFLOW_CLASSIFIER_MODEL:
-                manifest = _load_runtime_manifest_for_root(root)
-                family_catalog = manifest.get("workflow_index") if isinstance(manifest.get("workflow_index"), list) else []
+            top_score = int(manifest_rankings[0].get("score") or 0) if manifest_rankings else 0
+            next_score = int(manifest_rankings[1].get("score") or 0) if len(manifest_rankings) > 1 else 0
+            manifest_margin = top_score - next_score
+            should_consult_classifier = bool(
+                config.WORKFLOW_CLASSIFIER_URL
+                and config.WORKFLOW_CLASSIFIER_MODEL
+                and (
+                    not preferred_families
+                    or manifest_margin < _WORKFLOW_FAMILY_RANK_MARGIN
+                )
+            )
+            if should_consult_classifier:
                 classified = classify_workflow_family(normalized_query, family_catalog=family_catalog)
                 primary_family = str(classified.get("primary_family") or "").strip()
                 classifier_confidence = str(classified.get("confidence") or "").strip().lower()
@@ -62,10 +94,11 @@ class WikiServiceQueryMixin:
                         family_value = str(family or "").strip()
                         if family_value and family_value not in classified_families:
                             classified_families.append(family_value)
-            preferred_families = list(explicit_families)
             for family in classified_families:
                 if family not in preferred_families:
                     preferred_families.append(family)
+                if not priority_families and classifier_confidence == "high" and family not in priority_families:
+                    priority_families.append(family)
             workflow_results = _route_workflow_results(
                 root,
                 query=normalized_query,

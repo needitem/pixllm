@@ -62,7 +62,7 @@ def load_methods_index_for_root(root: Path) -> List[Dict[str, Any]]:
     if not path.exists():
         return []
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(path.read_text(encoding="utf-8-sig"))
     except Exception:
         return []
     if not isinstance(payload, list):
@@ -396,57 +396,6 @@ def _score_method_record(record: Dict[str, Any], query: str) -> int:
     if "method" in str(query or "").lower():
         score += 2
     return score
-
-
-def build_method_chunk_results_for_root(
-    root: Path,
-    *,
-    query: str,
-    top_k: int,
-    max_chars: int,
-) -> List[Dict[str, Any]]:
-    records = load_methods_index_for_root(root)
-    if not records:
-        return []
-
-    wiki_id = root.name
-    index_path = methods_index_file_for_root(root)
-    updated_at = time.strftime(
-        "%Y-%m-%dT%H:%M:%SZ",
-        time.gmtime(index_path.stat().st_mtime if index_path.exists() else time.time()),
-    )
-
-    ranked: List[Dict[str, Any]] = []
-    for record in records:
-        score = _score_method_record(record, query)
-        if score <= 0:
-            continue
-        text = str(record.get("text") or "")
-        clipped = text[: max(400, _clamp_int(max_chars, 400, 12000))]
-        qualified_symbol = str(record.get("qualified_symbol") or "").strip()
-        ranked.append(
-            {
-                "chunk_id": f"wiki:{wiki_id}:method:{qualified_symbol}",
-                "doc_id": f"wiki:{wiki_id}:methods-index",
-                "wiki_id": wiki_id,
-                "source_url": f"{wiki_id}/{METHODS_INDEX_RELATIVE_PATH}",
-                "file_path": METHODS_INDEX_RELATIVE_PATH,
-                "heading_path": str(record.get("heading_path") or qualified_symbol),
-                "paragraph_range": f"symbol:{qualified_symbol}",
-                "text": clipped,
-                "truncated": len(clipped) < len(text),
-                "updated_at": updated_at,
-                "source_kind": "wiki",
-                "document_type": "method_index",
-                "score": score,
-                "title": f"{record.get('qualified_type') or record.get('type_name') or qualified_symbol} Methods",
-                "symbols": [qualified_symbol] if qualified_symbol else [],
-                "tags": ["method", "reference", "generated"],
-            }
-        )
-
-    ranked.sort(key=lambda item: (int(item.get("score") or 0), str(item.get("heading_path") or "")), reverse=True)
-    return ranked[: _clamp_int(top_k, 1, 20)]
 
 
 def build_method_page_results_for_root(

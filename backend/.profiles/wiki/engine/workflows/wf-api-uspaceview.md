@@ -1,4 +1,4 @@
-﻿---
+---
 title: UspaceView API Workflow
 description: Control UspaceView render layers, space regions, camera state, and space/world/screen conversions.
 aliases:
@@ -95,25 +95,6 @@ required_symbols:
   - NXUspaceView.GetDrawArgs
   - NXUspaceView.SetMouseControlMode
   - NXUspaceView.GetMouseControlMode
-required_facts:
-  - symbol: NXUspaceView.AddRenderLayer
-    declaration: 'bool AddRenderLayer (NXRenderLayer^% layer);'
-    source: 'Source/NXUspace/NXUspaceView.h:87'
-  - symbol: NXUspaceView.SetSpaceRegion
-    declaration: 'void SetSpaceRegion(XVertex2d^ vMinSpace, XVertex2d^ vMaxSpace, XVertex2d^ vPsz);'
-    source: 'Source/NXUspace/NXUspaceView.h:93'
-  - symbol: NXUspaceView.SetCameraState
-    declaration: 'void SetCameraState(XVertex3d^ vEye, XVertex3d^ vLookAt, XVertex3d^ vUp);'
-    source: 'Source/NXUspace/NXUspaceView.h:99'
-  - symbol: NXUspaceView.RefreshScreen
-    declaration: 'void RefreshScreen();'
-    source: 'Source/NXUspace/NXUspaceView.h:106'
-  - symbol: NXUspaceView.SetSR
-    declaration: 'void SetSR(NCC::XSpatialReference^ sr);'
-    source: 'Source/NXUspace/NXUspaceView.h:110'
-  - symbol: NXUspaceView.GetSR
-    declaration: 'NCC::XSpatialReference^ GetSR();'
-    source: 'Source/NXUspace/NXUspaceView.h:114'
 verification_rules:
   - use_this_workflow_as_primary_path
   - verify_method_vs_property_form

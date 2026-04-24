@@ -1,4 +1,4 @@
-﻿---
+---
 title: ImageView API Workflow
 description: Host NXImageView, attach layers, control view state, and handle composite-linked display tasks.
 aliases:
@@ -132,49 +132,6 @@ required_symbols:
   - NXImageLayerCompLink.GetXDLCompManager1
   - NXImageLayerCompLink.GetXDLCompManager2
   - NXImageLayerCompLink.ZoomFit
-required_facts:
-  - symbol: NXImageView.AddImageLayer
-    declaration: 'bool AddImageLayer(NXImageLayer^% layer);'
-    source: 'Source/NXImage/NXImageView.h:836'
-  - symbol: NXImageView.RemoveImageLayer
-    declaration: 'bool RemoveImageLayer(NXImageLayer^ layer);'
-    source: 'Source/NXImage/NXImageView.h:841'
-  - symbol: NXImageView.ClearLayer
-    declaration: 'void ClearLayer();'
-    source: 'Source/NXImage/NXImageView.h:112'
-  - symbol: NXImageView.SetBackgroundMap
-    declaration: 'bool SetBackgroundMap(String^ strConfig);'
-    source: 'Source/NXImage/NXImageView.h:356'
-  - symbol: NXImageView.ZoomFit
-    declaration: 'bool ZoomFit();'
-    source: 'Source/NXImage/NXImageView.h:198'
-  - symbol: NXImageView.ZoomOneToOne
-    declaration: 'bool ZoomOneToOne();'
-    source: 'Source/NXImage/NXImageView.h:206'
-  - symbol: NXImageView.ZoomFitRect
-    declaration: 'bool ZoomFitRect(double llx, double lly, double urx, double ury);'
-    source: 'Source/NXImage/NXImageView.h:219'
-  - symbol: NXImageView.SetWorld
-    declaration: 'bool SetWorld(XVertex2d^ vCenter, XVertex2d^ vPixelSize, XAngle^ aRotate);'
-    source: 'Source/NXImage/NXImageView.h:235'
-  - symbol: NXImageView.SetWorldToCenter
-    declaration: 'bool SetWorldToCenter(double wcx, double wcy);'
-    source: 'Source/NXImage/NXImageView.h:241'
-  - symbol: NXImageView.SetWorldPerScreen
-    declaration: 'bool SetWorldPerScreen(double wpx, double wpy);'
-    source: 'Source/NXImage/NXImageView.h:253'
-  - symbol: NXImageView.LinkCameraFrom
-    declaration: 'bool LinkCameraFrom(NXImageView^ view);'
-    source: 'Source/NXImage/NXImageView.h:224'
-  - symbol: NXImageView.RefreshScreen
-    declaration: 'bool RefreshScreen();'
-    source: 'Source/NXImage/NXImageView.h:228'
-  - symbol: NXImageLayerComposites.GetXDMCompManager
-    declaration: 'XDMCompManager^ GetXDMCompManager();'
-    source: 'Source/NXImage/NXImageLayerComposites.h:149'
-  - symbol: NXImageLayerComposites.ZoomFit
-    declaration: 'bool ZoomFit();'
-    source: 'Source/NXImage/NXImageLayerComposites.h:142'
 verification_rules:
   - use_this_workflow_as_primary_path
   - verify_method_vs_property_form

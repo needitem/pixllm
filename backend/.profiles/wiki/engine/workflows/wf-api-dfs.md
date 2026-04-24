@@ -1,4 +1,4 @@
-﻿---
+---
 title: DFS Export API Workflow
 description: Build DFS provider groups, run PBI/PBE exports, and track export progress or cancellation.
 aliases:
@@ -88,22 +88,6 @@ required_symbols:
   - XPBEProviderExporter.Export2PBE
   - XPBEProviderExporter.GetPercent
   - XPBEProviderExporter.Cancel
-required_facts:
-  - symbol: XPBIProviderGroup.AddPBIFile
-    declaration: 'bool AddPBIFile(String^ strFileName);'
-    source: 'Source/NXDLdfs/NXDLdfs.h:88'
-  - symbol: XPBIProviderGroup.AddXDMCompManager
-    declaration: 'bool AddXDMCompManager(XDMCompManager^% manager);'
-    source: 'Source/NXDLdfs/NXDLdfs.h:95'
-  - symbol: XPBIProviderGroup.AddXNS
-    declaration: 'bool AddXNS(String^ strXnsPath);'
-    source: 'Source/NXDLdfs/NXDLdfs.h:105'
-  - symbol: XPBIProviderExporter.Export2PBI
-    declaration: 'bool Export2PBI(String^ strOutputFile);'
-    source: 'Source/NXDLdfs/NXDLdfs.h:202'
-  - symbol: XPBEProviderExporter.Export2PBE
-    declaration: 'bool Export2PBE(String^ strOutputFile);'
-    source: 'Source/NXDLdfs/NXDLdfs.h:360'
 verification_rules:
   - use_this_workflow_as_primary_path
   - verify_method_vs_property_form

@@ -18,7 +18,7 @@ verification_rules:
 - `pages/concepts/*.md`: concept pages for cross-cutting explanations that multiple API families reuse.
 - `.runtime/methods_index.json`: generated method verification catalog.
 - `.runtime/methods_index.json`: generated method verification records with declaration-based anchors.
-- `workflows/wf-api-*.md`: canonical API-family workflows with source-backed `required_facts` for answer routing and signature checks.
+- `workflows/wf-api-*.md`: canonical API-family workflows with source-backed `required_symbols` for answer routing and signature checks.
 
 ## Raw Source Root
 - Canonical immutable raw source tree: `D:/Pixoneer_Source/PIX_RAG_Source/backend/.profiles/wiki/raw_source/source`
@@ -33,7 +33,7 @@ verification_rules:
 - Use API-family workflow pages as the primary answer path for usage questions.
 - Treat workflow pages as family hubs, not standalone answers: prefer retrieving the workflow together with its linked `pages/howtos/*`, `pages/concepts/*`, and source pages.
 - Add a `## Knowledge Bundle` YAML section to workflow pages when they need stable related-page routing for how-to, concept, dependency-workflow, or source-summary pages.
-- Treat workflow `required_facts` as the first signature-level constraint set.
+- Treat workflow `required_symbols` plus `.runtime/methods_index.json` as the first signature-level constraint set.
 - Prefer one broad API family workflow over many tiny scenario workflows when the same control/type is the primary user-facing surface.
 - When a question yields a stable reusable explanation, file it back into `pages/howtos/*` or `pages/analyses/*` instead of leaving it only in chat history.
 - Cross-check methods pages before emitting exact call shapes.

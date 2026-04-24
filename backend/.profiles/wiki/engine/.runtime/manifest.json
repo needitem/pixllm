@@ -1,7 +1,7 @@
-﻿{
+{
   "version": 1,
   "wiki_id": "engine",
-  "generated_at": "2026-04-20T02:38:48.328328+00:00",
+  "generated_at": "2026-04-23T23:55:29.788148+00:00",
   "methods_index_path": ".runtime/methods_index.json",
   "source_manifest_path": ".runtime/source_manifest.json",
   "workflow_index": [
@@ -58,62 +58,6 @@
         "XSpatialReference.ExportToProj4",
         "XSpatialReference.GetUTMZone",
         "XSpatialReference.IsUTM"
-      ],
-      "required_facts": [
-        {
-          "symbol": "Xcc.WGP2UTM",
-          "declaration": "static bool WGP2UTM(NXDL::XAngle^ lon, NXDL::XAngle^ lat, NXDL::XVertex2d^% pos, int% Zone);",
-          "declaration_candidates": null,
-          "source": "Source/NXDLcc/NXDLcc.h:344"
-        },
-        {
-          "symbol": "Xcc.UTM2WGP",
-          "declaration": "static bool UTM2WGP(NXDL::XVertex2d^ pos, int Zone, NXDL::XAngle^% lon, NXDL::XAngle^% lat);",
-          "declaration_candidates": null,
-          "source": "Source/NXDLcc/NXDLcc.h:464"
-        },
-        {
-          "symbol": "Xcc.WGP2MGRS",
-          "declaration": "static bool WGP2MGRS(NXDL::XAngle^ lon, NXDL::XAngle^ lat, String^% strMGRS);",
-          "declaration_candidates": null,
-          "source": "Source/NXDLcc/NXDLcc.h:419"
-        },
-        {
-          "symbol": "Xcc.MGRS2UTM",
-          "declaration": "static bool MGRS2UTM(String^ strMGRS, NXDL::XVertex2d^% pos, int% Zone);",
-          "declaration_candidates": null,
-          "source": "Source/NXDLcc/NXDLcc.h:522"
-        },
-        {
-          "symbol": "Xcc.MGRS2WGP",
-          "declaration": "static bool MGRS2WGP(String^ strMGRS, NXDL::XAngle^% lon, NXDL::XAngle^% lat);",
-          "declaration_candidates": null,
-          "source": "Source/NXDLcc/NXDLcc.h:541"
-        },
-        {
-          "symbol": "XCoordinateTransformation.CreateCoordinateTransform",
-          "declaration": "bool CreateCoordinateTransform(XSpatialReference^% SrIn, XSpatialReference^% SrOut);",
-          "declaration_candidates": null,
-          "source": "Source/NXDLcc/NXDLcc.h:291"
-        },
-        {
-          "symbol": "XCoordinateTransformation.TransformPt",
-          "declaration": "bool TransformPt(double xIn, double yIn, double% xOut, double% yOut);",
-          "declaration_candidates": null,
-          "source": "Source/NXDLcc/NXDLcc.h:301"
-        },
-        {
-          "symbol": "XSpatialReference.GetUTMZone",
-          "declaration": "int GetUTMZone();",
-          "declaration_candidates": null,
-          "source": "Source/NXDLcc/NXDLcc.h:194"
-        },
-        {
-          "symbol": "XSpatialReference.IsUTM",
-          "declaration": "bool IsUTM();",
-          "declaration_candidates": null,
-          "source": "Source/NXDLcc/NXDLcc.h:183"
-        }
       ],
       "verification_rules": [
         "use_this_workflow_as_primary_path",
@@ -243,31 +187,21 @@
         "Pixoneer.NXDL.NCC.Xcc.WGP2MGRS",
         "Pixoneer.NXDL.NCC.Xcc.MGRS2UTM",
         "Pixoneer.NXDL.NCC.Xcc.MGRS2WGP",
-        "Pixoneer.NXDL.NCC.XCoordinateTransformation.CreateCoordinateTransform",
-        "Pixoneer.NXDL.NCC.XCoordinateTransformation.TransformPt",
-        "Pixoneer.NXDL.NCC.XSpatialReference.GetUTMZone",
-        "Pixoneer.NXDL.NCC.XSpatialReference.IsUTM",
         "Pixoneer.NXDL.NCC.Xcc.WGP2GEOREF",
         "Pixoneer.NXDL.NCC.Xcc.GEOREF2WGP",
+        "Pixoneer.NXDL.NCC.XCoordinateTransformation.CreateCoordinateTransform",
+        "Pixoneer.NXDL.NCC.XCoordinateTransformation.TransformPt",
         "Pixoneer.NXDL.NCC.XSpatialReference.importFromEPSG",
         "Pixoneer.NXDL.NCC.XSpatialReference.importFromWkt",
         "Pixoneer.NXDL.NCC.XSpatialReference.importFromProj4",
         "Pixoneer.NXDL.NCC.XSpatialReference.exportToWkt",
         "Pixoneer.NXDL.NCC.XSpatialReference.exportToPrettyWkt",
-        "Pixoneer.NXDL.NCC.XSpatialReference.exportToProj4"
+        "Pixoneer.NXDL.NCC.XSpatialReference.exportToProj4",
+        "Pixoneer.NXDL.NCC.XSpatialReference.GetUTMZone",
+        "Pixoneer.NXDL.NCC.XSpatialReference.IsUTM"
       ],
-      "source_anchors": [
-        "Source/NXDLcc/NXDLcc.h:344",
-        "Source/NXDLcc/NXDLcc.h:464",
-        "Source/NXDLcc/NXDLcc.h:419",
-        "Source/NXDLcc/NXDLcc.h:522",
-        "Source/NXDLcc/NXDLcc.h:541",
-        "Source/NXDLcc/NXDLcc.h:291",
-        "Source/NXDLcc/NXDLcc.h:301",
-        "Source/NXDLcc/NXDLcc.h:194",
-        "Source/NXDLcc/NXDLcc.h:183"
-      ],
-      "content": "---\ntitle: Coordinate API Workflow\ndescription: Convert coordinate codes, define spatial references, and transform points between coordinate systems.\naliases:\n  - coordinate api\n  - coordinate transform\n  - lat lon utm\n  - mgrs georef\n  - spatial reference usage\n  - xcc usage\n  - 좌표계 변환 사용법\n  - lat lon 좌표계를 utm 좌표계로 변경\n  - epsg 코드로 좌표계 생성\n  - 좌표계가 utm인지 확인\n  - utm zone 확인\n  - lat lon 좌표를 mgrs로 변환\n  - georef 좌표를 lat lon으로 변환\n  - 좌표 한 점 변환하는 방법\n  - 두 좌표계 사이 좌표 변환\n  - 좌표변환 사용법\nsymbols:\n  - Xcc\n  - XCoordinateTransformation\n  - XSpatialReference\ntags:\n  - engine\n  - workflow\n  - api\n  - coordinate\n---\n\n# Overview\n- Goal: answer most coordinate-system questions from one page.\n- This workflow covers `Xcc` code conversion, `XCoordinateTransformation`, and `XSpatialReference`.\n- For the current wiki routing, use this family for SR/code conversion and explicit coordinate-system transforms, not for sensor-model projection or image-center map-coordinate questions.\n- For the current wiki routing, generic `좌표변환`, `좌표 한 점 변환`, or `두 좌표계 사이 변환` without image/ground projection words are handled here.\n\n## Primary Usage Buckets\n- `좌표 코드 변환`: `WGP2UTM`, `UTM2WGP`, `WGP2MGRS`, `MGRS2WGP`, `WGP2GEOREF`, `GEOREF2WGP`\n- `좌표 한 점 변환`: `CreateCoordinateTransform`, `TransformPt`\n- `좌표계 생성/내보내기`: `ImportFromEPSG`, `ImportFromWkt`, `ImportFromProj4`, `ExportToWkt`, `ExportToPrettyWkt`, `ExportToProj4`\n- `좌표계 판별`: `IsGeographic`, `IsProjected`, `IsUTM`, `GetUTMZone`, `GetAreaOfUse`, `IsSame`\n\n## Related Sources\n- [NXDLcc source](../pages/sources/nxdlcc.md)\n\n## Practical Answer Shape\n- `좌표 코드 변환`: `WGP/UTM/MGRS/GEOREF` 계열 변환 함수를 먼저 제시합니다.\n- `좌표 한 점 변환`: `CreateCoordinateTransform` 후 `TransformPt` 순서로 설명합니다.\n- `좌표계 생성/출력`: `ImportFromEPSG/Wkt/Proj4`와 `ExportTo*`를 짝으로 설명합니다.\n- `좌표계 판별`: `IsGeographic/Projected/UTM`, `GetUTMZone` 같은 판별 메서드로 답합니다.\n\n\n## Answering Guidance\n- Start with this workflow to confirm the question belongs to this API family before writing code or steps.\n- Use the usage buckets and boundary notes to narrow the task to the smallest relevant slice.\n- Read the linked howto, concept, and source pages from the Knowledge Bundle before giving a procedural answer.\n- Use `Verified Facts` for exact method names and declarations; if this page is overview-only, say that and lean on the related pages for concrete steps.\n\n## Knowledge Bundle\n```yaml\nconcept_terms:\n- spatial reference\n- coordinate transform\n- utm\n- wgs84\nbundle_pages:\n- path: pages/howtos/coordinate-conversion-recipes.md\n  relation: family_howto\n- path: pages/concepts/spatial-reference-and-coordinate-transform.md\n  relation: family_concept\n- path: workflows/wf-api-sensor-model.md\n  relation: dependency_workflow\n- path: pages/sources/nxdlcc.md\n  relation: source_summary\n```\n\n<!-- GENERATED:RUNTIME_STATUS:START -->\n## Runtime Ingest Status\n- Auto-generated from raw source ingest at `2026-04-20T02:38:44Z`.\n- Resolved required symbols: `17/17`\n- Linked modules:\n  - `NXDLcc`\n- Missing required symbols: `0`\n<!-- GENERATED:RUNTIME_STATUS:END -->\n## Verified Facts\n```yaml\nworkflow_family: api_coordinate\noutput_shape: focused_snippet_or_helper\nrequired_symbols:\n  - Xcc.WGP2UTM\n  - Xcc.UTM2WGP\n  - Xcc.WGP2MGRS\n  - Xcc.MGRS2UTM\n  - Xcc.MGRS2WGP\n  - Xcc.WGP2GEOREF\n  - Xcc.GEOREF2WGP\n  - XCoordinateTransformation.CreateCoordinateTransform\n  - XCoordinateTransformation.TransformPt\n  - XSpatialReference.ImportFromEPSG\n  - XSpatialReference.ImportFromWkt\n  - XSpatialReference.ImportFromProj4\n  - XSpatialReference.ExportToWkt\n  - XSpatialReference.ExportToPrettyWkt\n  - XSpatialReference.ExportToProj4\n  - XSpatialReference.GetUTMZone\n  - XSpatialReference.IsUTM\nrequired_facts:\n  - symbol: Xcc.WGP2UTM\n    declaration: 'static bool WGP2UTM(NXDL::XAngle^ lon, NXDL::XAngle^ lat, NXDL::XVertex2d^% pos, int% Zone);'\n    source: 'Source/NXDLcc/NXDLcc.h:344'\n  - symbol: Xcc.UTM2WGP\n    declaration: 'static bool UTM2WGP(NXDL::XVertex2d^ pos, int Zone, NXDL::XAngle^% lon, NXDL::XAngle^% lat);'\n    source: 'Source/NXDLcc/NXDLcc.h:464'\n  - symbol: Xcc.WGP2MGRS\n    declaration: 'static bool WGP2MGRS(NXDL::XAngle^ lon, NXDL::XAngle^ lat, String^% strMGRS);'\n    source: 'Source/NXDLcc/NXDLcc.h:419'\n  - symbol: Xcc.MGRS2UTM\n    declaration: 'static bool MGRS2UTM(String^ strMGRS, NXDL::XVertex2d^% pos, int% Zone);'\n    source: 'Source/NXDLcc/NXDLcc.h:522'\n  - symbol: Xcc.MGRS2WGP\n    declaration: 'static bool MGRS2WGP(String^ strMGRS, NXDL::XAngle^% lon, NXDL::XAngle^% lat);'\n    source: 'Source/NXDLcc/NXDLcc.h:541'\n  - symbol: XCoordinateTransformation.CreateCoordinateTransform\n    declaration: 'bool CreateCoordinateTransform(XSpatialReference^% SrIn, XSpatialReference^% SrOut);'\n    source: 'Source/NXDLcc/NXDLcc.h:291'\n  - symbol: XCoordinateTransformation.TransformPt\n    declaration: 'bool TransformPt(double xIn, double yIn, double% xOut, double% yOut);'\n    source: 'Source/NXDLcc/NXDLcc.h:301'\n  - symbol: XSpatialReference.GetUTMZone\n    declaration: 'int GetUTMZone();'\n    source: 'Source/NXDLcc/NXDLcc.h:194'\n  - symbol: XSpatialReference.IsUTM\n    declaration: 'bool IsUTM();'\n    source: 'Source/NXDLcc/NXDLcc.h:183'\nverification_rules:\n  - use_this_workflow_as_primary_path\n  - verify_method_vs_property_form\n  - verify_ref_out_and_enum_literals_when_signature_matters\n  - cross_check_runtime_methods_index_before_emitting_code\n```\n\n"
+      "source_anchors": [],
+      "content": "---\ntitle: Coordinate API Workflow\ndescription: Convert coordinate codes, define spatial references, and transform points between coordinate systems.\naliases:\n  - coordinate api\n  - coordinate transform\n  - lat lon utm\n  - mgrs georef\n  - spatial reference usage\n  - xcc usage\n  - 좌표계 변환 사용법\n  - lat lon 좌표계를 utm 좌표계로 변경\n  - epsg 코드로 좌표계 생성\n  - 좌표계가 utm인지 확인\n  - utm zone 확인\n  - lat lon 좌표를 mgrs로 변환\n  - georef 좌표를 lat lon으로 변환\n  - 좌표 한 점 변환하는 방법\n  - 두 좌표계 사이 좌표 변환\n  - 좌표변환 사용법\nsymbols:\n  - Xcc\n  - XCoordinateTransformation\n  - XSpatialReference\ntags:\n  - engine\n  - workflow\n  - api\n  - coordinate\n---\n\n# Overview\n- Goal: answer most coordinate-system questions from one page.\n- This workflow covers `Xcc` code conversion, `XCoordinateTransformation`, and `XSpatialReference`.\n- For the current wiki routing, use this family for SR/code conversion and explicit coordinate-system transforms, not for sensor-model projection or image-center map-coordinate questions.\n- For the current wiki routing, generic `좌표변환`, `좌표 한 점 변환`, or `두 좌표계 사이 변환` without image/ground projection words are handled here.\n\n## Primary Usage Buckets\n- `좌표 코드 변환`: `WGP2UTM`, `UTM2WGP`, `WGP2MGRS`, `MGRS2WGP`, `WGP2GEOREF`, `GEOREF2WGP`\n- `좌표 한 점 변환`: `CreateCoordinateTransform`, `TransformPt`\n- `좌표계 생성/내보내기`: `ImportFromEPSG`, `ImportFromWkt`, `ImportFromProj4`, `ExportToWkt`, `ExportToPrettyWkt`, `ExportToProj4`\n- `좌표계 판별`: `IsGeographic`, `IsProjected`, `IsUTM`, `GetUTMZone`, `GetAreaOfUse`, `IsSame`\n\n## Related Sources\n- [NXDLcc source](../pages/sources/nxdlcc.md)\n\n## Practical Answer Shape\n- `좌표 코드 변환`: `WGP/UTM/MGRS/GEOREF` 계열 변환 함수를 먼저 제시합니다.\n- `좌표 한 점 변환`: `CreateCoordinateTransform` 후 `TransformPt` 순서로 설명합니다.\n- `좌표계 생성/출력`: `ImportFromEPSG/Wkt/Proj4`와 `ExportTo*`를 짝으로 설명합니다.\n- `좌표계 판별`: `IsGeographic/Projected/UTM`, `GetUTMZone` 같은 판별 메서드로 답합니다.\n\n\n## Answering Guidance\n- Start with this workflow to confirm the question belongs to this API family before writing code or steps.\n- Use the usage buckets and boundary notes to narrow the task to the smallest relevant slice.\n- Read the linked howto, concept, and source pages from the Knowledge Bundle before giving a procedural answer.\n- Use `Verified Facts` for exact method names and declarations; if this page is overview-only, say that and lean on the related pages for concrete steps.\n\n## Knowledge Bundle\n```yaml\nconcept_terms:\n- spatial reference\n- coordinate transform\n- utm\n- wgs84\nbundle_pages:\n- path: pages/howtos/coordinate-conversion-recipes.md\n  relation: family_howto\n- path: pages/concepts/spatial-reference-and-coordinate-transform.md\n  relation: family_concept\n- path: workflows/wf-api-sensor-model.md\n  relation: dependency_workflow\n- path: pages/sources/nxdlcc.md\n  relation: source_summary\n```\n\n<!-- GENERATED:RUNTIME_STATUS:START -->\n## Runtime Ingest Status\n- Auto-generated from raw source ingest at `2026-04-20T02:38:44Z`.\n- Resolved required symbols: `17/17`\n- Linked modules:\n  - `NXDLcc`\n- Missing required symbols: `0`\n<!-- GENERATED:RUNTIME_STATUS:END -->\n## Verified Facts\n```yaml\nworkflow_family: api_coordinate\noutput_shape: focused_snippet_or_helper\nrequired_symbols:\n  - Xcc.WGP2UTM\n  - Xcc.UTM2WGP\n  - Xcc.WGP2MGRS\n  - Xcc.MGRS2UTM\n  - Xcc.MGRS2WGP\n  - Xcc.WGP2GEOREF\n  - Xcc.GEOREF2WGP\n  - XCoordinateTransformation.CreateCoordinateTransform\n  - XCoordinateTransformation.TransformPt\n  - XSpatialReference.ImportFromEPSG\n  - XSpatialReference.ImportFromWkt\n  - XSpatialReference.ImportFromProj4\n  - XSpatialReference.ExportToWkt\n  - XSpatialReference.ExportToPrettyWkt\n  - XSpatialReference.ExportToProj4\n  - XSpatialReference.GetUTMZone\n  - XSpatialReference.IsUTM\nverification_rules:\n  - use_this_workflow_as_primary_path\n  - verify_method_vs_property_form\n  - verify_ref_out_and_enum_literals_when_signature_matters\n  - cross_check_runtime_methods_index_before_emitting_code\n```\n\n\n"
     },
     {
       "path": "workflows/wf-api-core-utils.md",
@@ -302,32 +236,6 @@
         "Xfn.SetConfigPath",
         "Xfn.ValidateLicense",
         "Xfn.IsValidLicense"
-      ],
-      "required_facts": [
-        {
-          "symbol": "XThread.SendMessagePercent",
-          "declaration": "void SendMessagePercent(int nPercent);",
-          "declaration_candidates": null,
-          "source": "Source/NXDL/NXDL.h:2294"
-        },
-        {
-          "symbol": "Xfn.SetConfigPath",
-          "declaration": "static bool SetConfigPath(System::String^ strPath);",
-          "declaration_candidates": null,
-          "source": "Source/NXDL/NXDL.h:3238"
-        },
-        {
-          "symbol": "Xfn.ValidateLicense",
-          "declaration": "static bool ValidateLicense(String^ strSiteInfo);",
-          "declaration_candidates": null,
-          "source": "Source/NXDL/NXDL.h:3276"
-        },
-        {
-          "symbol": "Xfn.IsValidLicense",
-          "declaration": "static bool IsValidLicense(eLicenseType% type, String^% checkID, String^% dateExpire, String^% licensePath);",
-          "declaration_candidates": null,
-          "source": "Source/NXDL/NXDL.h:3284"
-        }
       ],
       "verification_rules": [
         "use_this_workflow_as_primary_path",
@@ -451,13 +359,8 @@
         "Pixoneer.NXDL.Xfn.ValidateLicense",
         "Pixoneer.NXDL.Xfn.IsValidLicense"
       ],
-      "source_anchors": [
-        "Source/NXDL/NXDL.h:2294",
-        "Source/NXDL/NXDL.h:3238",
-        "Source/NXDL/NXDL.h:3276",
-        "Source/NXDL/NXDL.h:3284"
-      ],
-      "content": "---\ntitle: Core Utilities API Workflow\ndescription: Handle license validation, config path switching, and progress/helper utilities outside view families.\naliases:\n  - core utils api\n  - license check\n  - progress reporting\n  - config path usage\n  - 라이선스를 검증하는 방법\n  - 현재 라이선스가 유효한지 확인하는 방법\n  - 엔진 설정 경로를 바꾸고 초기화하는 방법\n  - thread progress helper\n  - site info로 license validate\n  - license type과 expire date를 확인\nsymbols:\n  - XThread\n  - Xfn\ntags:\n  - engine\n  - workflow\n  - api\n  - core\n---\n\n# Overview\n- Goal: collect common top-level NXDL utilities that users call directly outside a view family.\n- This workflow covers progress reporting, config-path switching, and license validation.\n\n## Primary Usage Buckets\n- `license 확인`: `ValidateLicense`, `IsValidLicense`\n- `config path 전환`: `SetConfigPath`\n- `진행률 보고`: `SendMessagePercent`\n\n## Practical Answer Shape\n- `라이선스 검증`: site info 기반 검증과 현재 라이선스 상태 조회를 분리해서 설명\n- `config path`: 설정 경로를 바꾼 뒤 초기화/후속 동작이 필요한지 같이 말해줍니다\n- `진행률`: 장시간 작업 중 percent reporting helper로 설명하고, DFS export progress와는 구분합니다\n\n\n## Answering Guidance\n- Start with this workflow to confirm the question belongs to this API family before writing code or steps.\n- Use the usage buckets and boundary notes to narrow the task to the smallest relevant slice.\n- Read the linked howto, concept, and source pages from the Knowledge Bundle before giving a procedural answer.\n- Use `Verified Facts` for exact method names and declarations; if this page is overview-only, say that and lean on the related pages for concrete steps.\n\n## Knowledge Bundle\n```yaml\nconcept_terms:\n- license\n- config path\n- progress reporting\n- file utility\n- process utility\n- helper api\nrouting_hints:\n- all_of: [진행률]\n  any_of: [percent, helper, send]\n- all_of: [license]\n- all_of: [config path]\nbundle_pages:\n- path: pages/howtos/core-utils-file-and-system.md\n  relation: family_howto\n- path: pages/concepts/engine-core-utility-scope.md\n  relation: family_concept\n- path: pages/sources/nxdl.md\n  relation: source_summary\n```\n\n<!-- GENERATED:RUNTIME_STATUS:START -->\n## Runtime Ingest Status\n- Auto-generated from raw source ingest at `2026-04-20T02:38:44Z`.\n- Resolved required symbols: `4/4`\n- Linked modules:\n  - `NXDL`\n- Missing required symbols: `0`\n<!-- GENERATED:RUNTIME_STATUS:END -->\n## Verified Facts\n```yaml\nworkflow_family: api_core\noutput_shape: focused_snippet_or_helper\nrequired_symbols:\n  - XThread.SendMessagePercent\n  - Xfn.SetConfigPath\n  - Xfn.ValidateLicense\n  - Xfn.IsValidLicense\nrequired_facts:\n  - symbol: XThread.SendMessagePercent\n    declaration: 'void SendMessagePercent(int nPercent);'\n    source: 'Source/NXDL/NXDL.h:2294'\n  - symbol: Xfn.SetConfigPath\n    declaration: 'static bool SetConfigPath(System::String^ strPath);'\n    source: 'Source/NXDL/NXDL.h:3238'\n  - symbol: Xfn.ValidateLicense\n    declaration: 'static bool ValidateLicense(String^ strSiteInfo);'\n    source: 'Source/NXDL/NXDL.h:3276'\n  - symbol: Xfn.IsValidLicense\n    declaration: 'static bool IsValidLicense(eLicenseType% type, String^% checkID, String^% dateExpire, String^% licensePath);'\n    source: 'Source/NXDL/NXDL.h:3284'\nverification_rules:\n  - use_this_workflow_as_primary_path\n  - verify_method_vs_property_form\n  - verify_ref_out_and_enum_literals_when_signature_matters\n  - cross_check_runtime_methods_index_before_emitting_code\n```\n\n"
+      "source_anchors": [],
+      "content": "---\ntitle: Core Utilities API Workflow\ndescription: Handle license validation, config path switching, and progress/helper utilities outside view families.\naliases:\n  - core utils api\n  - license check\n  - progress reporting\n  - config path usage\n  - 라이선스를 검증하는 방법\n  - 현재 라이선스가 유효한지 확인하는 방법\n  - 엔진 설정 경로를 바꾸고 초기화하는 방법\n  - thread progress helper\n  - site info로 license validate\n  - license type과 expire date를 확인\nsymbols:\n  - XThread\n  - Xfn\ntags:\n  - engine\n  - workflow\n  - api\n  - core\n---\n\n# Overview\n- Goal: collect common top-level NXDL utilities that users call directly outside a view family.\n- This workflow covers progress reporting, config-path switching, and license validation.\n\n## Primary Usage Buckets\n- `license 확인`: `ValidateLicense`, `IsValidLicense`\n- `config path 전환`: `SetConfigPath`\n- `진행률 보고`: `SendMessagePercent`\n\n## Practical Answer Shape\n- `라이선스 검증`: site info 기반 검증과 현재 라이선스 상태 조회를 분리해서 설명\n- `config path`: 설정 경로를 바꾼 뒤 초기화/후속 동작이 필요한지 같이 말해줍니다\n- `진행률`: 장시간 작업 중 percent reporting helper로 설명하고, DFS export progress와는 구분합니다\n\n\n## Answering Guidance\n- Start with this workflow to confirm the question belongs to this API family before writing code or steps.\n- Use the usage buckets and boundary notes to narrow the task to the smallest relevant slice.\n- Read the linked howto, concept, and source pages from the Knowledge Bundle before giving a procedural answer.\n- Use `Verified Facts` for exact method names and declarations; if this page is overview-only, say that and lean on the related pages for concrete steps.\n\n## Knowledge Bundle\n```yaml\nconcept_terms:\n- license\n- config path\n- progress reporting\n- file utility\n- process utility\n- helper api\nrouting_hints:\n- all_of: [진행률]\n  any_of: [percent, helper, send]\n- all_of: [license]\n- all_of: [config path]\nbundle_pages:\n- path: pages/howtos/core-utils-file-and-system.md\n  relation: family_howto\n- path: pages/concepts/engine-core-utility-scope.md\n  relation: family_concept\n- path: pages/sources/nxdl.md\n  relation: source_summary\n```\n\n<!-- GENERATED:RUNTIME_STATUS:START -->\n## Runtime Ingest Status\n- Auto-generated from raw source ingest at `2026-04-20T02:38:44Z`.\n- Resolved required symbols: `4/4`\n- Linked modules:\n  - `NXDL`\n- Missing required symbols: `0`\n<!-- GENERATED:RUNTIME_STATUS:END -->\n## Verified Facts\n```yaml\nworkflow_family: api_core\noutput_shape: focused_snippet_or_helper\nrequired_symbols:\n  - XThread.SendMessagePercent\n  - Xfn.SetConfigPath\n  - Xfn.ValidateLicense\n  - Xfn.IsValidLicense\nverification_rules:\n  - use_this_workflow_as_primary_path\n  - verify_method_vs_property_form\n  - verify_ref_out_and_enum_literals_when_signature_matters\n  - cross_check_runtime_methods_index_before_emitting_code\n```\n\n\n"
     },
     {
       "path": "workflows/wf-api-dfs.md",
@@ -501,38 +404,6 @@
         "XPBEProviderExporter.Export2PBE",
         "XPBEProviderExporter.GetPercent",
         "XPBEProviderExporter.Cancel"
-      ],
-      "required_facts": [
-        {
-          "symbol": "XPBIProviderGroup.AddPBIFile",
-          "declaration": "bool AddPBIFile(String^ strFileName);",
-          "declaration_candidates": null,
-          "source": "Source/NXDLdfs/NXDLdfs.h:88"
-        },
-        {
-          "symbol": "XPBIProviderGroup.AddXDMCompManager",
-          "declaration": "bool AddXDMCompManager(XDMCompManager^% manager);",
-          "declaration_candidates": null,
-          "source": "Source/NXDLdfs/NXDLdfs.h:95"
-        },
-        {
-          "symbol": "XPBIProviderGroup.AddXNS",
-          "declaration": "bool AddXNS(String^ strXnsPath);",
-          "declaration_candidates": null,
-          "source": "Source/NXDLdfs/NXDLdfs.h:105"
-        },
-        {
-          "symbol": "XPBIProviderExporter.Export2PBI",
-          "declaration": "bool Export2PBI(String^ strOutputFile);",
-          "declaration_candidates": null,
-          "source": "Source/NXDLdfs/NXDLdfs.h:202"
-        },
-        {
-          "symbol": "XPBEProviderExporter.Export2PBE",
-          "declaration": "bool Export2PBE(String^ strOutputFile);",
-          "declaration_candidates": null,
-          "source": "Source/NXDLdfs/NXDLdfs.h:360"
-        }
       ],
       "verification_rules": [
         "use_this_workflow_as_primary_path",
@@ -676,20 +547,14 @@
         "Pixoneer.NXDL.NDFS.XPBIProviderGroup.AddXDMCompManager",
         "Pixoneer.NXDL.NDFS.XPBIProviderGroup.AddXNS",
         "Pixoneer.NXDL.NDFS.XPBIProviderExporter.Export2PBI",
-        "Pixoneer.NXDL.NDFS.XPBEProviderExporter.Export2PBE",
         "Pixoneer.NXDL.NDFS.XPBIProviderExporter.GetPercent",
         "Pixoneer.NXDL.NDFS.XPBIProviderExporter.Cancel",
+        "Pixoneer.NXDL.NDFS.XPBEProviderExporter.Export2PBE",
         "Pixoneer.NXDL.NDFS.XPBEProviderExporter.GetPercent",
         "Pixoneer.NXDL.NDFS.XPBEProviderExporter.Cancel"
       ],
-      "source_anchors": [
-        "Source/NXDLdfs/NXDLdfs.h:88",
-        "Source/NXDLdfs/NXDLdfs.h:95",
-        "Source/NXDLdfs/NXDLdfs.h:105",
-        "Source/NXDLdfs/NXDLdfs.h:202",
-        "Source/NXDLdfs/NXDLdfs.h:360"
-      ],
-      "content": "---\ntitle: DFS Export API Workflow\ndescription: Build DFS provider groups, run PBI/PBE exports, and track export progress or cancellation.\naliases:\n  - dfs api\n  - pbi export\n  - pbe export\n  - dfs providers usage\n  - dfs provider에 pbi 파일 등록\n  - xdmcompmanager를 dfs provider group에 추가\n  - pbi 파일 export\n  - pbe 파일 export\n  - dfs export 진행률을 확인하는 방법\n  - dfs export를 cancel 하는 방법\n  - dfs provider export progress\n  - dfs provider export cancel\n  - xdmcompmanager를 dfs provider group에 추가하는 방법\nsymbols:\n  - XPBIProviderGroup\n  - XPBIProviderExporter\n  - XPBEProviderExporter\ntags:\n  - engine\n  - workflow\n  - api\n  - dfs\n---\n\n# Overview\n- Goal: register DFS providers and build PBI/PBE outputs.\n- Prefer this family for DFS provider-group registration, PBI/PBE export, export progress polling, and export cancel flows.\n\n## Primary Usage Buckets\n- `provider group 구성`: `AddPBIFile`, `AddXDMCompManager`, `AddXNS`, `Clear`\n- `PBI export`: `SetSource`, `Export2PBI`, `GetPercent`, `Cancel`\n- `PBE export`: `SetSource`, `Export2PBE`, `GetPercent`, `Cancel`\n- `결과 상태 확인`: `GetPercent`와 `Cancel`을 짝으로 설명해 장시간 export 제어 흐름을 답합니다.\n- `view와의 경계`: 데이터셋을 어떤 view에 보여줄지는 `PlanetView` 또는 `MilmapView`, provider/export 파이프라인은 `DFS`로 분리합니다.\n\n\n## Answering Guidance\n- Start with this workflow to confirm the question belongs to this API family before writing code or steps.\n- Use the usage buckets and boundary notes to narrow the task to the smallest relevant slice.\n- Read the linked howto, concept, and source pages from the Knowledge Bundle before giving a procedural answer.\n- Use `Verified Facts` for exact method names and declarations; if this page is overview-only, say that and lean on the related pages for concrete steps.\n\n## Knowledge Bundle\n```yaml\nconcept_terms:\n- provider\n- dataset\n- group\nrouting_hints:\n- all_of: [dfs, export]\n- all_of: [dfs, 진행률]\n- all_of: [dfs, cancel]\n- all_of: [dfs, provider group, xdmcompmanager]\nbundle_pages:\n- path: pages/howtos/dfs-provider-and-dataset.md\n  relation: family_howto\n- path: pages/concepts/provider-dataset-and-scene-assets.md\n  relation: family_concept\n- path: workflows/wf-api-planetview.md\n  relation: dependency_workflow\n- path: pages/sources/nxdldfs.md\n  relation: source_summary\n```\n\n<!-- GENERATED:RUNTIME_STATUS:START -->\n## Runtime Ingest Status\n- Auto-generated from raw source ingest at `2026-04-20T02:38:44Z`.\n- Resolved required symbols: `9/9`\n- Linked modules:\n  - `NXDLdfs`\n- Missing required symbols: `0`\n<!-- GENERATED:RUNTIME_STATUS:END -->\n## Verified Facts\n```yaml\nworkflow_family: api_dfs\noutput_shape: focused_snippet_or_helper\nrequired_symbols:\n  - XPBIProviderGroup.AddPBIFile\n  - XPBIProviderGroup.AddXDMCompManager\n  - XPBIProviderGroup.AddXNS\n  - XPBIProviderExporter.Export2PBI\n  - XPBIProviderExporter.GetPercent\n  - XPBIProviderExporter.Cancel\n  - XPBEProviderExporter.Export2PBE\n  - XPBEProviderExporter.GetPercent\n  - XPBEProviderExporter.Cancel\nrequired_facts:\n  - symbol: XPBIProviderGroup.AddPBIFile\n    declaration: 'bool AddPBIFile(String^ strFileName);'\n    source: 'Source/NXDLdfs/NXDLdfs.h:88'\n  - symbol: XPBIProviderGroup.AddXDMCompManager\n    declaration: 'bool AddXDMCompManager(XDMCompManager^% manager);'\n    source: 'Source/NXDLdfs/NXDLdfs.h:95'\n  - symbol: XPBIProviderGroup.AddXNS\n    declaration: 'bool AddXNS(String^ strXnsPath);'\n    source: 'Source/NXDLdfs/NXDLdfs.h:105'\n  - symbol: XPBIProviderExporter.Export2PBI\n    declaration: 'bool Export2PBI(String^ strOutputFile);'\n    source: 'Source/NXDLdfs/NXDLdfs.h:202'\n  - symbol: XPBEProviderExporter.Export2PBE\n    declaration: 'bool Export2PBE(String^ strOutputFile);'\n    source: 'Source/NXDLdfs/NXDLdfs.h:360'\nverification_rules:\n  - use_this_workflow_as_primary_path\n  - verify_method_vs_property_form\n  - verify_ref_out_and_enum_literals_when_signature_matters\n  - cross_check_runtime_methods_index_before_emitting_code\n```\n\n"
+      "source_anchors": [],
+      "content": "---\ntitle: DFS Export API Workflow\ndescription: Build DFS provider groups, run PBI/PBE exports, and track export progress or cancellation.\naliases:\n  - dfs api\n  - pbi export\n  - pbe export\n  - dfs providers usage\n  - dfs provider에 pbi 파일 등록\n  - xdmcompmanager를 dfs provider group에 추가\n  - pbi 파일 export\n  - pbe 파일 export\n  - dfs export 진행률을 확인하는 방법\n  - dfs export를 cancel 하는 방법\n  - dfs provider export progress\n  - dfs provider export cancel\n  - xdmcompmanager를 dfs provider group에 추가하는 방법\nsymbols:\n  - XPBIProviderGroup\n  - XPBIProviderExporter\n  - XPBEProviderExporter\ntags:\n  - engine\n  - workflow\n  - api\n  - dfs\n---\n\n# Overview\n- Goal: register DFS providers and build PBI/PBE outputs.\n- Prefer this family for DFS provider-group registration, PBI/PBE export, export progress polling, and export cancel flows.\n\n## Primary Usage Buckets\n- `provider group 구성`: `AddPBIFile`, `AddXDMCompManager`, `AddXNS`, `Clear`\n- `PBI export`: `SetSource`, `Export2PBI`, `GetPercent`, `Cancel`\n- `PBE export`: `SetSource`, `Export2PBE`, `GetPercent`, `Cancel`\n- `결과 상태 확인`: `GetPercent`와 `Cancel`을 짝으로 설명해 장시간 export 제어 흐름을 답합니다.\n- `view와의 경계`: 데이터셋을 어떤 view에 보여줄지는 `PlanetView` 또는 `MilmapView`, provider/export 파이프라인은 `DFS`로 분리합니다.\n\n\n## Answering Guidance\n- Start with this workflow to confirm the question belongs to this API family before writing code or steps.\n- Use the usage buckets and boundary notes to narrow the task to the smallest relevant slice.\n- Read the linked howto, concept, and source pages from the Knowledge Bundle before giving a procedural answer.\n- Use `Verified Facts` for exact method names and declarations; if this page is overview-only, say that and lean on the related pages for concrete steps.\n\n## Knowledge Bundle\n```yaml\nconcept_terms:\n- provider\n- dataset\n- group\nrouting_hints:\n- all_of: [dfs, export]\n- all_of: [dfs, 진행률]\n- all_of: [dfs, cancel]\n- all_of: [dfs, provider group, xdmcompmanager]\nbundle_pages:\n- path: pages/howtos/dfs-provider-and-dataset.md\n  relation: family_howto\n- path: pages/concepts/provider-dataset-and-scene-assets.md\n  relation: family_concept\n- path: workflows/wf-api-planetview.md\n  relation: dependency_workflow\n- path: pages/sources/nxdldfs.md\n  relation: source_summary\n```\n\n<!-- GENERATED:RUNTIME_STATUS:START -->\n## Runtime Ingest Status\n- Auto-generated from raw source ingest at `2026-04-20T02:38:44Z`.\n- Resolved required symbols: `9/9`\n- Linked modules:\n  - `NXDLdfs`\n- Missing required symbols: `0`\n<!-- GENERATED:RUNTIME_STATUS:END -->\n## Verified Facts\n```yaml\nworkflow_family: api_dfs\noutput_shape: focused_snippet_or_helper\nrequired_symbols:\n  - XPBIProviderGroup.AddPBIFile\n  - XPBIProviderGroup.AddXDMCompManager\n  - XPBIProviderGroup.AddXNS\n  - XPBIProviderExporter.Export2PBI\n  - XPBIProviderExporter.GetPercent\n  - XPBIProviderExporter.Cancel\n  - XPBEProviderExporter.Export2PBE\n  - XPBEProviderExporter.GetPercent\n  - XPBEProviderExporter.Cancel\nverification_rules:\n  - use_this_workflow_as_primary_path\n  - verify_method_vs_property_form\n  - verify_ref_out_and_enum_literals_when_signature_matters\n  - cross_check_runtime_methods_index_before_emitting_code\n```\n\n\n"
     },
     {
       "path": "workflows/wf-api-editor.md",
@@ -729,7 +594,6 @@
       "workflow_family": "api_editor",
       "output_shape": "focused_snippet_or_helper",
       "required_symbols": [],
-      "required_facts": [],
       "verification_rules": [
         "use_this_workflow_as_primary_path",
         "treat_this_page_as_source_backed_family_overview"
@@ -887,7 +751,7 @@
       ],
       "linked_method_symbols": [],
       "source_anchors": [],
-      "content": "---\ntitle: Annotation Editor API Workflow\ndescription: Display, capture, edit, and reorder annotation objects on the editor canvas.\naliases:\n  - editor api\n  - neditor 사용법\n  - annotation editor\n  - 편집 화면 사용법\n  - canvas editor\n  - 편집 화면에 이미지를 표시\n  - 편집 화면 화질개선 적용 이미지 도시\n  - 편집 화면 이미지 파일 캡처\n  - 편집 화면 확대 이미지 가져오기\n  - 편집 화면 좌표계 설정\n  - 편집 화면 zoom fit\n  - 편집 화면 copy paste delete\n  - 편집 화면 group ungroup undo redo\n  - 편집 화면에 이미지를 표시\n  - 편집 화면 확대 이미지 가져오기\n  - 편집 화면 이미지 파일 캡처\n  - 편집 화면에서 to front 변경하는 방법\n  - 편집 화면에서 to rear 변경하는 방법\n  - 편집 화면에서 to frontmost 변경하는 방법\n  - 편집 화면에서 to rearmost 변경하는 방법\n  - 편집 화면에서 component 사용하는 방법\n  - 편집 화면에서 픽셀 to 실제 좌표 length 사용하는 방법\n  - 편집 화면에서 영상 캡처하는 방법\nsymbols:\n  - NEditor\ntags:\n  - engine\n  - workflow\n  - api\n  - editor\n---\n\n# Overview\n- Goal: answer `NEditor` usage questions from one page.\n- This workflow covers image display/update, capture, SR and world/screen conversion, zoom/canvas state, and common editor actions such as copy/paste/group/delete.\n- For the current wiki routing, use this family for annotation/editor canvas interactions, not for `scene object` file or selection lifecycle questions.\n- For the current wiki routing, if the query explicitly says `편집 화면`, `Canvas`, `Component`, or editor z-order actions like `To Front/Rear/Frontmost/Rearmost`, route here before generic coordinate/view families.\n\n## Primary Usage Buckets\n- `이미지 표시/갱신`: `DisplayImage`, `DisplayImageWithoutThread`, `UpdateImage`, `UpdateImageEnhance`, `Unload`\n- `캡처/확대 보기`: `CaptureImage`, `GetMagnifiedImage`\n- `좌표계/화면 변환`: `SetSR`, `GetSR`, `ScreenToWorld`, `WorldToScreen`, `ConvPixelToWorldLength`, `ConvWorldToPixelLength`\n- `편집 캔버스`: `SetCanvasSize`, `Resize`, `UpdateCanvas`, `SetWorld`, `SetWorldToCenter`, `SetWorldPerScreen`, `GetWorldPerScreen`\n- `선택/편집`: `SelectAll`, `SelectNone`, `SetEditLayer`, `UpdateSelectedObjs`\n- `객체 정리`: `Copy`, `Cut`, `Paste`, `Delete`, `Group`, `UnGroup`, `Undo`, `Redo`\n- `Z-order 이동`: `MoveToFront`, `MoveToFrontmost`, `MoveToRear`, `MoveToRearmost`, `Up`, `Down`, `Left`, `Right`\n\n## Practical Answer Shape\n- `편집 화면에 이미지 표시`: 먼저 `DisplayImage*` 계열로 화면에 올리고, 후속 편집 작업은 `SetEditLayer`와 selection API로 연결합니다.\n- `편집 화면 캡처`: `CaptureImage`와 `GetMagnifiedImage`를 구분해서 설명합니다. 전체 저장인지, 일부 확대 이미지인지 먼저 나눕니다.\n- `편집 화면 좌표 변환`: 점 좌표는 `ScreenToWorld` / `WorldToScreen`, 길이 변환은 `ConvPixelToWorldLength` / `ConvWorldToPixelLength`를 우선 제시합니다.\n- `편집 화면 순서 변경`: `MoveToFront*` / `MoveToRear*`는 객체 Z-order 이동, `Group/UnGroup`는 선택 집합 관리로 분리해서 답합니다.\n\n\n## Answering Guidance\n- Start with this workflow to confirm the question belongs to this API family before writing code or steps.\n- Use the usage buckets and boundary notes to narrow the task to the smallest relevant slice.\n- Read the linked howto, concept, and source pages from the Knowledge Bundle before giving a procedural answer.\n- Use `Verified Facts` for exact method names and declarations; if this page is overview-only, say that and lean on the related pages for concrete steps.\n\n## Knowledge Bundle\n```yaml\nconcept_terms:\n- editable object\n- selection\n- hit test\n- edit lifecycle\nrouting_hints:\n- all_of: [편집 화면, 영상 캡처]\n- all_of: [편집 화면, to front]\n- all_of: [편집 화면, component]\n- all_of: [편집 화면, canvas]\n- all_of: [편집 화면]\n  any_of: [좌표계, 화면 좌표, 실제 좌표, 확대 이미지, group, ungroup, undo, redo]\nbundle_pages:\n- path: pages/howtos/editor-display-and-layer-editing.md\n  relation: family_howto\n- path: pages/concepts/editor-and-scene-object-lifecycle.md\n  relation: family_concept\n- path: pages/concepts/view-screen-world-coordinates.md\n  relation: family_concept\n- path: workflows/wf-api-imageview.md\n  relation: dependency_workflow\n```\n\n<!-- GENERATED:RUNTIME_STATUS:START -->\n## Runtime Ingest Status\n- Auto-generated from raw source ingest at `2026-04-20T02:38:44Z`.\n- Resolved required symbols: `0/0`\n- Missing required symbols: `0`\n<!-- GENERATED:RUNTIME_STATUS:END -->\n## Verified Facts\n```yaml\nworkflow_family: api_editor\noutput_shape: focused_snippet_or_helper\nverification_rules:\n  - use_this_workflow_as_primary_path\n  - treat_this_page_as_source_backed_family_overview\nnotes:\n  - Representative method names for NEditor are confirmed from dev3.0 API docs even though runtime methods index does not currently resolve this family.\n```\n\n"
+      "content": "﻿---\ntitle: Annotation Editor API Workflow\ndescription: Display, capture, edit, and reorder annotation objects on the editor canvas.\naliases:\n  - editor api\n  - neditor 사용법\n  - annotation editor\n  - 편집 화면 사용법\n  - canvas editor\n  - 편집 화면에 이미지를 표시\n  - 편집 화면 화질개선 적용 이미지 도시\n  - 편집 화면 이미지 파일 캡처\n  - 편집 화면 확대 이미지 가져오기\n  - 편집 화면 좌표계 설정\n  - 편집 화면 zoom fit\n  - 편집 화면 copy paste delete\n  - 편집 화면 group ungroup undo redo\n  - 편집 화면에 이미지를 표시\n  - 편집 화면 확대 이미지 가져오기\n  - 편집 화면 이미지 파일 캡처\n  - 편집 화면에서 to front 변경하는 방법\n  - 편집 화면에서 to rear 변경하는 방법\n  - 편집 화면에서 to frontmost 변경하는 방법\n  - 편집 화면에서 to rearmost 변경하는 방법\n  - 편집 화면에서 component 사용하는 방법\n  - 편집 화면에서 픽셀 to 실제 좌표 length 사용하는 방법\n  - 편집 화면에서 영상 캡처하는 방법\nsymbols:\n  - NEditor\ntags:\n  - engine\n  - workflow\n  - api\n  - editor\n---\n\n# Overview\n- Goal: answer `NEditor` usage questions from one page.\n- This workflow covers image display/update, capture, SR and world/screen conversion, zoom/canvas state, and common editor actions such as copy/paste/group/delete.\n- For the current wiki routing, use this family for annotation/editor canvas interactions, not for `scene object` file or selection lifecycle questions.\n- For the current wiki routing, if the query explicitly says `편집 화면`, `Canvas`, `Component`, or editor z-order actions like `To Front/Rear/Frontmost/Rearmost`, route here before generic coordinate/view families.\n\n## Primary Usage Buckets\n- `이미지 표시/갱신`: `DisplayImage`, `DisplayImageWithoutThread`, `UpdateImage`, `UpdateImageEnhance`, `Unload`\n- `캡처/확대 보기`: `CaptureImage`, `GetMagnifiedImage`\n- `좌표계/화면 변환`: `SetSR`, `GetSR`, `ScreenToWorld`, `WorldToScreen`, `ConvPixelToWorldLength`, `ConvWorldToPixelLength`\n- `편집 캔버스`: `SetCanvasSize`, `Resize`, `UpdateCanvas`, `SetWorld`, `SetWorldToCenter`, `SetWorldPerScreen`, `GetWorldPerScreen`\n- `선택/편집`: `SelectAll`, `SelectNone`, `SetEditLayer`, `UpdateSelectedObjs`\n- `객체 정리`: `Copy`, `Cut`, `Paste`, `Delete`, `Group`, `UnGroup`, `Undo`, `Redo`\n- `Z-order 이동`: `MoveToFront`, `MoveToFrontmost`, `MoveToRear`, `MoveToRearmost`, `Up`, `Down`, `Left`, `Right`\n\n## Practical Answer Shape\n- `편집 화면에 이미지 표시`: 먼저 `DisplayImage*` 계열로 화면에 올리고, 후속 편집 작업은 `SetEditLayer`와 selection API로 연결합니다.\n- `편집 화면 캡처`: `CaptureImage`와 `GetMagnifiedImage`를 구분해서 설명합니다. 전체 저장인지, 일부 확대 이미지인지 먼저 나눕니다.\n- `편집 화면 좌표 변환`: 점 좌표는 `ScreenToWorld` / `WorldToScreen`, 길이 변환은 `ConvPixelToWorldLength` / `ConvWorldToPixelLength`를 우선 제시합니다.\n- `편집 화면 순서 변경`: `MoveToFront*` / `MoveToRear*`는 객체 Z-order 이동, `Group/UnGroup`는 선택 집합 관리로 분리해서 답합니다.\n\n\n## Answering Guidance\n- Start with this workflow to confirm the question belongs to this API family before writing code or steps.\n- Use the usage buckets and boundary notes to narrow the task to the smallest relevant slice.\n- Read the linked howto, concept, and source pages from the Knowledge Bundle before giving a procedural answer.\n- Use `Verified Facts` for exact method names and declarations; if this page is overview-only, say that and lean on the related pages for concrete steps.\n\n## Knowledge Bundle\n```yaml\nconcept_terms:\n- editable object\n- selection\n- hit test\n- edit lifecycle\nrouting_hints:\n- all_of: [편집 화면, 영상 캡처]\n- all_of: [편집 화면, to front]\n- all_of: [편집 화면, component]\n- all_of: [편집 화면, canvas]\n- all_of: [편집 화면]\n  any_of: [좌표계, 화면 좌표, 실제 좌표, 확대 이미지, group, ungroup, undo, redo]\nbundle_pages:\n- path: pages/howtos/editor-display-and-layer-editing.md\n  relation: family_howto\n- path: pages/concepts/editor-and-scene-object-lifecycle.md\n  relation: family_concept\n- path: pages/concepts/view-screen-world-coordinates.md\n  relation: family_concept\n- path: workflows/wf-api-imageview.md\n  relation: dependency_workflow\n```\n\n<!-- GENERATED:RUNTIME_STATUS:START -->\n## Runtime Ingest Status\n- Auto-generated from raw source ingest at `2026-04-20T02:38:44Z`.\n- Resolved required symbols: `0/0`\n- Missing required symbols: `0`\n<!-- GENERATED:RUNTIME_STATUS:END -->\n## Verified Facts\n```yaml\nworkflow_family: api_editor\noutput_shape: focused_snippet_or_helper\nverification_rules:\n  - use_this_workflow_as_primary_path\n  - treat_this_page_as_source_backed_family_overview\nnotes:\n  - Representative method names for NEditor are confirmed from dev3.0 API docs even though runtime methods index does not currently resolve this family.\n```\n\n\n"
     },
     {
       "path": "workflows/wf-api-imageview.md",
@@ -953,92 +817,6 @@
         "NXImageLayerCompLink.GetXDLCompManager1",
         "NXImageLayerCompLink.GetXDLCompManager2",
         "NXImageLayerCompLink.ZoomFit"
-      ],
-      "required_facts": [
-        {
-          "symbol": "NXImageView.AddImageLayer",
-          "declaration": "bool AddImageLayer(NXImageLayer^% layer);",
-          "declaration_candidates": null,
-          "source": "Source/NXImage/NXImageView.h:836"
-        },
-        {
-          "symbol": "NXImageView.RemoveImageLayer",
-          "declaration": "bool RemoveImageLayer(NXImageLayer^ layer);",
-          "declaration_candidates": null,
-          "source": "Source/NXImage/NXImageView.h:841"
-        },
-        {
-          "symbol": "NXImageView.ClearLayer",
-          "declaration": "void ClearLayer();",
-          "declaration_candidates": null,
-          "source": "Source/NXImage/NXImageView.h:112"
-        },
-        {
-          "symbol": "NXImageView.SetBackgroundMap",
-          "declaration": "bool SetBackgroundMap(String^ strConfig);",
-          "declaration_candidates": null,
-          "source": "Source/NXImage/NXImageView.h:356"
-        },
-        {
-          "symbol": "NXImageView.ZoomFit",
-          "declaration": "bool ZoomFit();",
-          "declaration_candidates": null,
-          "source": "Source/NXImage/NXImageView.h:198"
-        },
-        {
-          "symbol": "NXImageView.ZoomOneToOne",
-          "declaration": "bool ZoomOneToOne();",
-          "declaration_candidates": null,
-          "source": "Source/NXImage/NXImageView.h:206"
-        },
-        {
-          "symbol": "NXImageView.ZoomFitRect",
-          "declaration": "bool ZoomFitRect(double llx, double lly, double urx, double ury);",
-          "declaration_candidates": null,
-          "source": "Source/NXImage/NXImageView.h:219"
-        },
-        {
-          "symbol": "NXImageView.SetWorld",
-          "declaration": "bool SetWorld(XVertex2d^ vCenter, XVertex2d^ vPixelSize, XAngle^ aRotate);",
-          "declaration_candidates": null,
-          "source": "Source/NXImage/NXImageView.h:235"
-        },
-        {
-          "symbol": "NXImageView.SetWorldToCenter",
-          "declaration": "bool SetWorldToCenter(double wcx, double wcy);",
-          "declaration_candidates": null,
-          "source": "Source/NXImage/NXImageView.h:241"
-        },
-        {
-          "symbol": "NXImageView.SetWorldPerScreen",
-          "declaration": "bool SetWorldPerScreen(double wpx, double wpy);",
-          "declaration_candidates": null,
-          "source": "Source/NXImage/NXImageView.h:253"
-        },
-        {
-          "symbol": "NXImageView.LinkCameraFrom",
-          "declaration": "bool LinkCameraFrom(NXImageView^ view);",
-          "declaration_candidates": null,
-          "source": "Source/NXImage/NXImageView.h:224"
-        },
-        {
-          "symbol": "NXImageView.RefreshScreen",
-          "declaration": "bool RefreshScreen();",
-          "declaration_candidates": null,
-          "source": "Source/NXImage/NXImageView.h:228"
-        },
-        {
-          "symbol": "NXImageLayerComposites.GetXDMCompManager",
-          "declaration": "XDMCompManager^ GetXDMCompManager();",
-          "declaration_candidates": null,
-          "source": "Source/NXImage/NXImageLayerComposites.h:149"
-        },
-        {
-          "symbol": "NXImageLayerComposites.ZoomFit",
-          "declaration": "bool ZoomFit();",
-          "declaration_candidates": null,
-          "source": "Source/NXImage/NXImageLayerComposites.h:142"
-        }
       ],
       "verification_rules": [
         "use_this_workflow_as_primary_path",
@@ -1245,32 +1023,17 @@
         "Pixoneer.NXDL.NXImage.NXImageView.SetWorldPerScreen",
         "Pixoneer.NXDL.NXImage.NXImageView.LinkCameraFrom",
         "Pixoneer.NXDL.NXImage.NXImageView.RefreshScreen",
-        "Pixoneer.NXDL.NXImage.NXImageLayerComposites.GetXDMCompManager",
-        "Pixoneer.NXDL.NXImage.NXImageLayerComposites.ZoomFit",
         "Pixoneer.NXDL.NXImage.NXImageView.ScreenToWorld",
         "Pixoneer.NXDL.NXImage.NXImageView.WorldToScreen",
+        "Pixoneer.NXDL.NXImage.NXImageLayerComposites.GetXDMCompManager",
         "Pixoneer.NXDL.NXImage.NXImageLayerComposites.ReadPixelValues",
+        "Pixoneer.NXDL.NXImage.NXImageLayerComposites.ZoomFit",
         "Pixoneer.NXDL.NXImage.NXImageLayerCompLink.GetXDLCompManager1",
         "Pixoneer.NXDL.NXImage.NXImageLayerCompLink.GetXDLCompManager2",
         "Pixoneer.NXDL.NXImage.NXImageLayerCompLink.ZoomFit"
       ],
-      "source_anchors": [
-        "Source/NXImage/NXImageView.h:836",
-        "Source/NXImage/NXImageView.h:841",
-        "Source/NXImage/NXImageView.h:112",
-        "Source/NXImage/NXImageView.h:356",
-        "Source/NXImage/NXImageView.h:198",
-        "Source/NXImage/NXImageView.h:206",
-        "Source/NXImage/NXImageView.h:219",
-        "Source/NXImage/NXImageView.h:235",
-        "Source/NXImage/NXImageView.h:241",
-        "Source/NXImage/NXImageView.h:253",
-        "Source/NXImage/NXImageView.h:224",
-        "Source/NXImage/NXImageView.h:228",
-        "Source/NXImage/NXImageLayerComposites.h:149",
-        "Source/NXImage/NXImageLayerComposites.h:142"
-      ],
-      "content": "---\ntitle: ImageView API Workflow\ndescription: Host NXImageView, attach layers, control view state, and handle composite-linked display tasks.\naliases:\n  - imageview api\n  - imageview 사용법\n  - nximageview usage\n  - nximageview wpf hosting\n  - windowsformshost nximageview\n  - wpf에서 nximageview를 호스팅\n  - imageview geotiff display\n  - imageview xdm display\n  - imageview layer add\n  - imageview background map\n  - imageview zoom fit\n  - imageview pixel read\n  - imageview 화면 좌표를 실제 좌표로 바꾸는 방법\n  - imageview에 비교용 합성 레이어를 붙이는 방법\n  - imageview 합성 관리자 1 가져오기\n  - imageview 합성 관리자 2 가져오기\n  - imageview에서 합성 1 front 설정\n  - imageview에서 합성 2 front 설정\n  - 합성 1 front 설정\n  - 합성 2 front 설정\nsymbols:\n  - NXImageView\n  - NXImageLayer\n  - NXImageLayerComposites\n  - NXImageLayerCompLink\n  - XDMCompManager\n  - XDMComposite\ntags:\n  - engine\n  - workflow\n  - api\n  - imageview\n  - wpf\n---\n\n# Overview\n- Goal: answer most `NXImageView` usage questions from one page.\n- Default host context: WPF. `NXImageView` is a WinForms-backed control, so host it through `WindowsFormsHost` when the shell matters.\n- This workflow covers host setup, layer attach/remove, background-map configuration, zoom/world control, screen/world conversion, pixel read, and XDM composite hookup.\n- For the current wiki routing, treat view-owned operations such as layer attach, background map, zoom, refresh, and ImageView screen/world conversion as `ImageView`; if the question is really about XDM band/composite assembly, route to `Raster`.\n- For the current wiki routing, questions about `NXImageLayerCompLink` comp-manager retrieval or composite `1/2 Front` settings stay in `ImageView`; those are documented here as view-owned composite-link operations.\n- For the current wiki routing, embedded video-layer channel wiring, channel reset, initial frame size, and video-layer screen/world conversion are handled by `VideoView`.\n\n## Primary Usage Buckets\n- `ImageView에 Layer 추가/제거`: `AddImageLayer`, `RemoveImageLayer`, `ClearLayer`\n- `파일을 띄운 뒤 화면 맞춤`: `ZoomFit`, `ZoomFitRect`, `ZoomOneToOne`, `RefreshScreen`\n- `화면/좌표 변환`: `ScreenToWorld`, `WorldToScreen`, `SetWorld`, `SetWorldToCenter`, `SetWorldPerScreen`\n- `배경지도`: `SetBackgroundMap` and related background-map properties\n- `XDM / 합성`: `NXImageLayerComposites.GetXDMCompManager`, `ReadPixelValues`, `ZoomFit`\n- `특수 레이어`: `NXImageLayerCompLink.GetXDLCompManager1`, `GetXDLCompManager2`, `ZoomFit`\n\n## Family Boundaries\n- File load and band extraction live in [Raster API Workflow](wf-api-raster.md).\n- If the question is mainly about vector files or overlays, use [Vector API Workflow](wf-api-vector.md).\n- Source anchors for this family live in [NXImage source](../pages/sources/nximage.md), [NXDLio source](../pages/sources/nxdlio.md), and [NXDLrs source](../pages/sources/nxdlrs.md).\n\n## Practical Answer Shape\n- `ImageView에 레이어 추가`: view 생성/호스팅 -> `AddImageLayer` -> `ZoomFit` 또는 `RefreshScreen`\n- `배경지도 설정`: `SetBackgroundMap` 호출과 이후 view refresh를 같이 설명\n- `화면/실좌표 변환`: `ScreenToWorld` / `WorldToScreen`을 pair로 설명\n- `합성 관리자/comp-link`: `GetXDMCompManager` 또는 `GetXDLCompManager1/2`가 필요한지 먼저 가릅니다\n\n\n## Answering Guidance\n- Start with this workflow to confirm the question belongs to this API family before writing code or steps.\n- Use the usage buckets and boundary notes to narrow the task to the smallest relevant slice.\n- Read the linked howto, concept, and source pages from the Knowledge Bundle before giving a procedural answer.\n- Use `Verified Facts` for exact method names and declarations; if this page is overview-only, say that and lean on the related pages for concrete steps.\n\n## Knowledge Bundle\n```yaml\nconcept_terms:\n- layer\n- composite\n- background map\n- screen world transform\nrouting_hints:\n- all_of: [합성, front]\n- all_of: [합성 관리자]\n- all_of: [imageview, 합성 관리자]\n- all_of: [imageview]\n  any_of: [layer, 레이어, 배경지도, zoomfit, zoom fit, 픽셀값, 화면 좌표, world 좌표]\nbundle_pages:\n- path: pages/howtos/imageview-display-recipes.md\n  relation: family_howto\n- path: pages/concepts/layer-composite-display-pipeline.md\n  relation: family_concept\n- path: pages/concepts/view-screen-world-coordinates.md\n  relation: family_concept\n- path: workflows/wf-api-raster.md\n  relation: dependency_workflow\n- path: pages/sources/nximage.md\n  relation: source_summary\n- path: pages/sources/nxdlio.md\n  relation: source_summary\n```\n\n<!-- GENERATED:RUNTIME_STATUS:START -->\n## Runtime Ingest Status\n- Auto-generated from raw source ingest at `2026-04-20T02:38:44Z`.\n- Resolved required symbols: `20/20`\n- Linked modules:\n  - `NXImage`\n- Missing required symbols: `0`\n<!-- GENERATED:RUNTIME_STATUS:END -->\n## Verified Facts\n```yaml\nworkflow_family: api_imageview\noutput_shape: workflow_bound_to_host_context\nrequired_symbols:\n  - NXImageView.AddImageLayer\n  - NXImageView.RemoveImageLayer\n  - NXImageView.ClearLayer\n  - NXImageView.SetBackgroundMap\n  - NXImageView.ZoomFit\n  - NXImageView.ZoomOneToOne\n  - NXImageView.ZoomFitRect\n  - NXImageView.SetWorld\n  - NXImageView.SetWorldToCenter\n  - NXImageView.SetWorldPerScreen\n  - NXImageView.LinkCameraFrom\n  - NXImageView.RefreshScreen\n  - NXImageView.ScreenToWorld\n  - NXImageView.WorldToScreen\n  - NXImageLayerComposites.GetXDMCompManager\n  - NXImageLayerComposites.ReadPixelValues\n  - NXImageLayerComposites.ZoomFit\n  - NXImageLayerCompLink.GetXDLCompManager1\n  - NXImageLayerCompLink.GetXDLCompManager2\n  - NXImageLayerCompLink.ZoomFit\nrequired_facts:\n  - symbol: NXImageView.AddImageLayer\n    declaration: 'bool AddImageLayer(NXImageLayer^% layer);'\n    source: 'Source/NXImage/NXImageView.h:836'\n  - symbol: NXImageView.RemoveImageLayer\n    declaration: 'bool RemoveImageLayer(NXImageLayer^ layer);'\n    source: 'Source/NXImage/NXImageView.h:841'\n  - symbol: NXImageView.ClearLayer\n    declaration: 'void ClearLayer();'\n    source: 'Source/NXImage/NXImageView.h:112'\n  - symbol: NXImageView.SetBackgroundMap\n    declaration: 'bool SetBackgroundMap(String^ strConfig);'\n    source: 'Source/NXImage/NXImageView.h:356'\n  - symbol: NXImageView.ZoomFit\n    declaration: 'bool ZoomFit();'\n    source: 'Source/NXImage/NXImageView.h:198'\n  - symbol: NXImageView.ZoomOneToOne\n    declaration: 'bool ZoomOneToOne();'\n    source: 'Source/NXImage/NXImageView.h:206'\n  - symbol: NXImageView.ZoomFitRect\n    declaration: 'bool ZoomFitRect(double llx, double lly, double urx, double ury);'\n    source: 'Source/NXImage/NXImageView.h:219'\n  - symbol: NXImageView.SetWorld\n    declaration: 'bool SetWorld(XVertex2d^ vCenter, XVertex2d^ vPixelSize, XAngle^ aRotate);'\n    source: 'Source/NXImage/NXImageView.h:235'\n  - symbol: NXImageView.SetWorldToCenter\n    declaration: 'bool SetWorldToCenter(double wcx, double wcy);'\n    source: 'Source/NXImage/NXImageView.h:241'\n  - symbol: NXImageView.SetWorldPerScreen\n    declaration: 'bool SetWorldPerScreen(double wpx, double wpy);'\n    source: 'Source/NXImage/NXImageView.h:253'\n  - symbol: NXImageView.LinkCameraFrom\n    declaration: 'bool LinkCameraFrom(NXImageView^ view);'\n    source: 'Source/NXImage/NXImageView.h:224'\n  - symbol: NXImageView.RefreshScreen\n    declaration: 'bool RefreshScreen();'\n    source: 'Source/NXImage/NXImageView.h:228'\n  - symbol: NXImageLayerComposites.GetXDMCompManager\n    declaration: 'XDMCompManager^ GetXDMCompManager();'\n    source: 'Source/NXImage/NXImageLayerComposites.h:149'\n  - symbol: NXImageLayerComposites.ZoomFit\n    declaration: 'bool ZoomFit();'\n    source: 'Source/NXImage/NXImageLayerComposites.h:142'\nverification_rules:\n  - use_this_workflow_as_primary_path\n  - verify_method_vs_property_form\n  - verify_ref_out_and_enum_literals_when_signature_matters\n  - cross_check_runtime_methods_index_before_emitting_code\n```\n\n"
+      "source_anchors": [],
+      "content": "---\ntitle: ImageView API Workflow\ndescription: Host NXImageView, attach layers, control view state, and handle composite-linked display tasks.\naliases:\n  - imageview api\n  - imageview 사용법\n  - nximageview usage\n  - nximageview wpf hosting\n  - windowsformshost nximageview\n  - wpf에서 nximageview를 호스팅\n  - imageview geotiff display\n  - imageview xdm display\n  - imageview layer add\n  - imageview background map\n  - imageview zoom fit\n  - imageview pixel read\n  - imageview 화면 좌표를 실제 좌표로 바꾸는 방법\n  - imageview에 비교용 합성 레이어를 붙이는 방법\n  - imageview 합성 관리자 1 가져오기\n  - imageview 합성 관리자 2 가져오기\n  - imageview에서 합성 1 front 설정\n  - imageview에서 합성 2 front 설정\n  - 합성 1 front 설정\n  - 합성 2 front 설정\nsymbols:\n  - NXImageView\n  - NXImageLayer\n  - NXImageLayerComposites\n  - NXImageLayerCompLink\n  - XDMCompManager\n  - XDMComposite\ntags:\n  - engine\n  - workflow\n  - api\n  - imageview\n  - wpf\n---\n\n# Overview\n- Goal: answer most `NXImageView` usage questions from one page.\n- Default host context: WPF. `NXImageView` is a WinForms-backed control, so host it through `WindowsFormsHost` when the shell matters.\n- This workflow covers host setup, layer attach/remove, background-map configuration, zoom/world control, screen/world conversion, pixel read, and XDM composite hookup.\n- For the current wiki routing, treat view-owned operations such as layer attach, background map, zoom, refresh, and ImageView screen/world conversion as `ImageView`; if the question is really about XDM band/composite assembly, route to `Raster`.\n- For the current wiki routing, questions about `NXImageLayerCompLink` comp-manager retrieval or composite `1/2 Front` settings stay in `ImageView`; those are documented here as view-owned composite-link operations.\n- For the current wiki routing, embedded video-layer channel wiring, channel reset, initial frame size, and video-layer screen/world conversion are handled by `VideoView`.\n\n## Primary Usage Buckets\n- `ImageView에 Layer 추가/제거`: `AddImageLayer`, `RemoveImageLayer`, `ClearLayer`\n- `파일을 띄운 뒤 화면 맞춤`: `ZoomFit`, `ZoomFitRect`, `ZoomOneToOne`, `RefreshScreen`\n- `화면/좌표 변환`: `ScreenToWorld`, `WorldToScreen`, `SetWorld`, `SetWorldToCenter`, `SetWorldPerScreen`\n- `배경지도`: `SetBackgroundMap` and related background-map properties\n- `XDM / 합성`: `NXImageLayerComposites.GetXDMCompManager`, `ReadPixelValues`, `ZoomFit`\n- `특수 레이어`: `NXImageLayerCompLink.GetXDLCompManager1`, `GetXDLCompManager2`, `ZoomFit`\n\n## Family Boundaries\n- File load and band extraction live in [Raster API Workflow](wf-api-raster.md).\n- If the question is mainly about vector files or overlays, use [Vector API Workflow](wf-api-vector.md).\n- Source anchors for this family live in [NXImage source](../pages/sources/nximage.md), [NXDLio source](../pages/sources/nxdlio.md), and [NXDLrs source](../pages/sources/nxdlrs.md).\n\n## Practical Answer Shape\n- `ImageView에 레이어 추가`: view 생성/호스팅 -> `AddImageLayer` -> `ZoomFit` 또는 `RefreshScreen`\n- `배경지도 설정`: `SetBackgroundMap` 호출과 이후 view refresh를 같이 설명\n- `화면/실좌표 변환`: `ScreenToWorld` / `WorldToScreen`을 pair로 설명\n- `합성 관리자/comp-link`: `GetXDMCompManager` 또는 `GetXDLCompManager1/2`가 필요한지 먼저 가릅니다\n\n\n## Answering Guidance\n- Start with this workflow to confirm the question belongs to this API family before writing code or steps.\n- Use the usage buckets and boundary notes to narrow the task to the smallest relevant slice.\n- Read the linked howto, concept, and source pages from the Knowledge Bundle before giving a procedural answer.\n- Use `Verified Facts` for exact method names and declarations; if this page is overview-only, say that and lean on the related pages for concrete steps.\n\n## Knowledge Bundle\n```yaml\nconcept_terms:\n- layer\n- composite\n- background map\n- screen world transform\nrouting_hints:\n- all_of: [합성, front]\n- all_of: [합성 관리자]\n- all_of: [imageview, 합성 관리자]\n- all_of: [imageview]\n  any_of: [layer, 레이어, 배경지도, zoomfit, zoom fit, 픽셀값, 화면 좌표, world 좌표]\nbundle_pages:\n- path: pages/howtos/imageview-display-recipes.md\n  relation: family_howto\n- path: pages/concepts/layer-composite-display-pipeline.md\n  relation: family_concept\n- path: pages/concepts/view-screen-world-coordinates.md\n  relation: family_concept\n- path: workflows/wf-api-raster.md\n  relation: dependency_workflow\n- path: pages/sources/nximage.md\n  relation: source_summary\n- path: pages/sources/nxdlio.md\n  relation: source_summary\n```\n\n<!-- GENERATED:RUNTIME_STATUS:START -->\n## Runtime Ingest Status\n- Auto-generated from raw source ingest at `2026-04-20T02:38:44Z`.\n- Resolved required symbols: `20/20`\n- Linked modules:\n  - `NXImage`\n- Missing required symbols: `0`\n<!-- GENERATED:RUNTIME_STATUS:END -->\n## Verified Facts\n```yaml\nworkflow_family: api_imageview\noutput_shape: workflow_bound_to_host_context\nrequired_symbols:\n  - NXImageView.AddImageLayer\n  - NXImageView.RemoveImageLayer\n  - NXImageView.ClearLayer\n  - NXImageView.SetBackgroundMap\n  - NXImageView.ZoomFit\n  - NXImageView.ZoomOneToOne\n  - NXImageView.ZoomFitRect\n  - NXImageView.SetWorld\n  - NXImageView.SetWorldToCenter\n  - NXImageView.SetWorldPerScreen\n  - NXImageView.LinkCameraFrom\n  - NXImageView.RefreshScreen\n  - NXImageView.ScreenToWorld\n  - NXImageView.WorldToScreen\n  - NXImageLayerComposites.GetXDMCompManager\n  - NXImageLayerComposites.ReadPixelValues\n  - NXImageLayerComposites.ZoomFit\n  - NXImageLayerCompLink.GetXDLCompManager1\n  - NXImageLayerCompLink.GetXDLCompManager2\n  - NXImageLayerCompLink.ZoomFit\nverification_rules:\n  - use_this_workflow_as_primary_path\n  - verify_method_vs_property_form\n  - verify_ref_out_and_enum_literals_when_signature_matters\n  - cross_check_runtime_methods_index_before_emitting_code\n```\n\n\n"
     },
     {
       "path": "workflows/wf-api-milmapview.md",
@@ -1314,50 +1077,6 @@
         "NXMilmapView.ChangeLayerOrder",
         "NXMilmapView.GetDrawArgs",
         "NXMilmapView.CaptureScreen"
-      ],
-      "required_facts": [
-        {
-          "symbol": "NXMilmapView.CheckMilmapData",
-          "declaration": "bool CheckMilmapData(XVertex2d^ vGeo, int nScaleIndex);",
-          "declaration_candidates": null,
-          "source": "Source/NXMilmap/NXMilmapView.h:110"
-        },
-        {
-          "symbol": "NXMilmapView.SetGeoToCenter",
-          "declaration": "bool SetGeoToCenter(int nScaleIndex, XVertex2d^ vGeo);",
-          "declaration_candidates": null,
-          "source": "Source/NXMilmap/NXMilmapView.h:116"
-        },
-        {
-          "symbol": "NXMilmapView.SearchScale",
-          "declaration": "int SearchScale(String^ m);",
-          "declaration_candidates": null,
-          "source": "Source/NXMilmap/NXMilmapView.h:125"
-        },
-        {
-          "symbol": "NXMilmapView.Zoom",
-          "declaration": "bool Zoom(int scaleIndex, double factor);",
-          "declaration_candidates": null,
-          "source": "Source/NXMilmap/NXMilmapView.h:131"
-        },
-        {
-          "symbol": "NXMilmapView.ZoomFitRect",
-          "declaration": "bool ZoomFitRect(int scaleIndex, double llx, double lly, double urx, double ury, bool bAuto);",
-          "declaration_candidates": null,
-          "source": "Source/NXMilmap/NXMilmapView.h:141"
-        },
-        {
-          "symbol": "NXMilmapView.AddRenderLayer",
-          "declaration": "bool AddRenderLayer(NXMilmapLayer^% layer);",
-          "declaration_candidates": null,
-          "source": "Source/NXMilmap/NXMilmapView.h:165"
-        },
-        {
-          "symbol": "NXMilmapView.ChangeLayerOrder",
-          "declaration": "bool ChangeLayerOrder(cli::array<NXRenderLayer^>^% layers);",
-          "declaration_candidates": null,
-          "source": "Source/NXMilmap/NXMilmapView.h:231"
-        }
       ],
       "verification_rules": [
         "use_this_workflow_as_primary_path",
@@ -1479,25 +1198,17 @@
         "Pixoneer.NXDL.NXMilmap.NXMilmapView.SearchScale",
         "Pixoneer.NXDL.NXMilmap.NXMilmapView.Zoom",
         "Pixoneer.NXDL.NXMilmap.NXMilmapView.ZoomFitRect",
-        "Pixoneer.NXDL.NXMilmap.NXMilmapView.AddRenderLayer",
-        "Pixoneer.NXDL.NXMilmap.NXMilmapView.ChangeLayerOrder",
         "Pixoneer.NXDL.NXMilmap.NXMilmapView.IsExistScale",
         "Pixoneer.NXDL.NXMilmap.NXMilmapView.SearchName",
         "Pixoneer.NXDL.NXMilmap.NXMilmapView.ShowCross",
         "Pixoneer.NXDL.NXMilmap.NXMilmapView.RefreshScreen",
+        "Pixoneer.NXDL.NXMilmap.NXMilmapView.AddRenderLayer",
+        "Pixoneer.NXDL.NXMilmap.NXMilmapView.ChangeLayerOrder",
         "Pixoneer.NXDL.NXMilmap.NXMilmapView.GetDrawArgs",
         "Pixoneer.NXDL.NXMilmap.NXMilmapView.CaptureScreen"
       ],
-      "source_anchors": [
-        "Source/NXMilmap/NXMilmapView.h:110",
-        "Source/NXMilmap/NXMilmapView.h:116",
-        "Source/NXMilmap/NXMilmapView.h:125",
-        "Source/NXMilmap/NXMilmapView.h:131",
-        "Source/NXMilmap/NXMilmapView.h:141",
-        "Source/NXMilmap/NXMilmapView.h:165",
-        "Source/NXMilmap/NXMilmapView.h:231"
-      ],
-      "content": "---\ntitle: MilmapView API Workflow\ndescription: Control MilmapView scale, center, render layers, capture, and map display state.\naliases:\n  - milmapview api\n  - milmapview 사용법\n  - milmap scale\n  - milmap capture\n  - milmapview에서 xdm 합성 추가하는 방법\n  - milmapview에서 shader code cbs 사용하는 방법\n  - milmapview에서 shader code basso 사용하는 방법\n  - milmapview cartoon effect\nsymbols:\n  - NXMilmapView\n  - NXMilmapLayer\n  - NXMilmapLayerComposites\n  - NXRenderLayer\ntags:\n  - engine\n  - workflow\n  - api\n  - milmap\n---\n\n# Overview\n- Goal: cover scale, center, render-layer attach/order, draw args, and capture on `NXMilmapView`.\n- This workflow is the primary family for normal `MilmapView` usage questions.\n- For the current wiki routing, if `MilmapView` is explicitly named, this family covers shader, render-layer, capture, and display questions even when raster terms also appear.\n- For the current wiki routing, if `MilmapView` is named but the actual task is video channel wiring, video-layer setup, KLV, or frame capture, route to `VideoView`.\n\n## Primary Usage Buckets\n- `축척/위치`: `SearchScale`, `SearchName`, `SetGeoToCenter`, `Zoom`, `ZoomFitRect`, `CalculateScale`\n- `표시 확인`: `CheckMilmapData`, `IsExistScale`, `ShowCross`, `RefreshScreen`\n- `레이어 관리`: `AddRenderLayer`, `RemoveRenderLayer`, `ChangeLayerOrder`, `GetLayerOrder`\n- `캡처와 draw args`: `CaptureScreen`, `GetDrawArgs`\n- `성능/보기 상태`: `EnableControlRatio`, `FreezeViewArea`, `SetResolutionThreshold`, `SetViewZoomCenterPosition`\n\n## Practical Answer Shape\n- `Milmap 데이터가 있는지 확인`: `CheckMilmapData`와 `IsExistScale`를 먼저 설명합니다.\n- `특정 중심/축척으로 이동`: `SearchScale` -> `SetGeoToCenter` -> `Zoom` 흐름으로 답합니다.\n- `레이어 순서 변경`: `AddRenderLayer` 후 `ChangeLayerOrder` 또는 `GetLayerOrder`를 같이 제시합니다.\n\n\n## Answering Guidance\n- Start with this workflow to confirm the question belongs to this API family before writing code or steps.\n- Use the usage buckets and boundary notes to narrow the task to the smallest relevant slice.\n- Read the linked howto, concept, and source pages from the Knowledge Bundle before giving a procedural answer.\n- Use `Verified Facts` for exact method names and declarations; if this page is overview-only, say that and lean on the related pages for concrete steps.\n\n## Knowledge Bundle\n```yaml\nconcept_terms:\n- map view\n- layer display\n- video layer\n- world mapping\nbundle_pages:\n- path: pages/howtos/milmapview-display-and-video.md\n  relation: family_howto\n- path: pages/concepts/view-screen-world-coordinates.md\n  relation: family_concept\n- path: pages/concepts/provider-dataset-and-scene-assets.md\n  relation: family_concept\n- path: workflows/wf-api-raster.md\n  relation: dependency_workflow\n- path: pages/sources/nxmilmap.md\n  relation: source_summary\n```\n\n<!-- GENERATED:RUNTIME_STATUS:START -->\n## Runtime Ingest Status\n- Auto-generated from raw source ingest at `2026-04-20T02:38:44Z`.\n- Resolved required symbols: `13/13`\n- Linked modules:\n  - `NXMilmap`\n- Missing required symbols: `0`\n<!-- GENERATED:RUNTIME_STATUS:END -->\n## Verified Facts\n```yaml\nworkflow_family: api_milmapview\noutput_shape: workflow_bound_to_host_context\nrequired_symbols:\n  - NXMilmapView.CheckMilmapData\n  - NXMilmapView.SetGeoToCenter\n  - NXMilmapView.SearchScale\n  - NXMilmapView.Zoom\n  - NXMilmapView.ZoomFitRect\n  - NXMilmapView.IsExistScale\n  - NXMilmapView.SearchName\n  - NXMilmapView.ShowCross\n  - NXMilmapView.RefreshScreen\n  - NXMilmapView.AddRenderLayer\n  - NXMilmapView.ChangeLayerOrder\n  - NXMilmapView.GetDrawArgs\n  - NXMilmapView.CaptureScreen\nrequired_facts:\n  - symbol: NXMilmapView.CheckMilmapData\n    declaration: 'bool CheckMilmapData(XVertex2d^ vGeo, int nScaleIndex);'\n    source: 'Source/NXMilmap/NXMilmapView.h:110'\n  - symbol: NXMilmapView.SetGeoToCenter\n    declaration: 'bool SetGeoToCenter(int nScaleIndex, XVertex2d^ vGeo);'\n    source: 'Source/NXMilmap/NXMilmapView.h:116'\n  - symbol: NXMilmapView.SearchScale\n    declaration: 'int SearchScale(String^ m);'\n    source: 'Source/NXMilmap/NXMilmapView.h:125'\n  - symbol: NXMilmapView.Zoom\n    declaration: 'bool Zoom(int scaleIndex, double factor);'\n    source: 'Source/NXMilmap/NXMilmapView.h:131'\n  - symbol: NXMilmapView.ZoomFitRect\n    declaration: 'bool ZoomFitRect(int scaleIndex, double llx, double lly, double urx, double ury, bool bAuto);'\n    source: 'Source/NXMilmap/NXMilmapView.h:141'\n  - symbol: NXMilmapView.AddRenderLayer\n    declaration: 'bool AddRenderLayer(NXMilmapLayer^% layer);'\n    source: 'Source/NXMilmap/NXMilmapView.h:165'\n  - symbol: NXMilmapView.ChangeLayerOrder\n    declaration: 'bool ChangeLayerOrder(cli::array<NXRenderLayer^>^% layers);'\n    source: 'Source/NXMilmap/NXMilmapView.h:231'\nverification_rules:\n  - use_this_workflow_as_primary_path\n  - verify_method_vs_property_form\n  - verify_ref_out_and_enum_literals_when_signature_matters\n  - cross_check_runtime_methods_index_before_emitting_code\n```\n\n"
+      "source_anchors": [],
+      "content": "---\ntitle: MilmapView API Workflow\ndescription: Control MilmapView scale, center, render layers, capture, and map display state.\naliases:\n  - milmapview api\n  - milmapview 사용법\n  - milmap scale\n  - milmap capture\n  - milmapview에서 xdm 합성 추가하는 방법\n  - milmapview에서 shader code cbs 사용하는 방법\n  - milmapview에서 shader code basso 사용하는 방법\n  - milmapview cartoon effect\nsymbols:\n  - NXMilmapView\n  - NXMilmapLayer\n  - NXMilmapLayerComposites\n  - NXRenderLayer\ntags:\n  - engine\n  - workflow\n  - api\n  - milmap\n---\n\n# Overview\n- Goal: cover scale, center, render-layer attach/order, draw args, and capture on `NXMilmapView`.\n- This workflow is the primary family for normal `MilmapView` usage questions.\n- For the current wiki routing, if `MilmapView` is explicitly named, this family covers shader, render-layer, capture, and display questions even when raster terms also appear.\n- For the current wiki routing, if `MilmapView` is named but the actual task is video channel wiring, video-layer setup, KLV, or frame capture, route to `VideoView`.\n\n## Primary Usage Buckets\n- `축척/위치`: `SearchScale`, `SearchName`, `SetGeoToCenter`, `Zoom`, `ZoomFitRect`, `CalculateScale`\n- `표시 확인`: `CheckMilmapData`, `IsExistScale`, `ShowCross`, `RefreshScreen`\n- `레이어 관리`: `AddRenderLayer`, `RemoveRenderLayer`, `ChangeLayerOrder`, `GetLayerOrder`\n- `캡처와 draw args`: `CaptureScreen`, `GetDrawArgs`\n- `성능/보기 상태`: `EnableControlRatio`, `FreezeViewArea`, `SetResolutionThreshold`, `SetViewZoomCenterPosition`\n\n## Practical Answer Shape\n- `Milmap 데이터가 있는지 확인`: `CheckMilmapData`와 `IsExistScale`를 먼저 설명합니다.\n- `특정 중심/축척으로 이동`: `SearchScale` -> `SetGeoToCenter` -> `Zoom` 흐름으로 답합니다.\n- `레이어 순서 변경`: `AddRenderLayer` 후 `ChangeLayerOrder` 또는 `GetLayerOrder`를 같이 제시합니다.\n\n\n## Answering Guidance\n- Start with this workflow to confirm the question belongs to this API family before writing code or steps.\n- Use the usage buckets and boundary notes to narrow the task to the smallest relevant slice.\n- Read the linked howto, concept, and source pages from the Knowledge Bundle before giving a procedural answer.\n- Use `Verified Facts` for exact method names and declarations; if this page is overview-only, say that and lean on the related pages for concrete steps.\n\n## Knowledge Bundle\n```yaml\nconcept_terms:\n- map view\n- layer display\n- video layer\n- world mapping\nbundle_pages:\n- path: pages/howtos/milmapview-display-and-video.md\n  relation: family_howto\n- path: pages/concepts/view-screen-world-coordinates.md\n  relation: family_concept\n- path: pages/concepts/provider-dataset-and-scene-assets.md\n  relation: family_concept\n- path: workflows/wf-api-raster.md\n  relation: dependency_workflow\n- path: pages/sources/nxmilmap.md\n  relation: source_summary\n```\n\n<!-- GENERATED:RUNTIME_STATUS:START -->\n## Runtime Ingest Status\n- Auto-generated from raw source ingest at `2026-04-20T02:38:44Z`.\n- Resolved required symbols: `13/13`\n- Linked modules:\n  - `NXMilmap`\n- Missing required symbols: `0`\n<!-- GENERATED:RUNTIME_STATUS:END -->\n## Verified Facts\n```yaml\nworkflow_family: api_milmapview\noutput_shape: workflow_bound_to_host_context\nrequired_symbols:\n  - NXMilmapView.CheckMilmapData\n  - NXMilmapView.SetGeoToCenter\n  - NXMilmapView.SearchScale\n  - NXMilmapView.Zoom\n  - NXMilmapView.ZoomFitRect\n  - NXMilmapView.IsExistScale\n  - NXMilmapView.SearchName\n  - NXMilmapView.ShowCross\n  - NXMilmapView.RefreshScreen\n  - NXMilmapView.AddRenderLayer\n  - NXMilmapView.ChangeLayerOrder\n  - NXMilmapView.GetDrawArgs\n  - NXMilmapView.CaptureScreen\nverification_rules:\n  - use_this_workflow_as_primary_path\n  - verify_method_vs_property_form\n  - verify_ref_out_and_enum_literals_when_signature_matters\n  - cross_check_runtime_methods_index_before_emitting_code\n```\n\n\n"
     },
     {
       "path": "workflows/wf-api-planetview.md",
@@ -1544,56 +1255,6 @@
         "NXPlanetView.SetPBIDefaultDataSet",
         "NXPlanetEngine.AddPBIGroup",
         "NXPlanetEngine.RemovePBIGroup"
-      ],
-      "required_facts": [
-        {
-          "symbol": "NXPlanetView.SetCameraPosition",
-          "declaration": "bool SetCameraPosition(NXDL::XGeoPoint^ pos, NXDL::XAngle^ azimuth);",
-          "declaration_candidates": null,
-          "source": "Source/NXPlanet/NXPlanetView.h:570"
-        },
-        {
-          "symbol": "NXPlanetView.SetCameraState",
-          "declaration": "bool SetCameraState(NXCameraState^ state);",
-          "declaration_candidates": null,
-          "source": "Source/NXPlanet/NXPlanetView.h:564"
-        },
-        {
-          "symbol": "NXPlanetView.AddRenderLayer",
-          "declaration": "bool AddRenderLayer (NXRenderLayer^% layer);",
-          "declaration_candidates": null,
-          "source": "Source/NXPlanet/NXPlanetView.h:536"
-        },
-        {
-          "symbol": "NXPlanetView.ChangeLayerOrder",
-          "declaration": "bool ChangeLayerOrder(cli::array<NXRenderLayer^>^% layers);",
-          "declaration_candidates": null,
-          "source": "Source/NXPlanet/NXPlanetView.h:768"
-        },
-        {
-          "symbol": "NXPlanetView.CaptureScreen",
-          "declaration": "Bitmap^ CaptureScreen();",
-          "declaration_candidates": null,
-          "source": "Source/NXPlanet/NXPlanetView.h:812"
-        },
-        {
-          "symbol": "NXPlanetView.SetPBIDefaultDataSet",
-          "declaration": "void SetPBIDefaultDataSet(String^ strSource);",
-          "declaration_candidates": null,
-          "source": "Source/NXPlanet/NXPlanetView.h:694"
-        },
-        {
-          "symbol": "NXPlanetEngine.AddPBIGroup",
-          "declaration": "static bool AddPBIGroup(XPBTDataGroup^% Group);",
-          "declaration_candidates": null,
-          "source": "Source/NXPlanet/NXPlanetEngine.h:87"
-        },
-        {
-          "symbol": "NXPlanetEngine.RemovePBIGroup",
-          "declaration": "static bool RemovePBIGroup(int nGroupID);",
-          "declaration_candidates": null,
-          "source": "Source/NXPlanet/NXPlanetEngine.h:92"
-        }
       ],
       "verification_rules": [
         "use_this_workflow_as_primary_path",
@@ -1720,24 +1381,15 @@
         "Pixoneer.NXDL.NXPlanet.NXPlanetView.SetCameraState",
         "Pixoneer.NXDL.NXPlanet.NXPlanetView.AddRenderLayer",
         "Pixoneer.NXDL.NXPlanet.NXPlanetView.ChangeLayerOrder",
+        "Pixoneer.NXDL.NXPlanet.NXPlanetView.GetDrawArgs",
         "Pixoneer.NXDL.NXPlanet.NXPlanetView.CaptureScreen",
+        "Pixoneer.NXDL.NXPlanet.NXPlanetView.SetMouseControlMode",
         "Pixoneer.NXDL.NXPlanet.NXPlanetView.SetPBIDefaultDataSet",
         "Pixoneer.NXDL.NXPlanet.NXPlanetEngine.AddPBIGroup",
-        "Pixoneer.NXDL.NXPlanet.NXPlanetEngine.RemovePBIGroup",
-        "Pixoneer.NXDL.NXPlanet.NXPlanetView.GetDrawArgs",
-        "Pixoneer.NXDL.NXPlanet.NXPlanetView.SetMouseControlMode"
+        "Pixoneer.NXDL.NXPlanet.NXPlanetEngine.RemovePBIGroup"
       ],
-      "source_anchors": [
-        "Source/NXPlanet/NXPlanetView.h:570",
-        "Source/NXPlanet/NXPlanetView.h:564",
-        "Source/NXPlanet/NXPlanetView.h:536",
-        "Source/NXPlanet/NXPlanetView.h:768",
-        "Source/NXPlanet/NXPlanetView.h:812",
-        "Source/NXPlanet/NXPlanetView.h:694",
-        "Source/NXPlanet/NXPlanetEngine.h:87",
-        "Source/NXPlanet/NXPlanetEngine.h:92"
-      ],
-      "content": "---\ntitle: PlanetView API Workflow\ndescription: Control PlanetView camera, render layers, dataset display, and capture operations.\naliases:\n  - planetview api\n  - planetview 사용법\n  - planet view camera\n  - planet dataset\n  - planet render layer\n  - planetview에서 shader code average 사용하는 방법\n  - planetview에서 shader code basso 사용하는 방법\n  - planetview에서 shader code edge 사용하는 방법\n  - planetview에서 shader code median 사용하는 방법\n  - planetview cartoon effect\n  - sun follow 카메라 설정\nsymbols:\n  - NXPlanetView\n  - NXPlanetLayer\n  - NXPlanetLayerComposites\n  - NXPlanetEngine\n  - XPBTDataGroup\n  - NXCameraState\n  - NXRenderLayer\ntags:\n  - engine\n  - workflow\n  - api\n  - planet\n---\n\n# Overview\n- Goal: cover camera, layer attach/order, capture, and dataset registration on `NXPlanetView`.\n- This workflow merges view control and PBI dataset usage into one API family page.\n- For the current wiki routing, if `PlanetView` is explicitly named, this family covers shader, camera, render-layer, capture, and dataset-display questions.\n- For the current wiki routing, if `PlanetView` is named but the actual task is video channel wiring or embedded video-layer handling, route to `VideoView`.\n\n## Primary Usage Buckets\n- `카메라 상태`: `SetCameraPosition`, `SetCameraState`, `GetCameraState`, `LookTarget`\n- `레이어 관리`: `AddRenderLayer`, `RemoveRenderLayer`, `ChangeLayerOrder`, `GetLayerOrder`\n- `화면/월드/지리 좌표`: `ScreenToWorld`, `WorldToScreen`, `GeographicToWorld`, `GeographicToScreen`\n- `캡처`: `CaptureScreen`, `CaptureScreenByBlock`\n- `렌더/갱신`: `RefreshScreen`, `RefreshBaseMap`, `RefreshLOD`, `RequestRender`\n- `데이터셋`: `SetPBIDefaultDataSet`, `SetPBEDefaultDataSet`, `UpdatePBPDataSet`, `UpdatePBVDataSet`\n- `환경/카메라 효과`: `SetMouseControlMode`, `SetSunFollowCamera`, `SetSunPosition`, `SetLightingFactor`\n\n## Practical Answer Shape\n- `PBI group 등록/기본 dataset`: `NXPlanetEngine.AddPBIGroup`와 `SetPBIDefaultDataSet`을 구분해서 설명합니다.\n- `카메라 이동`: `SetCameraPosition`과 `SetCameraState`를 언제 쓰는지 먼저 나눕니다.\n- `캡처/블록 캡처`: 전체 화면 저장인지, 블록 캡처인지에 따라 `CaptureScreen` / `CaptureScreenByBlock`을 나눠 답합니다.\n\n\n## Answering Guidance\n- Start with this workflow to confirm the question belongs to this API family before writing code or steps.\n- Use the usage buckets and boundary notes to narrow the task to the smallest relevant slice.\n- Read the linked howto, concept, and source pages from the Knowledge Bundle before giving a procedural answer.\n- Use `Verified Facts` for exact method names and declarations; if this page is overview-only, say that and lean on the related pages for concrete steps.\n\n## Knowledge Bundle\n```yaml\nconcept_terms:\n- dataset\n- provider\n- camera\n- scene layer\nbundle_pages:\n- path: pages/howtos/planetview-dataset-and-camera.md\n  relation: family_howto\n- path: pages/concepts/provider-dataset-and-scene-assets.md\n  relation: family_concept\n- path: workflows/wf-api-dfs.md\n  relation: dependency_workflow\n- path: pages/sources/nxplanet.md\n  relation: source_summary\n- path: pages/sources/nxdldfs.md\n  relation: source_summary\n```\n\n<!-- GENERATED:RUNTIME_STATUS:START -->\n## Runtime Ingest Status\n- Auto-generated from raw source ingest at `2026-04-20T02:38:44Z`.\n- Resolved required symbols: `10/10`\n- Linked modules:\n  - `NXPlanet`\n- Missing required symbols: `0`\n<!-- GENERATED:RUNTIME_STATUS:END -->\n## Verified Facts\n```yaml\nworkflow_family: api_planetview\noutput_shape: workflow_bound_to_host_context\nrequired_symbols:\n  - NXPlanetView.SetCameraPosition\n  - NXPlanetView.SetCameraState\n  - NXPlanetView.AddRenderLayer\n  - NXPlanetView.ChangeLayerOrder\n  - NXPlanetView.GetDrawArgs\n  - NXPlanetView.CaptureScreen\n  - NXPlanetView.SetMouseControlMode\n  - NXPlanetView.SetPBIDefaultDataSet\n  - NXPlanetEngine.AddPBIGroup\n  - NXPlanetEngine.RemovePBIGroup\nrequired_facts:\n  - symbol: NXPlanetView.SetCameraPosition\n    declaration: 'bool SetCameraPosition(NXDL::XGeoPoint^ pos, NXDL::XAngle^ azimuth);'\n    source: 'Source/NXPlanet/NXPlanetView.h:570'\n  - symbol: NXPlanetView.SetCameraState\n    declaration: 'bool SetCameraState(NXCameraState^ state);'\n    source: 'Source/NXPlanet/NXPlanetView.h:564'\n  - symbol: NXPlanetView.AddRenderLayer\n    declaration: 'bool AddRenderLayer (NXRenderLayer^% layer);'\n    source: 'Source/NXPlanet/NXPlanetView.h:536'\n  - symbol: NXPlanetView.ChangeLayerOrder\n    declaration: 'bool ChangeLayerOrder(cli::array<NXRenderLayer^>^% layers);'\n    source: 'Source/NXPlanet/NXPlanetView.h:768'\n  - symbol: NXPlanetView.CaptureScreen\n    declaration: 'Bitmap^ CaptureScreen();'\n    source: 'Source/NXPlanet/NXPlanetView.h:812'\n  - symbol: NXPlanetView.SetPBIDefaultDataSet\n    declaration: 'void SetPBIDefaultDataSet(String^ strSource);'\n    source: 'Source/NXPlanet/NXPlanetView.h:694'\n  - symbol: NXPlanetEngine.AddPBIGroup\n    declaration: 'static bool AddPBIGroup(XPBTDataGroup^% Group);'\n    source: 'Source/NXPlanet/NXPlanetEngine.h:87'\n  - symbol: NXPlanetEngine.RemovePBIGroup\n    declaration: 'static bool RemovePBIGroup(int nGroupID);'\n    source: 'Source/NXPlanet/NXPlanetEngine.h:92'\nverification_rules:\n  - use_this_workflow_as_primary_path\n  - verify_method_vs_property_form\n  - verify_ref_out_and_enum_literals_when_signature_matters\n  - cross_check_runtime_methods_index_before_emitting_code\n```\n\n"
+      "source_anchors": [],
+      "content": "---\ntitle: PlanetView API Workflow\ndescription: Control PlanetView camera, render layers, dataset display, and capture operations.\naliases:\n  - planetview api\n  - planetview 사용법\n  - planet view camera\n  - planet dataset\n  - planet render layer\n  - planetview에서 shader code average 사용하는 방법\n  - planetview에서 shader code basso 사용하는 방법\n  - planetview에서 shader code edge 사용하는 방법\n  - planetview에서 shader code median 사용하는 방법\n  - planetview cartoon effect\n  - sun follow 카메라 설정\nsymbols:\n  - NXPlanetView\n  - NXPlanetLayer\n  - NXPlanetLayerComposites\n  - NXPlanetEngine\n  - XPBTDataGroup\n  - NXCameraState\n  - NXRenderLayer\ntags:\n  - engine\n  - workflow\n  - api\n  - planet\n---\n\n# Overview\n- Goal: cover camera, layer attach/order, capture, and dataset registration on `NXPlanetView`.\n- This workflow merges view control and PBI dataset usage into one API family page.\n- For the current wiki routing, if `PlanetView` is explicitly named, this family covers shader, camera, render-layer, capture, and dataset-display questions.\n- For the current wiki routing, if `PlanetView` is named but the actual task is video channel wiring or embedded video-layer handling, route to `VideoView`.\n\n## Primary Usage Buckets\n- `카메라 상태`: `SetCameraPosition`, `SetCameraState`, `GetCameraState`, `LookTarget`\n- `레이어 관리`: `AddRenderLayer`, `RemoveRenderLayer`, `ChangeLayerOrder`, `GetLayerOrder`\n- `화면/월드/지리 좌표`: `ScreenToWorld`, `WorldToScreen`, `GeographicToWorld`, `GeographicToScreen`\n- `캡처`: `CaptureScreen`, `CaptureScreenByBlock`\n- `렌더/갱신`: `RefreshScreen`, `RefreshBaseMap`, `RefreshLOD`, `RequestRender`\n- `데이터셋`: `SetPBIDefaultDataSet`, `SetPBEDefaultDataSet`, `UpdatePBPDataSet`, `UpdatePBVDataSet`\n- `환경/카메라 효과`: `SetMouseControlMode`, `SetSunFollowCamera`, `SetSunPosition`, `SetLightingFactor`\n\n## Practical Answer Shape\n- `PBI group 등록/기본 dataset`: `NXPlanetEngine.AddPBIGroup`와 `SetPBIDefaultDataSet`을 구분해서 설명합니다.\n- `카메라 이동`: `SetCameraPosition`과 `SetCameraState`를 언제 쓰는지 먼저 나눕니다.\n- `캡처/블록 캡처`: 전체 화면 저장인지, 블록 캡처인지에 따라 `CaptureScreen` / `CaptureScreenByBlock`을 나눠 답합니다.\n\n\n## Answering Guidance\n- Start with this workflow to confirm the question belongs to this API family before writing code or steps.\n- Use the usage buckets and boundary notes to narrow the task to the smallest relevant slice.\n- Read the linked howto, concept, and source pages from the Knowledge Bundle before giving a procedural answer.\n- Use `Verified Facts` for exact method names and declarations; if this page is overview-only, say that and lean on the related pages for concrete steps.\n\n## Knowledge Bundle\n```yaml\nconcept_terms:\n- dataset\n- provider\n- camera\n- scene layer\nbundle_pages:\n- path: pages/howtos/planetview-dataset-and-camera.md\n  relation: family_howto\n- path: pages/concepts/provider-dataset-and-scene-assets.md\n  relation: family_concept\n- path: workflows/wf-api-dfs.md\n  relation: dependency_workflow\n- path: pages/sources/nxplanet.md\n  relation: source_summary\n- path: pages/sources/nxdldfs.md\n  relation: source_summary\n```\n\n<!-- GENERATED:RUNTIME_STATUS:START -->\n## Runtime Ingest Status\n- Auto-generated from raw source ingest at `2026-04-20T02:38:44Z`.\n- Resolved required symbols: `10/10`\n- Linked modules:\n  - `NXPlanet`\n- Missing required symbols: `0`\n<!-- GENERATED:RUNTIME_STATUS:END -->\n## Verified Facts\n```yaml\nworkflow_family: api_planetview\noutput_shape: workflow_bound_to_host_context\nrequired_symbols:\n  - NXPlanetView.SetCameraPosition\n  - NXPlanetView.SetCameraState\n  - NXPlanetView.AddRenderLayer\n  - NXPlanetView.ChangeLayerOrder\n  - NXPlanetView.GetDrawArgs\n  - NXPlanetView.CaptureScreen\n  - NXPlanetView.SetMouseControlMode\n  - NXPlanetView.SetPBIDefaultDataSet\n  - NXPlanetEngine.AddPBIGroup\n  - NXPlanetEngine.RemovePBIGroup\nverification_rules:\n  - use_this_workflow_as_primary_path\n  - verify_method_vs_property_form\n  - verify_ref_out_and_enum_literals_when_signature_matters\n  - cross_check_runtime_methods_index_before_emitting_code\n```\n\n\n"
     },
     {
       "path": "workflows/wf-api-raster.md",
@@ -1821,110 +1473,6 @@
         "XDMCompManager.RemoveXDMCompositeAll",
         "XDMCompManager.MoveComposite",
         "XDMCompManager.HitTest"
-      ],
-      "required_facts": [
-        {
-          "symbol": "XRasterIO.Initialize",
-          "declaration": "bool Initialize([OutAttribute] String^% strError);",
-          "declaration_candidates": null,
-          "source": "Source/NXDLio/NXDLio.h:198"
-        },
-        {
-          "symbol": "XRasterIO.LoadFile",
-          "declaration": null,
-          "declaration_candidates": [
-            {
-              "declaration": "NRS::XRSLoadFile^ LoadFile(String^ strFileKey, String^ strFileName, [OutAttribute] String^% strError, bool bCalcStatistics , eIOCreateXLDMode CreateXLD);",
-              "source": "Source/NXDLio/NXDLio.h:222"
-            },
-            {
-              "declaration": "NRS::XRSLoadFile^ LoadFile(String^ strFileName, [OutAttribute] String^% strError, bool bCalcStatistics, eIOCreateXLDMode CreateXLD);",
-              "source": "Source/NXDLio/NXDLio.h:230"
-            }
-          ],
-          "source": null
-        },
-        {
-          "symbol": "XRasterIO.GetSubDatasets",
-          "declaration": "cli::array<String^>^ GetSubDatasets(String^ strFileName);",
-          "declaration_candidates": null,
-          "source": "Source/NXDLio/NXDLio.h:340"
-        },
-        {
-          "symbol": "XRasterIO.LoadRawFile",
-          "declaration": "NRS::XRSLoadFile^ LoadRawFile(String^ strFileName, XRawDataParam^ param, [OutAttribute] String^% strError, bool bCalcStatistics, eIOCreateXLDMode CreateXLD);",
-          "declaration_candidates": null,
-          "source": "Source/NXDLio/NXDLio.h:557"
-        },
-        {
-          "symbol": "XRasterIO.GetFileInfo",
-          "declaration": "String^ GetFileInfo(String^ strFileName, [OutAttribute] String^% strError);",
-          "declaration_candidates": null,
-          "source": "Source/NXDLio/NXDLio.h:568"
-        },
-        {
-          "symbol": "XRSLoadFile.GetBandAt",
-          "declaration": "XDMBand^ GetBandAt(int nIndex);",
-          "declaration_candidates": null,
-          "source": "Source/NXDLrs/XRSFile.h:986"
-        },
-        {
-          "symbol": "XDMComposite.SetBand",
-          "declaration": null,
-          "declaration_candidates": [
-            {
-              "declaration": "void SetBand(XDMBand^% band, int Idx);",
-              "source": "Source/NXDLrs/NXDLrs.h:1423"
-            },
-            {
-              "declaration": "void SetBand(XDMBand^% band, eCompBandIdx Idx);",
-              "source": "Source/NXDLrs/NXDLrs.h:1428"
-            }
-          ],
-          "source": null
-        },
-        {
-          "symbol": "XDMComposite.SetCutType",
-          "declaration": "void SetCutType(eCompCutType CutType, int Idx);",
-          "declaration_candidates": null,
-          "source": "Source/NXDLrs/NXDLrs.h:1445"
-        },
-        {
-          "symbol": "XDMComposite.SetCutMin",
-          "declaration": "void SetCutMin(double min, int Idx);",
-          "declaration_candidates": null,
-          "source": "Source/NXDLrs/NXDLrs.h:1455"
-        },
-        {
-          "symbol": "XDMComposite.SetCutMax",
-          "declaration": "void SetCutMax(double max, int Idx);",
-          "declaration_candidates": null,
-          "source": "Source/NXDLrs/NXDLrs.h:1465"
-        },
-        {
-          "symbol": "XDMComposite.SetStretchCoverage",
-          "declaration": "void SetStretchCoverage(eCompStretchCoverage StretchCoverage, int Idx);",
-          "declaration_candidates": null,
-          "source": "Source/NXDLrs/NXDLrs.h:1477"
-        },
-        {
-          "symbol": "XDMComposite.SetStretchType",
-          "declaration": "void SetStretchType(eCompStretchType StretchType, int Idx);",
-          "declaration_candidates": null,
-          "source": "Source/NXDLrs/NXDLrs.h:1487"
-        },
-        {
-          "symbol": "XDMCompManager.AddXDMComposite",
-          "declaration": "bool AddXDMComposite(XDMComposite^% Comp);",
-          "declaration_candidates": null,
-          "source": "Source/NXDLrs/NXDLrs.h:1867"
-        },
-        {
-          "symbol": "XDMCompManager.RemoveXDMCompositeAll",
-          "declaration": "void RemoveXDMCompositeAll();",
-          "declaration_candidates": null,
-          "source": "Source/NXDLrs/NXDLrs.h:1880"
-        }
       ],
       "verification_rules": [
         "use_this_workflow_as_primary_path",
@@ -2152,25 +1700,8 @@
         "Pixoneer.NXDL.NRS.XDMCompManager.MoveComposite",
         "Pixoneer.NXDL.NRS.XDMCompManager.HitTest"
       ],
-      "source_anchors": [
-        "Source/NXDLio/NXDLio.h:198",
-        "Source/NXDLio/NXDLio.h:222",
-        "Source/NXDLio/NXDLio.h:230",
-        "Source/NXDLio/NXDLio.h:340",
-        "Source/NXDLio/NXDLio.h:557",
-        "Source/NXDLio/NXDLio.h:568",
-        "Source/NXDLrs/XRSFile.h:986",
-        "Source/NXDLrs/NXDLrs.h:1423",
-        "Source/NXDLrs/NXDLrs.h:1428",
-        "Source/NXDLrs/NXDLrs.h:1445",
-        "Source/NXDLrs/NXDLrs.h:1455",
-        "Source/NXDLrs/NXDLrs.h:1465",
-        "Source/NXDLrs/NXDLrs.h:1477",
-        "Source/NXDLrs/NXDLrs.h:1487",
-        "Source/NXDLrs/NXDLrs.h:1867",
-        "Source/NXDLrs/NXDLrs.h:1880"
-      ],
-      "content": "---\ntitle: Raster and XDM API Workflow\ndescription: Load raster files, fetch bands, build XDM composites, and tune display enhancement parameters.\naliases:\n  - raster api\n  - raster load\n  - xrasterio usage\n  - xdm composite usage\n  - geotiff load\n  - xdm band display\n  - grayscale rgb composite\n  - raster enhance\n  - raw raster load\n  - xdm histogram matching\n  - xdm sharpen\n  - xdm composite order\n  - geotiff 파일을 xrasterio로 로드\n  - xdm 파일을 로드해서 밴드를 가져오기\n  - 래스터 파일의 subdataset 목록 확인\n  - raw raster 파일을 loadrawfile로 읽기\n  - 입력한 파일 밴드 수에 따라 흑백 또는 칼라로 도시\n  - xdm 영상 히스토그램 매칭\n  - xdm 영상 샤프닝\n  - xdm 합성 순서 변경\n  - xdm composite를 추가하는 방법\n  - xdm stretch와 cut 값을 조정하는 방법\n  - xdm composite 추가\n  - xdm composite 이동 제거\nsymbols:\n  - XRasterIO\n  - XVectorIO\n  - Xio\n  - XRSLoadFile\n  - XDMBand\n  - XDMBand2DMem\n  - XDMBandAffineTransform\n  - XDMBandChangeDetect\n  - XDMBandChangeDetectSig\n  - XDMBandChangeDetectSpecAng\n  - XDMBandComplex\n  - XDMBandConvDataType\n  - XDMBandData2Binary\n  - XDMBandData2GIS\n  - XDMBandEOIR\n  - XDMBandEnhance\n  - XDMBandEpipolar\n  - XDMBandEpipolarDEM\n  - XDMBandFeatureExt\n  - XDMBandFlip\n  - XDMBandFusion\n  - XDMBandGeoCorrect\n  - XDMBandHDRC\n  - XDMComposite\n  - XDMCompManager\n  - XDMBandHistogramMatching\n  - XDMBandIRFilter2\n  - Xio\n  - XDMBandImageSharpen\n  - XDMBandIndexTransform\n  - XDMBandLandCover2GIS\n  - XDMBandLocalWarp\n  - XDMBandMapConv\n  - XDMBandMask\n  - XDMBandMath\n  - XDMBandMosaic\n  - XDMBandMosaicLT\n  - XDMBandHistogramMatching\n  - XDMBandImageSharpen\n  - XDMBandNoiseInterpol\n  - XDMBandOrthoFrame\n  - XDMBandOrthoRPC\n  - XDMBandPointsToGrid\n  - XDMBandRegionGen\n  - XDMBandResize\n  - XDMBandRiverDetect\n  - XDMBandRotate\n  - XDMBandSarS2G\n  - XDMBandShadowEnhance\n  - XDMBandSpatialFilter\n  - XDMBandSuperClass\n  - XDMBandTileMerge\n  - XDMBandTopoModel\n  - XDMBandUnSuperClass\n  - XDMBandGeoCorrect\n  - XDMBandEpipolar\n  - XDMBandOrthoRPC\n  - XDMBandSarS2G\ntags:\n  - engine\n  - workflow\n  - api\n  - raster\n  - xdm\n---\n\n# Overview\n- Goal: cover raster-file load, band access, XDM composite assembly, and display-quality tuning.\n- This workflow is the primary family for `XRasterIO`, `XRSLoadFile`, `XDMBand`, `XDMComposite`, and `XDMCompManager`.\n- Prefer this family for XDM composite add/move/remove, grayscale/RGB composition, and raster stretch/cut/enhancement; prefer `ImageView` only for the view shell and layer attachment.\n- Do not steal `ImageView` comp-link manager retrieval or composite `1/2 Front` settings; those stay in `ImageView`.\n\n## Primary Usage Buckets\n- `파일 로드`: `Initialize`, `LoadFile`, `GetSubDatasets`, `LoadRawFile`, `GetFileInfo`\n- `밴드 접근`: `XRSLoadFile.GetBandAt`\n- `흑백/칼라 도시`: `XDMComposite.SetBand`, `XDMCompManager.AddXDMComposite`\n- `합성 순서/선택`: `MoveComposite`, `RemoveXDMComposite*`, `HitTest`\n- `화질 조정`: `SetCutType`, `SetStretchCoverage`, `SetStretchType`, `SetCutMin`, `SetCutMax`\n- `고급 XDM 처리`: `XDMBandHistogramMatching`, `XDMBandImageSharpen`, `XDMBandNoiseInterpol`, `XDMBandGeoCorrect`, `XDMBandEpipolar`, `XDMBandOrthoRPC`, `XDMBandSarS2G`\n\n## Family Boundaries\n- If the question is about attaching loaded raster to `NXImageView`, continue with [ImageView API Workflow](wf-api-imageview.md).\n- If the question is about vector files, use [Vector API Workflow](wf-api-vector.md).\n- Source anchors for this family live in [NXDLio source](../pages/sources/nxdlio.md) and [NXDLrs source](../pages/sources/nxdlrs.md).\n\n## Practical Answer Shape\n- `파일 로드`: `Initialize` -> `LoadFile`/`LoadRawFile` -> `GetSubDatasets` or `GetBandAt`\n- `흑백/칼라 합성`: `SetBand` -> `AddXDMComposite` -> 필요 시 `MoveComposite`\n- `화질 조정`: `SetCutType`, `SetStretchType`, `SetStretchCoverage`, `SetCutMin/Max`\n- `ImageView 표시`: composite를 만든 뒤 `ImageView` workflow로 넘겨 최종 view attach를 설명\n\n\n## Answering Guidance\n- Start with this workflow to confirm the question belongs to this API family before writing code or steps.\n- Use the usage buckets and boundary notes to narrow the task to the smallest relevant slice.\n- Read the linked howto, concept, and source pages from the Knowledge Bundle before giving a procedural answer.\n- Use `Verified Facts` for exact method names and declarations; if this page is overview-only, say that and lean on the related pages for concrete steps.\n\n## Knowledge Bundle\n```yaml\nconcept_terms:\n- band\n- composite\n- stretch\n- enhancement\nrouting_hints:\n- all_of: [xdm, 합성]\n  any_of: [순서, stretch, cut, 흑백, 칼라, histogram, sharpen]\n- all_of: [raster]\n  any_of: [band, subdataset, loadrawfile, geotiff]\nbundle_pages:\n- path: pages/howtos/raster-load-and-composite.md\n  relation: family_howto\n- path: pages/howtos/raster-low-level-parameter-recipes.md\n  relation: family_howto\n- path: pages/concepts/raster-band-and-enhancement.md\n  relation: family_concept\n- path: pages/concepts/raster-operator-parameter-families.md\n  relation: family_concept\n- path: pages/concepts/layer-composite-display-pipeline.md\n  relation: family_concept\n- path: workflows/wf-api-imageview.md\n  relation: dependency_workflow\n- path: pages/sources/nxdlio.md\n  relation: source_summary\n- path: pages/sources/nxdlrs.md\n  relation: source_summary\n```\n\n<!-- GENERATED:RUNTIME_STATUS:START -->\n## Runtime Ingest Status\n- Auto-generated from raw source ingest at `2026-04-20T02:38:44Z`.\n- Resolved required symbols: `16/16`\n- Linked modules:\n  - `NXDLio`\n  - `NXDLrs`\n- Missing required symbols: `0`\n<!-- GENERATED:RUNTIME_STATUS:END -->\n## Verified Facts\n```yaml\nworkflow_family: api_raster\noutput_shape: focused_snippet_or_helper\nrequired_symbols:\n  - XRasterIO.Initialize\n  - XRasterIO.LoadFile\n  - XRasterIO.GetSubDatasets\n  - XRasterIO.LoadRawFile\n  - XRasterIO.GetFileInfo\n  - XRSLoadFile.GetBandAt\n  - XDMComposite.SetBand\n  - XDMComposite.SetCutType\n  - XDMComposite.SetCutMin\n  - XDMComposite.SetCutMax\n  - XDMComposite.SetStretchCoverage\n  - XDMComposite.SetStretchType\n  - XDMCompManager.AddXDMComposite\n  - XDMCompManager.RemoveXDMCompositeAll\n  - XDMCompManager.MoveComposite\n  - XDMCompManager.HitTest\nrequired_facts:\n  - symbol: XRasterIO.Initialize\n    declaration: 'bool Initialize([OutAttribute] String^% strError);'\n    source: 'Source/NXDLio/NXDLio.h:198'\n  - symbol: XRasterIO.LoadFile\n    declaration_candidates:\n      - declaration: 'NRS::XRSLoadFile^ LoadFile(String^ strFileKey, String^ strFileName, [OutAttribute] String^% strError, bool bCalcStatistics , eIOCreateXLDMode CreateXLD);'\n        source: 'Source/NXDLio/NXDLio.h:222'\n      - declaration: 'NRS::XRSLoadFile^ LoadFile(String^ strFileName, [OutAttribute] String^% strError, bool bCalcStatistics, eIOCreateXLDMode CreateXLD);'\n        source: 'Source/NXDLio/NXDLio.h:230'\n  - symbol: XRasterIO.GetSubDatasets\n    declaration: 'cli::array<String^>^ GetSubDatasets(String^ strFileName);'\n    source: 'Source/NXDLio/NXDLio.h:340'\n  - symbol: XRasterIO.LoadRawFile\n    declaration: 'NRS::XRSLoadFile^ LoadRawFile(String^ strFileName, XRawDataParam^ param, [OutAttribute] String^% strError, bool bCalcStatistics, eIOCreateXLDMode CreateXLD);'\n    source: 'Source/NXDLio/NXDLio.h:557'\n  - symbol: XRasterIO.GetFileInfo\n    declaration: 'String^ GetFileInfo(String^ strFileName, [OutAttribute] String^% strError);'\n    source: 'Source/NXDLio/NXDLio.h:568'\n  - symbol: XRSLoadFile.GetBandAt\n    declaration: 'XDMBand^ GetBandAt(int nIndex);'\n    source: 'Source/NXDLrs/XRSFile.h:986'\n  - symbol: XDMComposite.SetBand\n    declaration_candidates:\n      - declaration: 'void SetBand(XDMBand^% band, int Idx);'\n        source: 'Source/NXDLrs/NXDLrs.h:1423'\n      - declaration: 'void SetBand(XDMBand^% band, eCompBandIdx Idx);'\n        source: 'Source/NXDLrs/NXDLrs.h:1428'\n  - symbol: XDMComposite.SetCutType\n    declaration: 'void SetCutType(eCompCutType CutType, int Idx);'\n    source: 'Source/NXDLrs/NXDLrs.h:1445'\n  - symbol: XDMComposite.SetCutMin\n    declaration: 'void SetCutMin(double min, int Idx);'\n    source: 'Source/NXDLrs/NXDLrs.h:1455'\n  - symbol: XDMComposite.SetCutMax\n    declaration: 'void SetCutMax(double max, int Idx);'\n    source: 'Source/NXDLrs/NXDLrs.h:1465'\n  - symbol: XDMComposite.SetStretchCoverage\n    declaration: 'void SetStretchCoverage(eCompStretchCoverage StretchCoverage, int Idx);'\n    source: 'Source/NXDLrs/NXDLrs.h:1477'\n  - symbol: XDMComposite.SetStretchType\n    declaration: 'void SetStretchType(eCompStretchType StretchType, int Idx);'\n    source: 'Source/NXDLrs/NXDLrs.h:1487'\n  - symbol: XDMCompManager.AddXDMComposite\n    declaration: 'bool AddXDMComposite(XDMComposite^% Comp);'\n    source: 'Source/NXDLrs/NXDLrs.h:1867'\n  - symbol: XDMCompManager.RemoveXDMCompositeAll\n    declaration: 'void RemoveXDMCompositeAll();'\n    source: 'Source/NXDLrs/NXDLrs.h:1880'\nverification_rules:\n  - use_this_workflow_as_primary_path\n  - verify_method_vs_property_form\n  - verify_ref_out_and_enum_literals_when_signature_matters\n  - cross_check_runtime_methods_index_before_emitting_code\n```\n\n"
+      "source_anchors": [],
+      "content": "---\ntitle: Raster and XDM API Workflow\ndescription: Load raster files, fetch bands, build XDM composites, and tune display enhancement parameters.\naliases:\n  - raster api\n  - raster load\n  - xrasterio usage\n  - xdm composite usage\n  - geotiff load\n  - xdm band display\n  - grayscale rgb composite\n  - raster enhance\n  - raw raster load\n  - xdm histogram matching\n  - xdm sharpen\n  - xdm composite order\n  - geotiff 파일을 xrasterio로 로드\n  - xdm 파일을 로드해서 밴드를 가져오기\n  - 래스터 파일의 subdataset 목록 확인\n  - raw raster 파일을 loadrawfile로 읽기\n  - 입력한 파일 밴드 수에 따라 흑백 또는 칼라로 도시\n  - xdm 영상 히스토그램 매칭\n  - xdm 영상 샤프닝\n  - xdm 합성 순서 변경\n  - xdm composite를 추가하는 방법\n  - xdm stretch와 cut 값을 조정하는 방법\n  - xdm composite 추가\n  - xdm composite 이동 제거\nsymbols:\n  - XRasterIO\n  - XVectorIO\n  - Xio\n  - XRSLoadFile\n  - XDMBand\n  - XDMBand2DMem\n  - XDMBandAffineTransform\n  - XDMBandChangeDetect\n  - XDMBandChangeDetectSig\n  - XDMBandChangeDetectSpecAng\n  - XDMBandComplex\n  - XDMBandConvDataType\n  - XDMBandData2Binary\n  - XDMBandData2GIS\n  - XDMBandEOIR\n  - XDMBandEnhance\n  - XDMBandEpipolar\n  - XDMBandEpipolarDEM\n  - XDMBandFeatureExt\n  - XDMBandFlip\n  - XDMBandFusion\n  - XDMBandGeoCorrect\n  - XDMBandHDRC\n  - XDMComposite\n  - XDMCompManager\n  - XDMBandHistogramMatching\n  - XDMBandIRFilter2\n  - Xio\n  - XDMBandImageSharpen\n  - XDMBandIndexTransform\n  - XDMBandLandCover2GIS\n  - XDMBandLocalWarp\n  - XDMBandMapConv\n  - XDMBandMask\n  - XDMBandMath\n  - XDMBandMosaic\n  - XDMBandMosaicLT\n  - XDMBandHistogramMatching\n  - XDMBandImageSharpen\n  - XDMBandNoiseInterpol\n  - XDMBandOrthoFrame\n  - XDMBandOrthoRPC\n  - XDMBandPointsToGrid\n  - XDMBandRegionGen\n  - XDMBandResize\n  - XDMBandRiverDetect\n  - XDMBandRotate\n  - XDMBandSarS2G\n  - XDMBandShadowEnhance\n  - XDMBandSpatialFilter\n  - XDMBandSuperClass\n  - XDMBandTileMerge\n  - XDMBandTopoModel\n  - XDMBandUnSuperClass\n  - XDMBandGeoCorrect\n  - XDMBandEpipolar\n  - XDMBandOrthoRPC\n  - XDMBandSarS2G\ntags:\n  - engine\n  - workflow\n  - api\n  - raster\n  - xdm\n---\n\n# Overview\n- Goal: cover raster-file load, band access, XDM composite assembly, and display-quality tuning.\n- This workflow is the primary family for `XRasterIO`, `XRSLoadFile`, `XDMBand`, `XDMComposite`, and `XDMCompManager`.\n- Prefer this family for XDM composite add/move/remove, grayscale/RGB composition, and raster stretch/cut/enhancement; prefer `ImageView` only for the view shell and layer attachment.\n- Do not steal `ImageView` comp-link manager retrieval or composite `1/2 Front` settings; those stay in `ImageView`.\n\n## Primary Usage Buckets\n- `파일 로드`: `Initialize`, `LoadFile`, `GetSubDatasets`, `LoadRawFile`, `GetFileInfo`\n- `밴드 접근`: `XRSLoadFile.GetBandAt`\n- `흑백/칼라 도시`: `XDMComposite.SetBand`, `XDMCompManager.AddXDMComposite`\n- `합성 순서/선택`: `MoveComposite`, `RemoveXDMComposite*`, `HitTest`\n- `화질 조정`: `SetCutType`, `SetStretchCoverage`, `SetStretchType`, `SetCutMin`, `SetCutMax`\n- `고급 XDM 처리`: `XDMBandHistogramMatching`, `XDMBandImageSharpen`, `XDMBandNoiseInterpol`, `XDMBandGeoCorrect`, `XDMBandEpipolar`, `XDMBandOrthoRPC`, `XDMBandSarS2G`\n\n## Family Boundaries\n- If the question is about attaching loaded raster to `NXImageView`, continue with [ImageView API Workflow](wf-api-imageview.md).\n- If the question is about vector files, use [Vector API Workflow](wf-api-vector.md).\n- Source anchors for this family live in [NXDLio source](../pages/sources/nxdlio.md) and [NXDLrs source](../pages/sources/nxdlrs.md).\n\n## Practical Answer Shape\n- `파일 로드`: `Initialize` -> `LoadFile`/`LoadRawFile` -> `GetSubDatasets` or `GetBandAt`\n- `흑백/칼라 합성`: `SetBand` -> `AddXDMComposite` -> 필요 시 `MoveComposite`\n- `화질 조정`: `SetCutType`, `SetStretchType`, `SetStretchCoverage`, `SetCutMin/Max`\n- `ImageView 표시`: composite를 만든 뒤 `ImageView` workflow로 넘겨 최종 view attach를 설명\n\n\n## Answering Guidance\n- Start with this workflow to confirm the question belongs to this API family before writing code or steps.\n- Use the usage buckets and boundary notes to narrow the task to the smallest relevant slice.\n- Read the linked howto, concept, and source pages from the Knowledge Bundle before giving a procedural answer.\n- Use `Verified Facts` for exact method names and declarations; if this page is overview-only, say that and lean on the related pages for concrete steps.\n\n## Knowledge Bundle\n```yaml\nconcept_terms:\n- band\n- composite\n- stretch\n- enhancement\nrouting_hints:\n- all_of: [xdm, 합성]\n  any_of: [순서, stretch, cut, 흑백, 칼라, histogram, sharpen]\n- all_of: [raster]\n  any_of: [band, subdataset, loadrawfile, geotiff]\nbundle_pages:\n- path: pages/howtos/raster-load-and-composite.md\n  relation: family_howto\n- path: pages/howtos/raster-low-level-parameter-recipes.md\n  relation: family_howto\n- path: pages/concepts/raster-band-and-enhancement.md\n  relation: family_concept\n- path: pages/concepts/raster-operator-parameter-families.md\n  relation: family_concept\n- path: pages/concepts/layer-composite-display-pipeline.md\n  relation: family_concept\n- path: workflows/wf-api-imageview.md\n  relation: dependency_workflow\n- path: pages/sources/nxdlio.md\n  relation: source_summary\n- path: pages/sources/nxdlrs.md\n  relation: source_summary\n```\n\n<!-- GENERATED:RUNTIME_STATUS:START -->\n## Runtime Ingest Status\n- Auto-generated from raw source ingest at `2026-04-20T02:38:44Z`.\n- Resolved required symbols: `16/16`\n- Linked modules:\n  - `NXDLio`\n  - `NXDLrs`\n- Missing required symbols: `0`\n<!-- GENERATED:RUNTIME_STATUS:END -->\n## Verified Facts\n```yaml\nworkflow_family: api_raster\noutput_shape: focused_snippet_or_helper\nrequired_symbols:\n  - XRasterIO.Initialize\n  - XRasterIO.LoadFile\n  - XRasterIO.GetSubDatasets\n  - XRasterIO.LoadRawFile\n  - XRasterIO.GetFileInfo\n  - XRSLoadFile.GetBandAt\n  - XDMComposite.SetBand\n  - XDMComposite.SetCutType\n  - XDMComposite.SetCutMin\n  - XDMComposite.SetCutMax\n  - XDMComposite.SetStretchCoverage\n  - XDMComposite.SetStretchType\n  - XDMCompManager.AddXDMComposite\n  - XDMCompManager.RemoveXDMCompositeAll\n  - XDMCompManager.MoveComposite\n  - XDMCompManager.HitTest\nverification_rules:\n  - use_this_workflow_as_primary_path\n  - verify_method_vs_property_form\n  - verify_ref_out_and_enum_literals_when_signature_matters\n  - cross_check_runtime_methods_index_before_emitting_code\n```\n\n\n"
     },
     {
       "path": "workflows/wf-api-scene-editor.md",
@@ -2221,50 +1752,6 @@
         "NXPlanetLayerSceneEditor.SelectAll",
         "NXPlanetLayerSceneEditor.SelectObject",
         "NXPlanetLayerSceneEditor.EditObjectEnd"
-      ],
-      "required_facts": [
-        {
-          "symbol": "NXPlanetLayerSceneEditor.New",
-          "declaration": "bool New ();",
-          "declaration_candidates": null,
-          "source": "Source/NXDLscene/NXPlanetLayerSceneEditor.h:74"
-        },
-        {
-          "symbol": "NXPlanetLayerSceneEditor.Open",
-          "declaration": "bool Open (String^ strFile);",
-          "declaration_candidates": null,
-          "source": "Source/NXDLscene/NXPlanetLayerSceneEditor.h:83"
-        },
-        {
-          "symbol": "NXPlanetLayerSceneEditor.Save",
-          "declaration": "bool Save (String^ strFile);",
-          "declaration_candidates": null,
-          "source": "Source/NXDLscene/NXPlanetLayerSceneEditor.h:105"
-        },
-        {
-          "symbol": "NXPlanetLayerSceneEditor.GetScene",
-          "declaration": "XScene^ GetScene();",
-          "declaration_candidates": null,
-          "source": "Source/NXDLscene/NXPlanetLayerSceneEditor.h:109"
-        },
-        {
-          "symbol": "NXPlanetLayerSceneEditor.CreateNewOBJ",
-          "declaration": "XscObj^ CreateNewOBJ(String^ strType);",
-          "declaration_candidates": null,
-          "source": "Source/NXDLscene/NXPlanetLayerSceneEditor.h:139"
-        },
-        {
-          "symbol": "NXPlanetLayerSceneEditor.HitTest",
-          "declaration": "XscObj^ HitTest (XVertex3d^ vWorld, double dPixelSize, XHitFlag^% hit);",
-          "declaration_candidates": null,
-          "source": "Source/NXDLscene/NXPlanetLayerSceneEditor.h:121"
-        },
-        {
-          "symbol": "NXPlanetLayerSceneEditor.SelectObject",
-          "declaration": "bool SelectObject(XscObj^ pObj, bool bSingleSelect);",
-          "declaration_candidates": null,
-          "source": "Source/NXDLscene/NXPlanetLayerSceneEditor.h:153"
-        }
       ],
       "verification_rules": [
         "use_this_workflow_as_primary_path",
@@ -2414,28 +1901,20 @@
       ],
       "linked_method_symbols": [
         "Pixoneer.NXDL.NSCENE.NXPlanetLayerSceneEditor.New",
+        "Pixoneer.NXDL.NSCENE.NXPlanetLayerSceneEditor.Clear",
         "Pixoneer.NXDL.NSCENE.NXPlanetLayerSceneEditor.Open",
+        "Pixoneer.NXDL.NSCENE.NXPlanetLayerSceneEditor.Add",
         "Pixoneer.NXDL.NSCENE.NXPlanetLayerSceneEditor.Save",
         "Pixoneer.NXDL.NSCENE.NXPlanetLayerSceneEditor.GetScene",
         "Pixoneer.NXDL.NSCENE.NXPlanetLayerSceneEditor.CreateNewOBJ",
         "Pixoneer.NXDL.NSCENE.NXPlanetLayerSceneEditor.HitTest",
-        "Pixoneer.NXDL.NSCENE.NXPlanetLayerSceneEditor.SelectObject",
-        "Pixoneer.NXDL.NSCENE.NXPlanetLayerSceneEditor.Clear",
-        "Pixoneer.NXDL.NSCENE.NXPlanetLayerSceneEditor.Add",
         "Pixoneer.NXDL.NSCENE.NXPlanetLayerSceneEditor.SelectNone",
         "Pixoneer.NXDL.NSCENE.NXPlanetLayerSceneEditor.SelectAll",
+        "Pixoneer.NXDL.NSCENE.NXPlanetLayerSceneEditor.SelectObject",
         "Pixoneer.NXDL.NSCENE.NXPlanetLayerSceneEditor.EditObjectEnd"
       ],
-      "source_anchors": [
-        "Source/NXDLscene/NXPlanetLayerSceneEditor.h:74",
-        "Source/NXDLscene/NXPlanetLayerSceneEditor.h:83",
-        "Source/NXDLscene/NXPlanetLayerSceneEditor.h:105",
-        "Source/NXDLscene/NXPlanetLayerSceneEditor.h:109",
-        "Source/NXDLscene/NXPlanetLayerSceneEditor.h:139",
-        "Source/NXDLscene/NXPlanetLayerSceneEditor.h:121",
-        "Source/NXDLscene/NXPlanetLayerSceneEditor.h:153"
-      ],
-      "content": "---\ntitle: Scene Editor API Workflow\ndescription: Create, open, save, and select scene objects through the scene editor family.\naliases:\n  - scene editor api\n  - planet scene editor\n  - scene object selection\n  - scene save open\n  - scene 파일을 새로 만드는 방법\n  - scene 파일을 열고 저장하는 방법\n  - scene 객체를 새로 생성하는 방법\n  - scene에서 hit test로 객체를 찾는 방법\n  - scene 객체를 선택하는 방법\n  - scene 선택을 모두 해제하는 방법\n  - scene 객체 편집을 종료하는 방법\n  - scene 파일을 병합하거나 add 하는 방법\n  - scene object hit test\n  - scene object select none\n  - scene object select all\n  - scene object edit end\nsymbols:\n  - NXPlanetLayerSceneEditor\n  - XScene\n  - XscObj\n  - XHitFlag\ntags:\n  - engine\n  - workflow\n  - api\n  - scene\n---\n\n# Overview\n- Goal: create/open/save scenes and select scene objects through `NXPlanetLayerSceneEditor`.\n- This workflow merges scene IO and selection into one API family page.\n- For the current wiki routing, use this family when the question explicitly says `scene`, `scene 파일`, `scene 객체`, or scene-object selection lifecycle.\n- For the current wiki routing, `scene object` selection, hit testing, select none/all, and scene-file new/open/save/add/merge stay in this family rather than plain `Editor`.\n\n## Primary Usage Buckets\n- `scene 파일`: `New`, `Open`, `Add`, `Save`, `Clear`\n- `scene 객체`: `CreateNewOBJ`, `GetScene`\n- `scene 선택`: `HitTest`, `SelectObject`, `SelectNone`, `SelectAll`\n- `편집 종료`: `EditObjectEnd`\n\n## Practical Answer Shape\n- `scene 파일 생성/열기/저장`: 파일 lifecycle과 object lifecycle을 분리해서 설명합니다.\n- `scene 객체 생성`: `CreateNewOBJ`와 이후 selection/edit 흐름을 같이 답합니다.\n- `scene 선택`: `HitTest` -> `SelectObject` 또는 `SelectNone/All` 순서로 설명합니다.\n- `scene 편집 종료`: plain editor 종료와 구분해서 `EditObjectEnd`를 우선 제시합니다.\n\n\n## Answering Guidance\n- Start with this workflow to confirm the question belongs to this API family before writing code or steps.\n- Use the usage buckets and boundary notes to narrow the task to the smallest relevant slice.\n- Read the linked howto, concept, and source pages from the Knowledge Bundle before giving a procedural answer.\n- Use `Verified Facts` for exact method names and declarations; if this page is overview-only, say that and lean on the related pages for concrete steps.\n\n## Knowledge Bundle\n```yaml\nconcept_terms:\n- scene object\n- object io\n- scene graph\nrouting_hints:\n- all_of: [scene, 선택]\n- all_of: [scene, hit test]\n- all_of: [scene, 편집을 종료]\n- all_of: [scene, 객체]\nbundle_pages:\n- path: pages/howtos/scene-editor-object-io.md\n  relation: family_howto\n- path: pages/concepts/editor-and-scene-object-lifecycle.md\n  relation: family_concept\n- path: workflows/wf-api-editor.md\n  relation: dependency_workflow\n- path: pages/sources/nxdlscene.md\n  relation: source_summary\n```\n\n<!-- GENERATED:RUNTIME_STATUS:START -->\n## Runtime Ingest Status\n- Auto-generated from raw source ingest at `2026-04-20T02:38:44Z`.\n- Resolved required symbols: `12/12`\n- Linked modules:\n  - `NXDLscene`\n- Missing required symbols: `0`\n<!-- GENERATED:RUNTIME_STATUS:END -->\n## Verified Facts\n```yaml\nworkflow_family: api_scene_editor\noutput_shape: workflow_bound_to_host_context\nrequired_symbols:\n  - NXPlanetLayerSceneEditor.New\n  - NXPlanetLayerSceneEditor.Clear\n  - NXPlanetLayerSceneEditor.Open\n  - NXPlanetLayerSceneEditor.Add\n  - NXPlanetLayerSceneEditor.Save\n  - NXPlanetLayerSceneEditor.GetScene\n  - NXPlanetLayerSceneEditor.CreateNewOBJ\n  - NXPlanetLayerSceneEditor.HitTest\n  - NXPlanetLayerSceneEditor.SelectNone\n  - NXPlanetLayerSceneEditor.SelectAll\n  - NXPlanetLayerSceneEditor.SelectObject\n  - NXPlanetLayerSceneEditor.EditObjectEnd\nrequired_facts:\n  - symbol: NXPlanetLayerSceneEditor.New\n    declaration: 'bool New ();'\n    source: 'Source/NXDLscene/NXPlanetLayerSceneEditor.h:74'\n  - symbol: NXPlanetLayerSceneEditor.Open\n    declaration: 'bool Open (String^ strFile);'\n    source: 'Source/NXDLscene/NXPlanetLayerSceneEditor.h:83'\n  - symbol: NXPlanetLayerSceneEditor.Save\n    declaration: 'bool Save (String^ strFile);'\n    source: 'Source/NXDLscene/NXPlanetLayerSceneEditor.h:105'\n  - symbol: NXPlanetLayerSceneEditor.GetScene\n    declaration: 'XScene^ GetScene();'\n    source: 'Source/NXDLscene/NXPlanetLayerSceneEditor.h:109'\n  - symbol: NXPlanetLayerSceneEditor.CreateNewOBJ\n    declaration: 'XscObj^ CreateNewOBJ(String^ strType);'\n    source: 'Source/NXDLscene/NXPlanetLayerSceneEditor.h:139'\n  - symbol: NXPlanetLayerSceneEditor.HitTest\n    declaration: 'XscObj^ HitTest (XVertex3d^ vWorld, double dPixelSize, XHitFlag^% hit);'\n    source: 'Source/NXDLscene/NXPlanetLayerSceneEditor.h:121'\n  - symbol: NXPlanetLayerSceneEditor.SelectObject\n    declaration: 'bool SelectObject(XscObj^ pObj, bool bSingleSelect);'\n    source: 'Source/NXDLscene/NXPlanetLayerSceneEditor.h:153'\nverification_rules:\n  - use_this_workflow_as_primary_path\n  - verify_method_vs_property_form\n  - verify_ref_out_and_enum_literals_when_signature_matters\n  - cross_check_runtime_methods_index_before_emitting_code\n```\n\n"
+      "source_anchors": [],
+      "content": "---\ntitle: Scene Editor API Workflow\ndescription: Create, open, save, and select scene objects through the scene editor family.\naliases:\n  - scene editor api\n  - planet scene editor\n  - scene object selection\n  - scene save open\n  - scene 파일을 새로 만드는 방법\n  - scene 파일을 열고 저장하는 방법\n  - scene 객체를 새로 생성하는 방법\n  - scene에서 hit test로 객체를 찾는 방법\n  - scene 객체를 선택하는 방법\n  - scene 선택을 모두 해제하는 방법\n  - scene 객체 편집을 종료하는 방법\n  - scene 파일을 병합하거나 add 하는 방법\n  - scene object hit test\n  - scene object select none\n  - scene object select all\n  - scene object edit end\nsymbols:\n  - NXPlanetLayerSceneEditor\n  - XScene\n  - XscObj\n  - XHitFlag\ntags:\n  - engine\n  - workflow\n  - api\n  - scene\n---\n\n# Overview\n- Goal: create/open/save scenes and select scene objects through `NXPlanetLayerSceneEditor`.\n- This workflow merges scene IO and selection into one API family page.\n- For the current wiki routing, use this family when the question explicitly says `scene`, `scene 파일`, `scene 객체`, or scene-object selection lifecycle.\n- For the current wiki routing, `scene object` selection, hit testing, select none/all, and scene-file new/open/save/add/merge stay in this family rather than plain `Editor`.\n\n## Primary Usage Buckets\n- `scene 파일`: `New`, `Open`, `Add`, `Save`, `Clear`\n- `scene 객체`: `CreateNewOBJ`, `GetScene`\n- `scene 선택`: `HitTest`, `SelectObject`, `SelectNone`, `SelectAll`\n- `편집 종료`: `EditObjectEnd`\n\n## Practical Answer Shape\n- `scene 파일 생성/열기/저장`: 파일 lifecycle과 object lifecycle을 분리해서 설명합니다.\n- `scene 객체 생성`: `CreateNewOBJ`와 이후 selection/edit 흐름을 같이 답합니다.\n- `scene 선택`: `HitTest` -> `SelectObject` 또는 `SelectNone/All` 순서로 설명합니다.\n- `scene 편집 종료`: plain editor 종료와 구분해서 `EditObjectEnd`를 우선 제시합니다.\n\n\n## Answering Guidance\n- Start with this workflow to confirm the question belongs to this API family before writing code or steps.\n- Use the usage buckets and boundary notes to narrow the task to the smallest relevant slice.\n- Read the linked howto, concept, and source pages from the Knowledge Bundle before giving a procedural answer.\n- Use `Verified Facts` for exact method names and declarations; if this page is overview-only, say that and lean on the related pages for concrete steps.\n\n## Knowledge Bundle\n```yaml\nconcept_terms:\n- scene object\n- object io\n- scene graph\nrouting_hints:\n- all_of: [scene, 선택]\n- all_of: [scene, hit test]\n- all_of: [scene, 편집을 종료]\n- all_of: [scene, 객체]\nbundle_pages:\n- path: pages/howtos/scene-editor-object-io.md\n  relation: family_howto\n- path: pages/concepts/editor-and-scene-object-lifecycle.md\n  relation: family_concept\n- path: workflows/wf-api-editor.md\n  relation: dependency_workflow\n- path: pages/sources/nxdlscene.md\n  relation: source_summary\n```\n\n<!-- GENERATED:RUNTIME_STATUS:START -->\n## Runtime Ingest Status\n- Auto-generated from raw source ingest at `2026-04-20T02:38:44Z`.\n- Resolved required symbols: `12/12`\n- Linked modules:\n  - `NXDLscene`\n- Missing required symbols: `0`\n<!-- GENERATED:RUNTIME_STATUS:END -->\n## Verified Facts\n```yaml\nworkflow_family: api_scene_editor\noutput_shape: workflow_bound_to_host_context\nrequired_symbols:\n  - NXPlanetLayerSceneEditor.New\n  - NXPlanetLayerSceneEditor.Clear\n  - NXPlanetLayerSceneEditor.Open\n  - NXPlanetLayerSceneEditor.Add\n  - NXPlanetLayerSceneEditor.Save\n  - NXPlanetLayerSceneEditor.GetScene\n  - NXPlanetLayerSceneEditor.CreateNewOBJ\n  - NXPlanetLayerSceneEditor.HitTest\n  - NXPlanetLayerSceneEditor.SelectNone\n  - NXPlanetLayerSceneEditor.SelectAll\n  - NXPlanetLayerSceneEditor.SelectObject\n  - NXPlanetLayerSceneEditor.EditObjectEnd\nverification_rules:\n  - use_this_workflow_as_primary_path\n  - verify_method_vs_property_form\n  - verify_ref_out_and_enum_literals_when_signature_matters\n  - cross_check_runtime_methods_index_before_emitting_code\n```\n\n\n"
     },
     {
       "path": "workflows/wf-api-sensor-model.md",
@@ -2482,50 +1961,6 @@
         "XSensorModel.WorldToImageG",
         "XSensorModel.ImageToWorldG",
         "XSensorModel.GetMapCoordOfImageCenter"
-      ],
-      "required_facts": [
-        {
-          "symbol": "XFrameSensor.SetParamsLocal",
-          "declaration": "bool SetParamsLocal(XFrameSensorParams^ param);",
-          "declaration_candidates": null,
-          "source": "Source/NXDLsm/NXDLsm.h:273"
-        },
-        {
-          "symbol": "XFrameSensor.SetParamsEarth",
-          "declaration": "bool SetParamsEarth(XFrameSensorParams^ param);",
-          "declaration_candidates": null,
-          "source": "Source/NXDLsm/NXDLsm.h:268"
-        },
-        {
-          "symbol": "XSensorModel.WorldToImageE",
-          "declaration": "virtual bool WorldToImageE(NXDL::XVertex3d^ ptEuc, [OutAttribute] XVertex2d^% ptImg);",
-          "declaration_candidates": null,
-          "source": "Source/NXDLsm/NXDLsm.h:57"
-        },
-        {
-          "symbol": "XSensorModel.ImageToWorldE",
-          "declaration": "virtual bool ImageToWorldE(XVertex2d^ ptImg, double hEuc, [OutAttribute] NXDL::XVertex3d^% ptEuc);",
-          "declaration_candidates": null,
-          "source": "Source/NXDLsm/NXDLsm.h:64"
-        },
-        {
-          "symbol": "XSensorModel.WorldToImageG",
-          "declaration": "virtual bool WorldToImageG(NXDL::XVertex3d^ ptGeo,[OutAttribute] NXDL::XVertex2d^% ptImg);",
-          "declaration_candidates": null,
-          "source": "Source/NXDLsm/NXDLsm.h:70"
-        },
-        {
-          "symbol": "XSensorModel.ImageToWorldG",
-          "declaration": "virtual bool ImageToWorldG(NXDL::XVertex2d^ ptImg, const double hGeo, [OutAttribute] NXDL::XVertex3d^% ptGeo);",
-          "declaration_candidates": null,
-          "source": "Source/NXDLsm/NXDLsm.h:77"
-        },
-        {
-          "symbol": "XSensorModel.GetMapCoordOfImageCenter",
-          "declaration": "virtual NXDL::XVertex3d^ GetMapCoordOfImageCenter();",
-          "declaration_candidates": null,
-          "source": "Source/NXDLsm/NXDLsm.h:81"
-        }
       ],
       "verification_rules": [
         "use_this_workflow_as_primary_path",
@@ -2664,16 +2099,8 @@
         "Pixoneer.NXDL.NSM.XSensorModel.ImageToWorldG",
         "Pixoneer.NXDL.NSM.XSensorModel.GetMapCoordOfImageCenter"
       ],
-      "source_anchors": [
-        "Source/NXDLsm/NXDLsm.h:273",
-        "Source/NXDLsm/NXDLsm.h:268",
-        "Source/NXDLsm/NXDLsm.h:57",
-        "Source/NXDLsm/NXDLsm.h:64",
-        "Source/NXDLsm/NXDLsm.h:70",
-        "Source/NXDLsm/NXDLsm.h:77",
-        "Source/NXDLsm/NXDLsm.h:81"
-      ],
-      "content": "---\ntitle: Sensor Model API Workflow\ndescription: Configure sensor parameters and project between image, world, and geographic coordinates.\naliases:\n  - sensor model api\n  - sensor model usage\n  - frame sensor usage\n  - image world projection\n  - sensor model 파라미터 local 기준 설정\n  - sensor model 파라미터 earth 기준 설정\n  - 지상 좌표를 영상 좌표로 투영\n  - 영상 좌표를 지상 좌표로 역투영\n  - 지리 좌표를 영상 좌표로 변환\n  - 영상 좌표를 지리 좌표로 변환\n  - 영상 중심점의 지도 좌표를 얻기\n  - world to image projection\n  - image to world projection\n  - sensor model 기반 위치 투영을 구현하는 방법\n  - image center map coordinate\n  - 영상 중심점의 지도 좌표를 얻는 방법\nsymbols:\n  - XFrameSensor\n  - XFrameSensorParams\n  - XSensorModel\n  - XRpc\n  - XSarSensor\ntags:\n  - engine\n  - workflow\n  - api\n  - sensor\n---\n\n# Overview\n- Goal: configure sensor parameters and project between image and world spaces.\n- For the current wiki routing, image-to-ground, ground-to-image, image-to-geo, geo-to-image, and image-center map-coordinate questions are handled by this family.\n\n## Primary Usage Buckets\n- `sensor 파라미터`: `SetParamsLocal`, `SetParamsEarth`\n- `world/image`: `WorldToImageE`, `ImageToWorldE`\n- `geo/image`: `WorldToImageG`, `ImageToWorldG`\n- `중심점`: `GetMapCoordOfImageCenter`\n\n## Practical Answer Shape\n- `영상 좌표 <-> 지상/지리 좌표`: 유클리드(`E`)와 지리(`G`) 경로를 구분해서 설명합니다.\n- `sensor 파라미터 설정`: local 기준과 earth 기준을 먼저 나눕니다.\n- `영상 중심점`: `GetMapCoordOfImageCenter`를 별도 질문 패턴으로 바로 연결합니다.\n\n\n## Answering Guidance\n- Start with this workflow to confirm the question belongs to this API family before writing code or steps.\n- Use the usage buckets and boundary notes to narrow the task to the smallest relevant slice.\n- Read the linked howto, concept, and source pages from the Knowledge Bundle before giving a procedural answer.\n- Use `Verified Facts` for exact method names and declarations; if this page is overview-only, say that and lean on the related pages for concrete steps.\n\n## Knowledge Bundle\n```yaml\nconcept_terms:\n- projection\n- image to ground\n- sensor geometry\nrouting_hints:\n- all_of: [영상 중심점, 지도 좌표]\n- all_of: [image center, map coordinate]\nbundle_pages:\n- path: pages/howtos/sensor-model-image-ground-projection.md\n  relation: family_howto\n- path: pages/concepts/sensor-model-and-projection.md\n  relation: family_concept\n- path: workflows/wf-api-coordinate.md\n  relation: dependency_workflow\n- path: pages/sources/nxdlsm.md\n  relation: source_summary\n```\n\n<!-- GENERATED:RUNTIME_STATUS:START -->\n## Runtime Ingest Status\n- Auto-generated from raw source ingest at `2026-04-20T02:38:44Z`.\n- Resolved required symbols: `7/7`\n- Linked modules:\n  - `NXDLsm`\n- Missing required symbols: `0`\n<!-- GENERATED:RUNTIME_STATUS:END -->\n## Verified Facts\n```yaml\nworkflow_family: api_sensor_model\noutput_shape: focused_snippet_or_helper\nrequired_symbols:\n  - XFrameSensor.SetParamsLocal\n  - XFrameSensor.SetParamsEarth\n  - XSensorModel.WorldToImageE\n  - XSensorModel.ImageToWorldE\n  - XSensorModel.WorldToImageG\n  - XSensorModel.ImageToWorldG\n  - XSensorModel.GetMapCoordOfImageCenter\nrequired_facts:\n  - symbol: XFrameSensor.SetParamsLocal\n    declaration: 'bool SetParamsLocal(XFrameSensorParams^ param);'\n    source: 'Source/NXDLsm/NXDLsm.h:273'\n  - symbol: XFrameSensor.SetParamsEarth\n    declaration: 'bool SetParamsEarth(XFrameSensorParams^ param);'\n    source: 'Source/NXDLsm/NXDLsm.h:268'\n  - symbol: XSensorModel.WorldToImageE\n    declaration: 'virtual bool WorldToImageE(NXDL::XVertex3d^ ptEuc, [OutAttribute] XVertex2d^% ptImg);'\n    source: 'Source/NXDLsm/NXDLsm.h:57'\n  - symbol: XSensorModel.ImageToWorldE\n    declaration: 'virtual bool ImageToWorldE(XVertex2d^ ptImg, double hEuc, [OutAttribute] NXDL::XVertex3d^% ptEuc);'\n    source: 'Source/NXDLsm/NXDLsm.h:64'\n  - symbol: XSensorModel.WorldToImageG\n    declaration: 'virtual bool WorldToImageG(NXDL::XVertex3d^ ptGeo,[OutAttribute] NXDL::XVertex2d^% ptImg);'\n    source: 'Source/NXDLsm/NXDLsm.h:70'\n  - symbol: XSensorModel.ImageToWorldG\n    declaration: 'virtual bool ImageToWorldG(NXDL::XVertex2d^ ptImg, const double hGeo, [OutAttribute] NXDL::XVertex3d^% ptGeo);'\n    source: 'Source/NXDLsm/NXDLsm.h:77'\n  - symbol: XSensorModel.GetMapCoordOfImageCenter\n    declaration: 'virtual NXDL::XVertex3d^ GetMapCoordOfImageCenter();'\n    source: 'Source/NXDLsm/NXDLsm.h:81'\nverification_rules:\n  - use_this_workflow_as_primary_path\n  - verify_method_vs_property_form\n  - verify_ref_out_and_enum_literals_when_signature_matters\n  - cross_check_runtime_methods_index_before_emitting_code\n```\n\n"
+      "source_anchors": [],
+      "content": "---\ntitle: Sensor Model API Workflow\ndescription: Configure sensor parameters and project between image, world, and geographic coordinates.\naliases:\n  - sensor model api\n  - sensor model usage\n  - frame sensor usage\n  - image world projection\n  - sensor model 파라미터 local 기준 설정\n  - sensor model 파라미터 earth 기준 설정\n  - 지상 좌표를 영상 좌표로 투영\n  - 영상 좌표를 지상 좌표로 역투영\n  - 지리 좌표를 영상 좌표로 변환\n  - 영상 좌표를 지리 좌표로 변환\n  - 영상 중심점의 지도 좌표를 얻기\n  - world to image projection\n  - image to world projection\n  - sensor model 기반 위치 투영을 구현하는 방법\n  - image center map coordinate\n  - 영상 중심점의 지도 좌표를 얻는 방법\nsymbols:\n  - XFrameSensor\n  - XFrameSensorParams\n  - XSensorModel\n  - XRpc\n  - XSarSensor\ntags:\n  - engine\n  - workflow\n  - api\n  - sensor\n---\n\n# Overview\n- Goal: configure sensor parameters and project between image and world spaces.\n- For the current wiki routing, image-to-ground, ground-to-image, image-to-geo, geo-to-image, and image-center map-coordinate questions are handled by this family.\n\n## Primary Usage Buckets\n- `sensor 파라미터`: `SetParamsLocal`, `SetParamsEarth`\n- `world/image`: `WorldToImageE`, `ImageToWorldE`\n- `geo/image`: `WorldToImageG`, `ImageToWorldG`\n- `중심점`: `GetMapCoordOfImageCenter`\n\n## Practical Answer Shape\n- `영상 좌표 <-> 지상/지리 좌표`: 유클리드(`E`)와 지리(`G`) 경로를 구분해서 설명합니다.\n- `sensor 파라미터 설정`: local 기준과 earth 기준을 먼저 나눕니다.\n- `영상 중심점`: `GetMapCoordOfImageCenter`를 별도 질문 패턴으로 바로 연결합니다.\n\n\n## Answering Guidance\n- Start with this workflow to confirm the question belongs to this API family before writing code or steps.\n- Use the usage buckets and boundary notes to narrow the task to the smallest relevant slice.\n- Read the linked howto, concept, and source pages from the Knowledge Bundle before giving a procedural answer.\n- Use `Verified Facts` for exact method names and declarations; if this page is overview-only, say that and lean on the related pages for concrete steps.\n\n## Knowledge Bundle\n```yaml\nconcept_terms:\n- projection\n- image to ground\n- sensor geometry\nrouting_hints:\n- all_of: [영상 중심점, 지도 좌표]\n- all_of: [image center, map coordinate]\nbundle_pages:\n- path: pages/howtos/sensor-model-image-ground-projection.md\n  relation: family_howto\n- path: pages/concepts/sensor-model-and-projection.md\n  relation: family_concept\n- path: workflows/wf-api-coordinate.md\n  relation: dependency_workflow\n- path: pages/sources/nxdlsm.md\n  relation: source_summary\n```\n\n<!-- GENERATED:RUNTIME_STATUS:START -->\n## Runtime Ingest Status\n- Auto-generated from raw source ingest at `2026-04-20T02:38:44Z`.\n- Resolved required symbols: `7/7`\n- Linked modules:\n  - `NXDLsm`\n- Missing required symbols: `0`\n<!-- GENERATED:RUNTIME_STATUS:END -->\n## Verified Facts\n```yaml\nworkflow_family: api_sensor_model\noutput_shape: focused_snippet_or_helper\nrequired_symbols:\n  - XFrameSensor.SetParamsLocal\n  - XFrameSensor.SetParamsEarth\n  - XSensorModel.WorldToImageE\n  - XSensorModel.ImageToWorldE\n  - XSensorModel.WorldToImageG\n  - XSensorModel.ImageToWorldG\n  - XSensorModel.GetMapCoordOfImageCenter\nverification_rules:\n  - use_this_workflow_as_primary_path\n  - verify_method_vs_property_form\n  - verify_ref_out_and_enum_literals_when_signature_matters\n  - cross_check_runtime_methods_index_before_emitting_code\n```\n\n\n"
     },
     {
       "path": "workflows/wf-api-uspaceview.md",
@@ -2720,44 +2147,6 @@
         "NXUspaceView.GetDrawArgs",
         "NXUspaceView.SetMouseControlMode",
         "NXUspaceView.GetMouseControlMode"
-      ],
-      "required_facts": [
-        {
-          "symbol": "NXUspaceView.AddRenderLayer",
-          "declaration": "bool AddRenderLayer (NXRenderLayer^% layer);",
-          "declaration_candidates": null,
-          "source": "Source/NXUspace/NXUspaceView.h:87"
-        },
-        {
-          "symbol": "NXUspaceView.SetSpaceRegion",
-          "declaration": "void SetSpaceRegion(XVertex2d^ vMinSpace, XVertex2d^ vMaxSpace, XVertex2d^ vPsz);",
-          "declaration_candidates": null,
-          "source": "Source/NXUspace/NXUspaceView.h:93"
-        },
-        {
-          "symbol": "NXUspaceView.SetCameraState",
-          "declaration": "void SetCameraState(XVertex3d^ vEye, XVertex3d^ vLookAt, XVertex3d^ vUp);",
-          "declaration_candidates": null,
-          "source": "Source/NXUspace/NXUspaceView.h:99"
-        },
-        {
-          "symbol": "NXUspaceView.RefreshScreen",
-          "declaration": "void RefreshScreen();",
-          "declaration_candidates": null,
-          "source": "Source/NXUspace/NXUspaceView.h:106"
-        },
-        {
-          "symbol": "NXUspaceView.SetSR",
-          "declaration": "void SetSR(NCC::XSpatialReference^ sr);",
-          "declaration_candidates": null,
-          "source": "Source/NXUspace/NXUspaceView.h:110"
-        },
-        {
-          "symbol": "NXUspaceView.GetSR",
-          "declaration": "NCC::XSpatialReference^ GetSR();",
-          "declaration_candidates": null,
-          "source": "Source/NXUspace/NXUspaceView.h:114"
-        }
       ],
       "verification_rules": [
         "use_this_workflow_as_primary_path",
@@ -2895,15 +2284,8 @@
         "Pixoneer.NXDL.NXUSpace.NXUspaceView.SetMouseControlMode",
         "Pixoneer.NXDL.NXUSpace.NXUspaceView.GetMouseControlMode"
       ],
-      "source_anchors": [
-        "Source/NXUspace/NXUspaceView.h:87",
-        "Source/NXUspace/NXUspaceView.h:93",
-        "Source/NXUspace/NXUspaceView.h:99",
-        "Source/NXUspace/NXUspaceView.h:106",
-        "Source/NXUspace/NXUspaceView.h:110",
-        "Source/NXUspace/NXUspaceView.h:114"
-      ],
-      "content": "---\ntitle: UspaceView API Workflow\ndescription: Control UspaceView render layers, space regions, camera state, and space/world/screen conversions.\naliases:\n  - uspaceview api\n  - uspace view usage\n  - 3d space region\n  - uspaceview에 렌더 레이어 추가\n  - uspaceview 카메라 상태 설정\n  - uspaceview에 좌표계 설정\n  - uspaceview에서 좌표계를 가져오는 방법\n  - 공간 좌표를 world 좌표로 바꾸기\n  - 공간 좌표를 화면 좌표로 바꾸기\n  - 공간 좌표를 world 좌표로 바꾸는 방법\n  - 공간 좌표를 화면 좌표로 바꾸는 방법\n  - uspace render layer\n  - uspace view\nsymbols:\n  - NXUspaceView\n  - NXCameraState\n  - XSpatialReference\n  - NXRenderLayer\ntags:\n  - engine\n  - workflow\n  - api\n  - uspace\n---\n\n# Overview\n- Goal: define region, camera, SR, and interaction mode on `NXUspaceView`.\n- For the current wiki routing, `UspaceView`-named coordinate or space/screen conversion questions belong here.\n- If the question explicitly names `UspaceView`, route here before `Coordinate` or `Sensor Model` for view-owned SR and space/screen conversion APIs.\n\n## Primary Usage Buckets\n- `렌더 레이어`: `AddRenderLayer`\n- `공간 영역`: `SetSpaceRegion`\n- `카메라`: `SetCameraState`\n- `좌표계`: `SetSR`, `GetSR`\n- `공간/월드/화면 변환`: `SpaceToWorld`, `SpaceToScreen`\n- `상호작용`: `SetMouseControlMode`, `GetMouseControlMode`, `GetDrawArgs`\n\n## Practical Answer Shape\n- `UspaceView 좌표계`: `SetSR`와 `GetSR`를 먼저 제시하고 Coordinate family와 구분합니다.\n- `공간 -> world/screen`: bare conversion 질문이면 `SpaceToWorld` / `SpaceToScreen`을 우선 설명합니다.\n- `카메라/영역`: `SetSpaceRegion`과 `SetCameraState`를 같이 묶어 답합니다.\n\n\n## Answering Guidance\n- Start with this workflow to confirm the question belongs to this API family before writing code or steps.\n- Use the usage buckets and boundary notes to narrow the task to the smallest relevant slice.\n- Read the linked howto, concept, and source pages from the Knowledge Bundle before giving a procedural answer.\n- Use `Verified Facts` for exact method names and declarations; if this page is overview-only, say that and lean on the related pages for concrete steps.\n\n## Knowledge Bundle\n```yaml\nconcept_terms:\n- render layer\n- world mapping\n- interaction\nrouting_hints:\n- all_of: [공간 좌표, world 좌표]\n- all_of: [공간 좌표, 화면 좌표]\n- all_of: [공간 좌표, screen 좌표]\nbundle_pages:\n- path: pages/howtos/uspaceview-render-and-world.md\n  relation: family_howto\n- path: pages/concepts/view-screen-world-coordinates.md\n  relation: family_concept\n- path: pages/sources/nxuspace.md\n  relation: source_summary\n```\n\n<!-- GENERATED:RUNTIME_STATUS:START -->\n## Runtime Ingest Status\n- Auto-generated from raw source ingest at `2026-04-20T02:38:44Z`.\n- Resolved required symbols: `11/11`\n- Linked modules:\n  - `NXUspace`\n- Missing required symbols: `0`\n<!-- GENERATED:RUNTIME_STATUS:END -->\n## Verified Facts\n```yaml\nworkflow_family: api_uspaceview\noutput_shape: workflow_bound_to_host_context\nrequired_symbols:\n  - NXUspaceView.AddRenderLayer\n  - NXUspaceView.SetSpaceRegion\n  - NXUspaceView.SetCameraState\n  - NXUspaceView.RefreshScreen\n  - NXUspaceView.SetSR\n  - NXUspaceView.GetSR\n  - NXUspaceView.SpaceToWorld\n  - NXUspaceView.SpaceToScreen\n  - NXUspaceView.GetDrawArgs\n  - NXUspaceView.SetMouseControlMode\n  - NXUspaceView.GetMouseControlMode\nrequired_facts:\n  - symbol: NXUspaceView.AddRenderLayer\n    declaration: 'bool AddRenderLayer (NXRenderLayer^% layer);'\n    source: 'Source/NXUspace/NXUspaceView.h:87'\n  - symbol: NXUspaceView.SetSpaceRegion\n    declaration: 'void SetSpaceRegion(XVertex2d^ vMinSpace, XVertex2d^ vMaxSpace, XVertex2d^ vPsz);'\n    source: 'Source/NXUspace/NXUspaceView.h:93'\n  - symbol: NXUspaceView.SetCameraState\n    declaration: 'void SetCameraState(XVertex3d^ vEye, XVertex3d^ vLookAt, XVertex3d^ vUp);'\n    source: 'Source/NXUspace/NXUspaceView.h:99'\n  - symbol: NXUspaceView.RefreshScreen\n    declaration: 'void RefreshScreen();'\n    source: 'Source/NXUspace/NXUspaceView.h:106'\n  - symbol: NXUspaceView.SetSR\n    declaration: 'void SetSR(NCC::XSpatialReference^ sr);'\n    source: 'Source/NXUspace/NXUspaceView.h:110'\n  - symbol: NXUspaceView.GetSR\n    declaration: 'NCC::XSpatialReference^ GetSR();'\n    source: 'Source/NXUspace/NXUspaceView.h:114'\nverification_rules:\n  - use_this_workflow_as_primary_path\n  - verify_method_vs_property_form\n  - verify_ref_out_and_enum_literals_when_signature_matters\n  - cross_check_runtime_methods_index_before_emitting_code\n```\n\n"
+      "source_anchors": [],
+      "content": "---\ntitle: UspaceView API Workflow\ndescription: Control UspaceView render layers, space regions, camera state, and space/world/screen conversions.\naliases:\n  - uspaceview api\n  - uspace view usage\n  - 3d space region\n  - uspaceview에 렌더 레이어 추가\n  - uspaceview 카메라 상태 설정\n  - uspaceview에 좌표계 설정\n  - uspaceview에서 좌표계를 가져오는 방법\n  - 공간 좌표를 world 좌표로 바꾸기\n  - 공간 좌표를 화면 좌표로 바꾸기\n  - 공간 좌표를 world 좌표로 바꾸는 방법\n  - 공간 좌표를 화면 좌표로 바꾸는 방법\n  - uspace render layer\n  - uspace view\nsymbols:\n  - NXUspaceView\n  - NXCameraState\n  - XSpatialReference\n  - NXRenderLayer\ntags:\n  - engine\n  - workflow\n  - api\n  - uspace\n---\n\n# Overview\n- Goal: define region, camera, SR, and interaction mode on `NXUspaceView`.\n- For the current wiki routing, `UspaceView`-named coordinate or space/screen conversion questions belong here.\n- If the question explicitly names `UspaceView`, route here before `Coordinate` or `Sensor Model` for view-owned SR and space/screen conversion APIs.\n\n## Primary Usage Buckets\n- `렌더 레이어`: `AddRenderLayer`\n- `공간 영역`: `SetSpaceRegion`\n- `카메라`: `SetCameraState`\n- `좌표계`: `SetSR`, `GetSR`\n- `공간/월드/화면 변환`: `SpaceToWorld`, `SpaceToScreen`\n- `상호작용`: `SetMouseControlMode`, `GetMouseControlMode`, `GetDrawArgs`\n\n## Practical Answer Shape\n- `UspaceView 좌표계`: `SetSR`와 `GetSR`를 먼저 제시하고 Coordinate family와 구분합니다.\n- `공간 -> world/screen`: bare conversion 질문이면 `SpaceToWorld` / `SpaceToScreen`을 우선 설명합니다.\n- `카메라/영역`: `SetSpaceRegion`과 `SetCameraState`를 같이 묶어 답합니다.\n\n\n## Answering Guidance\n- Start with this workflow to confirm the question belongs to this API family before writing code or steps.\n- Use the usage buckets and boundary notes to narrow the task to the smallest relevant slice.\n- Read the linked howto, concept, and source pages from the Knowledge Bundle before giving a procedural answer.\n- Use `Verified Facts` for exact method names and declarations; if this page is overview-only, say that and lean on the related pages for concrete steps.\n\n## Knowledge Bundle\n```yaml\nconcept_terms:\n- render layer\n- world mapping\n- interaction\nrouting_hints:\n- all_of: [공간 좌표, world 좌표]\n- all_of: [공간 좌표, 화면 좌표]\n- all_of: [공간 좌표, screen 좌표]\nbundle_pages:\n- path: pages/howtos/uspaceview-render-and-world.md\n  relation: family_howto\n- path: pages/concepts/view-screen-world-coordinates.md\n  relation: family_concept\n- path: pages/sources/nxuspace.md\n  relation: source_summary\n```\n\n<!-- GENERATED:RUNTIME_STATUS:START -->\n## Runtime Ingest Status\n- Auto-generated from raw source ingest at `2026-04-20T02:38:44Z`.\n- Resolved required symbols: `11/11`\n- Linked modules:\n  - `NXUspace`\n- Missing required symbols: `0`\n<!-- GENERATED:RUNTIME_STATUS:END -->\n## Verified Facts\n```yaml\nworkflow_family: api_uspaceview\noutput_shape: workflow_bound_to_host_context\nrequired_symbols:\n  - NXUspaceView.AddRenderLayer\n  - NXUspaceView.SetSpaceRegion\n  - NXUspaceView.SetCameraState\n  - NXUspaceView.RefreshScreen\n  - NXUspaceView.SetSR\n  - NXUspaceView.GetSR\n  - NXUspaceView.SpaceToWorld\n  - NXUspaceView.SpaceToScreen\n  - NXUspaceView.GetDrawArgs\n  - NXUspaceView.SetMouseControlMode\n  - NXUspaceView.GetMouseControlMode\nverification_rules:\n  - use_this_workflow_as_primary_path\n  - verify_method_vs_property_form\n  - verify_ref_out_and_enum_literals_when_signature_matters\n  - cross_check_runtime_methods_index_before_emitting_code\n```\n\n\n"
     },
     {
       "path": "workflows/wf-api-vector.md",
@@ -2963,68 +2345,6 @@
         "XvcPolygon.Add",
         "XvcLayer.HitTest",
         "NXImageView.AddImageLayer"
-      ],
-      "required_facts": [
-        {
-          "symbol": "XVectorIO.Initialize",
-          "declaration": "bool Initialize([OutAttribute] String^% strError);",
-          "declaration_candidates": null,
-          "source": "Source/NXDLio/NXDLio.h:802"
-        },
-        {
-          "symbol": "XVectorIO.LoadFile",
-          "declaration": "NVC::XvcBase^ LoadFile(String^ strFileName, [OutAttribute] String^% strError, NCC::XSpatialReference^% pInSR);",
-          "declaration_candidates": null,
-          "source": "Source/NXDLio/NXDLio.h:824"
-        },
-        {
-          "symbol": "XVectorIO.GetFileInfo",
-          "declaration": "bool GetFileInfo(String^ strFileName, double% minx, double% miny, double% minz, double% maxx, double% maxy, double% maxz, NCC::XSpatialReference^% sr);",
-          "declaration_candidates": null,
-          "source": "Source/NXDLio/NXDLio.h:865"
-        },
-        {
-          "symbol": "XvcObj.GetPropertyNameAt",
-          "declaration": "String^ GetPropertyNameAt(int idx);",
-          "declaration_candidates": null,
-          "source": "Source/NXDLvc/NXDLvc.h:233"
-        },
-        {
-          "symbol": "XvcObj.GetPropertyValueAt",
-          "declaration": "String^ GetPropertyValueAt(int idx);",
-          "declaration_candidates": null,
-          "source": "Source/NXDLvc/NXDLvc.h:234"
-        },
-        {
-          "symbol": "XvcPoint.SetVertex",
-          "declaration": "void SetVertex(double x, double y, double z);",
-          "declaration_candidates": null,
-          "source": "Source/NXDLvc/NXDLvc.h:349"
-        },
-        {
-          "symbol": "XvcLine.SetVertices",
-          "declaration": "void SetVertices(double x1, double y1, double z1, double x2, double y2, double z2);",
-          "declaration_candidates": null,
-          "source": "Source/NXDLvc/NXDLvc.h:411"
-        },
-        {
-          "symbol": "XvcPolyline.Add",
-          "declaration": "void Add(double x, double y, double z);",
-          "declaration_candidates": null,
-          "source": "Source/NXDLvc/NXDLvc.h:572"
-        },
-        {
-          "symbol": "XvcPolygon.Add",
-          "declaration": "void Add(double x, double y, double z);",
-          "declaration_candidates": null,
-          "source": "Source/NXDLvc/NXDLvc.h:945"
-        },
-        {
-          "symbol": "XvcLayer.HitTest",
-          "declaration": "bool HitTest(double x, double y, double tol, [OutAttribute] ArrayList^% results);",
-          "declaration_candidates": null,
-          "source": "Source/NXDLvc/NXDLvc.h:1341"
-        }
       ],
       "verification_rules": [
         "use_this_workflow_as_primary_path",
@@ -3168,19 +2488,8 @@
         "Pixoneer.NXDL.NVC.XvcLayer.HitTest",
         "Pixoneer.NXDL.NXImage.NXImageView.AddImageLayer"
       ],
-      "source_anchors": [
-        "Source/NXDLio/NXDLio.h:802",
-        "Source/NXDLio/NXDLio.h:824",
-        "Source/NXDLio/NXDLio.h:865",
-        "Source/NXDLvc/NXDLvc.h:233",
-        "Source/NXDLvc/NXDLvc.h:234",
-        "Source/NXDLvc/NXDLvc.h:349",
-        "Source/NXDLvc/NXDLvc.h:411",
-        "Source/NXDLvc/NXDLvc.h:572",
-        "Source/NXDLvc/NXDLvc.h:945",
-        "Source/NXDLvc/NXDLvc.h:1341"
-      ],
-      "content": "---\ntitle: Vector API Workflow\ndescription: Load vector files, inspect vector metadata, create geometry objects, and overlay them onto views.\naliases:\n  - vector api\n  - vector file load\n  - xvectorio usage\n  - vector overlay\n  - imageview vector overlay\n  - imageview 위에 shp overlay\n  - 벡터 객체 속성 이름과 값을 읽기\n  - polyline polygon에 vertex 추가\n  - vector object properties\n  - shp overlay\n  - 벡터 파일의 bounding box와 좌표계를 확인하는 방법\n  - 점 벡터 객체의 좌표를 설정하는 방법\n  - 벡터 레이어를 hit test 하는 방법\n  - 벡터 데이터를 이미지 위에 같이 도시하는 방법\n  - 벡터 로딩 전에 io를 초기화하는 방법\n  - imageview 위에 shp를 overlay 하는 방법\n  - 벡터 파일의 driver key 확인\n  - 벡터 파일 export extension 지원 확인\n  - 벡터 파일 사용법\n  - 벡터 파일 filters for load 확인\n  - 벡터 파일 filters for save 확인\nsymbols:\n  - XVectorIO\n  - XvcBase\n  - XvcObj\n  - XvcPoint\n  - XvcLine\n  - XvcPolyline\n  - XvcPolygon\n  - XvcLayer\n  - NXImageView\ntags:\n  - engine\n  - workflow\n  - api\n  - vector\n---\n\n# Overview\n- Goal: load vector data, inspect metadata, create vector objects, and overlay them on image or map views.\n- For the current wiki routing, `vector`, `shp`, `overlay`, `bounding box`, `vertex`, `property`, and vector-layer hit-test questions stay in this family even when ImageView is also mentioned.\n- For the current wiki routing, vector file metadata, driver key, supported extensions, vector bounds, or vector geometry setup route here rather than `Coordinate` or `ImageView`.\n\n## Primary Usage Buckets\n- `벡터 파일 로드`: `Initialize`, `LoadFile`, `GetFileInfo`\n- `파일 메타데이터`: bounding box, spatial reference, driver key, supported extension\n- `객체/속성`: `GetPropertyNameAt`, `GetPropertyValueAt`\n- `기하 생성`: `SetVertex`, `SetVertices`, `Add`\n- `overlay / hit test`: `HitTest`, view layer attach\n\n## Practical Answer Shape\n- `벡터 파일 로드`: 먼저 `Initialize` -> `LoadFile` -> 필요한 경우 `GetFileInfo` 순서로 답합니다.\n- `속성 확인`: object property name/value access와 geometry setup를 분리해서 설명합니다.\n- `overlay`: vector를 로드한 뒤 어느 view에 붙일지 다음 workflow를 연결해줍니다.\n- `기하 생성`: point/line/polyline/polygon을 각각 다른 메서드군으로 설명합니다.\n\n\n## Answering Guidance\n- Start with this workflow to confirm the question belongs to this API family before writing code or steps.\n- Use the usage buckets and boundary notes to narrow the task to the smallest relevant slice.\n- Read the linked howto, concept, and source pages from the Knowledge Bundle before giving a procedural answer.\n- Use `Verified Facts` for exact method names and declarations; if this page is overview-only, say that and lean on the related pages for concrete steps.\n\n## Knowledge Bundle\n```yaml\nconcept_terms:\n- vector overlay\n- geometry bounds\n- dataset coordinates\nbundle_pages:\n- path: pages/howtos/vector-load-and-overlay.md\n  relation: family_howto\n- path: pages/concepts/spatial-reference-and-coordinate-transform.md\n  relation: family_concept\n- path: workflows/wf-api-coordinate.md\n  relation: dependency_workflow\n- path: pages/sources/nxdlio.md\n  relation: source_summary\n```\n\n<!-- GENERATED:RUNTIME_STATUS:START -->\n## Runtime Ingest Status\n- Auto-generated from raw source ingest at `2026-04-20T02:38:44Z`.\n- Resolved required symbols: `11/11`\n- Linked modules:\n  - `NXDLio`\n  - `NXDLvc`\n  - `NXImage`\n- Missing required symbols: `0`\n<!-- GENERATED:RUNTIME_STATUS:END -->\n## Verified Facts\n```yaml\nworkflow_family: api_vector\noutput_shape: focused_snippet_or_helper\nrequired_symbols:\n  - XVectorIO.Initialize\n  - XVectorIO.LoadFile\n  - XVectorIO.GetFileInfo\n  - XvcObj.GetPropertyNameAt\n  - XvcObj.GetPropertyValueAt\n  - XvcPoint.SetVertex\n  - XvcLine.SetVertices\n  - XvcPolyline.Add\n  - XvcPolygon.Add\n  - XvcLayer.HitTest\n  - NXImageView.AddImageLayer\nrequired_facts:\n  - symbol: XVectorIO.Initialize\n    declaration: 'bool Initialize([OutAttribute] String^% strError);'\n    source: 'Source/NXDLio/NXDLio.h:802'\n  - symbol: XVectorIO.LoadFile\n    declaration: 'NVC::XvcBase^ LoadFile(String^ strFileName, [OutAttribute] String^% strError, NCC::XSpatialReference^% pInSR);'\n    source: 'Source/NXDLio/NXDLio.h:824'\n  - symbol: XVectorIO.GetFileInfo\n    declaration: 'bool GetFileInfo(String^ strFileName, double% minx, double% miny, double% minz, double% maxx, double% maxy, double% maxz, NCC::XSpatialReference^% sr);'\n    source: 'Source/NXDLio/NXDLio.h:865'\n  - symbol: XvcObj.GetPropertyNameAt\n    declaration: 'String^ GetPropertyNameAt(int idx);'\n    source: 'Source/NXDLvc/NXDLvc.h:233'\n  - symbol: XvcObj.GetPropertyValueAt\n    declaration: 'String^ GetPropertyValueAt(int idx);'\n    source: 'Source/NXDLvc/NXDLvc.h:234'\n  - symbol: XvcPoint.SetVertex\n    declaration: 'void SetVertex(double x, double y, double z);'\n    source: 'Source/NXDLvc/NXDLvc.h:349'\n  - symbol: XvcLine.SetVertices\n    declaration: 'void SetVertices(double x1, double y1, double z1, double x2, double y2, double z2);'\n    source: 'Source/NXDLvc/NXDLvc.h:411'\n  - symbol: XvcPolyline.Add\n    declaration: 'void Add(double x, double y, double z);'\n    source: 'Source/NXDLvc/NXDLvc.h:572'\n  - symbol: XvcPolygon.Add\n    declaration: 'void Add(double x, double y, double z);'\n    source: 'Source/NXDLvc/NXDLvc.h:945'\n  - symbol: XvcLayer.HitTest\n    declaration: 'bool HitTest(double x, double y, double tol, [OutAttribute] ArrayList^% results);'\n    source: 'Source/NXDLvc/NXDLvc.h:1341'\nverification_rules:\n  - use_this_workflow_as_primary_path\n  - verify_method_vs_property_form\n  - verify_ref_out_and_enum_literals_when_signature_matters\n  - cross_check_runtime_methods_index_before_emitting_code\n```\n\n"
+      "source_anchors": [],
+      "content": "---\ntitle: Vector API Workflow\ndescription: Load vector files, inspect vector metadata, create geometry objects, and overlay them onto views.\naliases:\n  - vector api\n  - vector file load\n  - xvectorio usage\n  - vector overlay\n  - imageview vector overlay\n  - imageview 위에 shp overlay\n  - 벡터 객체 속성 이름과 값을 읽기\n  - polyline polygon에 vertex 추가\n  - vector object properties\n  - shp overlay\n  - 벡터 파일의 bounding box와 좌표계를 확인하는 방법\n  - 점 벡터 객체의 좌표를 설정하는 방법\n  - 벡터 레이어를 hit test 하는 방법\n  - 벡터 데이터를 이미지 위에 같이 도시하는 방법\n  - 벡터 로딩 전에 io를 초기화하는 방법\n  - imageview 위에 shp를 overlay 하는 방법\n  - 벡터 파일의 driver key 확인\n  - 벡터 파일 export extension 지원 확인\n  - 벡터 파일 사용법\n  - 벡터 파일 filters for load 확인\n  - 벡터 파일 filters for save 확인\nsymbols:\n  - XVectorIO\n  - XvcBase\n  - XvcObj\n  - XvcPoint\n  - XvcLine\n  - XvcPolyline\n  - XvcPolygon\n  - XvcLayer\n  - NXImageView\ntags:\n  - engine\n  - workflow\n  - api\n  - vector\n---\n\n# Overview\n- Goal: load vector data, inspect metadata, create vector objects, and overlay them on image or map views.\n- For the current wiki routing, `vector`, `shp`, `overlay`, `bounding box`, `vertex`, `property`, and vector-layer hit-test questions stay in this family even when ImageView is also mentioned.\n- For the current wiki routing, vector file metadata, driver key, supported extensions, vector bounds, or vector geometry setup route here rather than `Coordinate` or `ImageView`.\n\n## Primary Usage Buckets\n- `벡터 파일 로드`: `Initialize`, `LoadFile`, `GetFileInfo`\n- `파일 메타데이터`: bounding box, spatial reference, driver key, supported extension\n- `객체/속성`: `GetPropertyNameAt`, `GetPropertyValueAt`\n- `기하 생성`: `SetVertex`, `SetVertices`, `Add`\n- `overlay / hit test`: `HitTest`, view layer attach\n\n## Practical Answer Shape\n- `벡터 파일 로드`: 먼저 `Initialize` -> `LoadFile` -> 필요한 경우 `GetFileInfo` 순서로 답합니다.\n- `속성 확인`: object property name/value access와 geometry setup를 분리해서 설명합니다.\n- `overlay`: vector를 로드한 뒤 어느 view에 붙일지 다음 workflow를 연결해줍니다.\n- `기하 생성`: point/line/polyline/polygon을 각각 다른 메서드군으로 설명합니다.\n\n\n## Answering Guidance\n- Start with this workflow to confirm the question belongs to this API family before writing code or steps.\n- Use the usage buckets and boundary notes to narrow the task to the smallest relevant slice.\n- Read the linked howto, concept, and source pages from the Knowledge Bundle before giving a procedural answer.\n- Use `Verified Facts` for exact method names and declarations; if this page is overview-only, say that and lean on the related pages for concrete steps.\n\n## Knowledge Bundle\n```yaml\nconcept_terms:\n- vector overlay\n- geometry bounds\n- dataset coordinates\nbundle_pages:\n- path: pages/howtos/vector-load-and-overlay.md\n  relation: family_howto\n- path: pages/concepts/spatial-reference-and-coordinate-transform.md\n  relation: family_concept\n- path: workflows/wf-api-coordinate.md\n  relation: dependency_workflow\n- path: pages/sources/nxdlio.md\n  relation: source_summary\n```\n\n<!-- GENERATED:RUNTIME_STATUS:START -->\n## Runtime Ingest Status\n- Auto-generated from raw source ingest at `2026-04-20T02:38:44Z`.\n- Resolved required symbols: `11/11`\n- Linked modules:\n  - `NXDLio`\n  - `NXDLvc`\n  - `NXImage`\n- Missing required symbols: `0`\n<!-- GENERATED:RUNTIME_STATUS:END -->\n## Verified Facts\n```yaml\nworkflow_family: api_vector\noutput_shape: focused_snippet_or_helper\nrequired_symbols:\n  - XVectorIO.Initialize\n  - XVectorIO.LoadFile\n  - XVectorIO.GetFileInfo\n  - XvcObj.GetPropertyNameAt\n  - XvcObj.GetPropertyValueAt\n  - XvcPoint.SetVertex\n  - XvcLine.SetVertices\n  - XvcPolyline.Add\n  - XvcPolygon.Add\n  - XvcLayer.HitTest\n  - NXImageView.AddImageLayer\nverification_rules:\n  - use_this_workflow_as_primary_path\n  - verify_method_vs_property_form\n  - verify_ref_out_and_enum_literals_when_signature_matters\n  - cross_check_runtime_methods_index_before_emitting_code\n```\n\n\n"
     },
     {
       "path": "workflows/wf-api-videoview.md",
@@ -3248,74 +2557,6 @@
         "NXImageLayerVideo.SetInitialFrameSize",
         "NXImageLayerVideo.ScreenToWorld",
         "NXImageLayerVideo.WorldToScreen"
-      ],
-      "required_facts": [
-        {
-          "symbol": "XVideoIO.OpenFile",
-          "declaration": "NXVideo::XVideo^ OpenFile(String^ strFilePath, String^ strDriverName, [OutAttribute] String^% strError);",
-          "declaration_candidates": null,
-          "source": "Source/NXVideo/XVideoIO.h:432"
-        },
-        {
-          "symbol": "NXVideoView.SetVideoChannel",
-          "declaration": "bool SetVideoChannel(XVideo^ video, int channelIndex);",
-          "declaration_candidates": null,
-          "source": "Source/NXVideo/NXVideoView.h:351"
-        },
-        {
-          "symbol": "NXVideoView.ResetVideoChannel",
-          "declaration": "void ResetVideoChannel();",
-          "declaration_candidates": null,
-          "source": "Source/NXVideo/NXVideoView.h:359"
-        },
-        {
-          "symbol": "NXVideoView.RefreshScreen",
-          "declaration": "bool RefreshScreen();",
-          "declaration_candidates": null,
-          "source": "Source/NXVideo/NXVideoView.h:193"
-        },
-        {
-          "symbol": "NXVideoView.RequestRender",
-          "declaration": "void RequestRender(UInt64 requestID);",
-          "declaration_candidates": null,
-          "source": "Source/NXVideo/NXVideoView.h:198"
-        },
-        {
-          "symbol": "NXVideoView.AddRenderLayer",
-          "declaration": "bool AddRenderLayer(NXVideoLayer^ layer);",
-          "declaration_candidates": null,
-          "source": "Source/NXVideo/NXVideoView.h:218"
-        },
-        {
-          "symbol": "NXVideoView.CaptureFrame",
-          "declaration": "cli::array<XTexture^>^ CaptureFrame(bool bPrimaryOnly);",
-          "declaration_candidates": null,
-          "source": "Source/NXVideo/NXVideoView.h:381"
-        },
-        {
-          "symbol": "NXMpegTSAnalysis.GetKLVMetaData",
-          "declaration": "bool GetKLVMetaData(cli::array<unsigned char>^ packet_data, int length, [OutAttribute] cli::array<unsigned char>^% meta_data);",
-          "declaration_candidates": null,
-          "source": "Source/NXVideo/NXMpegTSAnalysis.h:41"
-        },
-        {
-          "symbol": "NXImageLayerVideo.SetVideoChannel",
-          "declaration": "void SetVideoChannel(XVideoChannel^ channel);",
-          "declaration_candidates": null,
-          "source": "Source/NXVideo/NXImageLayerVideo.h:61"
-        },
-        {
-          "symbol": "NXImageLayerVideo.ResetVideoChannel",
-          "declaration": "void ResetVideoChannel();",
-          "declaration_candidates": null,
-          "source": "Source/NXVideo/NXImageLayerVideo.h:64"
-        },
-        {
-          "symbol": "NXImageLayerVideo.SetInitialFrameSize",
-          "declaration": "void SetInitialFrameSize(int width, int height);",
-          "declaration_candidates": null,
-          "source": "Source/NXVideo/NXImageLayerVideo.h:71"
-        }
       ],
       "verification_rules": [
         "use_this_workflow_as_primary_path",
@@ -3570,20 +2811,8 @@
         "Pixoneer.NXDL.NXVideo.NXImageLayerVideo.ScreenToWorld",
         "Pixoneer.NXDL.NXVideo.NXImageLayerVideo.WorldToScreen"
       ],
-      "source_anchors": [
-        "Source/NXVideo/XVideoIO.h:432",
-        "Source/NXVideo/NXVideoView.h:351",
-        "Source/NXVideo/NXVideoView.h:359",
-        "Source/NXVideo/NXVideoView.h:193",
-        "Source/NXVideo/NXVideoView.h:198",
-        "Source/NXVideo/NXVideoView.h:218",
-        "Source/NXVideo/NXVideoView.h:381",
-        "Source/NXVideo/NXMpegTSAnalysis.h:41",
-        "Source/NXVideo/NXImageLayerVideo.h:61",
-        "Source/NXVideo/NXImageLayerVideo.h:64",
-        "Source/NXVideo/NXImageLayerVideo.h:71"
-      ],
-      "content": "---\ntitle: VideoView API Workflow\ndescription: Open video, bind channels, capture frames, extract KLV, and explain embedded video-layer handling.\naliases:\n  - videoview api\n  - videoview 사용법\n  - mpeg2ts playback\n  - video channel bind\n  - klv metadata extract\n  - videoview frame capture\n  - video fusion\n  - mpeg2ts 동영상 파일을 로드해서 화면에 도시\n  - videoview에 비디오 채널 연결\n  - videoview 현재 프레임 캡처\n  - mpeg2ts에서 klv 메타데이터 추출\n  - imageview 안에 비디오 레이어 연결\n  - imageview 안에 비디오 레이어를 연결하는 방법\n  - imageview video layer\n  - video image layer\n  - videoview에서 영상 융합 활성화\n  - imageview 비디오 레이어에 채널 연결하는 방법\n  - imageview 비디오 레이어 채널 해제하는 방법\n  - imageview 비디오 레이어 초기 프레임 크기 설정 방법\n  - imageview 비디오 레이어 화면 좌표를 실제 좌표로 변환하는 방법\n  - imageview 비디오 레이어에서 to 실제 좌표 사용하는 방법\n  - imageview 비디오 레이어에서 to 공간 사용하는 방법\n  - imageview 비디오 레이어에서 to 영상 사용하는 방법\n  - imageview 비디오 레이어에서 to 화면 좌표 사용하는 방법\n  - milmapview에서 동영상 채널 초기화\n  - milmapview 비디오 레이어 사용법\n  - planetview에서 동영상 채널 초기화\n  - planetview 비디오 레이어 사용법\n  - milmapview에서 동영상 프레임 설정\n  - planetview에서 동영상 프레임 설정\n  - 비디오 필터에서 up 사용\n  - 비디오 그룹에서 group metad add handler 설정\nsymbols:\n  - NXVideoView\n  - XVideoIO\n  - XVideo\n  - XVideoChannel\n  - NXMpegTSAnalysis\n  - NXImageLayerVideo\n  - NXMilmapLayerVideoBase\n  - NXPlanetLayerVideoBase\n  - XVideoGroup\n  - XVideoMosaic\n  - XVideoStabilizer\n  - XVideoFrameFilter\ntags:\n  - engine\n  - workflow\n  - api\n  - video\n---\n\n# Overview\n- Goal: cover open/bind/render/capture/KLV questions for the video family.\n- This workflow covers `XVideoIO`, `NXVideoView`, `NXImageLayerVideo`, and `NXMpegTSAnalysis`.\n- For the current wiki routing, even when `ImageView` is explicitly named, `비디오 레이어`, `채널 연결/해제`, `초기 프레임 크기`, and video-layer screen/world conversion are treated as `VideoView`.\n- The same routing rule applies when `MilmapView` or `PlanetView` is named and the intent is video channel wiring, KLV, frame capture, or embedded video-layer conversion.\n\n## Primary Usage Buckets\n- `동영상 열기`: `XVideoIO.OpenFile`\n- `화면 표시`: `SetVideoChannel`, `ResetVideoChannel`, `RefreshScreen`, `RequestRender`\n- `프레임 캡처`: `CaptureFrame`\n- `KLV`: `NXMpegTSAnalysis.GetKLVMetaData`\n- `ImageView 안의 비디오`: `NXImageLayerVideo.SetVideoChannel`, `ResetVideoChannel`, `SetInitialFrameSize`\n- `영상 융합`: `SetVideoChannelFuse`, `EnableVideoFusion`\n\n## Practical Answer Shape\n- `파일 열기 + 표시`: `OpenFile` -> `SetVideoChannel` -> `RefreshScreen/RequestRender`\n- `채널 교체/해제`: `SetVideoChannel`과 `ResetVideoChannel`을 같은 흐름 안에서 설명\n- `프레임 캡처`: live view 캡처인지, embedded video layer인지 먼저 나눈 뒤 `CaptureFrame` 또는 layer-side API를 제시\n- `embedded video layer`: `NXImageLayerVideo` 계열은 view family가 아니라 video family 책임으로 설명\n- `필터/그룹/모자이크/안정화`: low-level helper가 나오면 `XVideoFrameFilter`, `XVideoGroup`, `XVideoMosaic`, `XVideoStabilizer`를 묶어 답합니다\n\n\n## Answering Guidance\n- Start with this workflow to confirm the question belongs to this API family before writing code or steps.\n- Use the usage buckets and boundary notes to narrow the task to the smallest relevant slice.\n- Read the linked howto, concept, and source pages from the Knowledge Bundle before giving a procedural answer.\n- Use `Verified Facts` for exact method names and declarations; if this page is overview-only, say that and lean on the related pages for concrete steps.\n\n## Knowledge Bundle\n```yaml\nconcept_terms:\n- video channel\n- klv\n- frame capture\n- fusion\nrouting_hints:\n- all_of: [imageview, 비디오 레이어]\n- all_of: [imageview, 비디오 레이어]\n  any_of: [채널, 프레임, 영상, 공간, 화면, 실제 좌표]\n- all_of: [imageview, 동영상 채널]\n- all_of: [imageview, 동영상 프레임]\n- all_of: [milmapview, 동영상 채널]\n- all_of: [milmapview, 동영상 프레임]\n- all_of: [milmapview]\n  any_of: [동영상 채널, 동영상 프레임, 비디오 레이어]\n- all_of: [planetview, 동영상 채널]\n- all_of: [planetview, 동영상 프레임]\n- all_of: [planetview]\n  any_of: [동영상 채널, 동영상 프레임, 비디오 레이어]\nbundle_pages:\n- path: pages/howtos/videoview-playback-and-klv.md\n  relation: family_howto\n- path: pages/howtos/video-helper-processing-recipes.md\n  relation: family_howto\n- path: pages/concepts/video-channel-klv-and-fusion.md\n  relation: family_concept\n- path: workflows/wf-api-imageview.md\n  relation: dependency_workflow\n- path: pages/sources/nxvideo.md\n  relation: source_summary\n```\n\n<!-- GENERATED:RUNTIME_STATUS:START -->\n## Runtime Ingest Status\n- Auto-generated from raw source ingest at `2026-04-20T02:38:44Z`.\n- Resolved required symbols: `13/13`\n- Linked modules:\n  - `NXVideo`\n- Missing required symbols: `0`\n<!-- GENERATED:RUNTIME_STATUS:END -->\n## Verified Facts\n```yaml\nworkflow_family: api_videoview\noutput_shape: workflow_bound_to_host_context\nrequired_symbols:\n  - XVideoIO.OpenFile\n  - NXVideoView.SetVideoChannel\n  - NXVideoView.ResetVideoChannel\n  - NXVideoView.RefreshScreen\n  - NXVideoView.RequestRender\n  - NXVideoView.AddRenderLayer\n  - NXVideoView.CaptureFrame\n  - NXMpegTSAnalysis.GetKLVMetaData\n  - NXImageLayerVideo.SetVideoChannel\n  - NXImageLayerVideo.ResetVideoChannel\n  - NXImageLayerVideo.SetInitialFrameSize\n  - NXImageLayerVideo.ScreenToWorld\n  - NXImageLayerVideo.WorldToScreen\nrequired_facts:\n  - symbol: XVideoIO.OpenFile\n    declaration: 'NXVideo::XVideo^ OpenFile(String^ strFilePath, String^ strDriverName, [OutAttribute] String^% strError);'\n    source: 'Source/NXVideo/XVideoIO.h:432'\n  - symbol: NXVideoView.SetVideoChannel\n    declaration: 'bool SetVideoChannel(XVideo^ video, int channelIndex);'\n    source: 'Source/NXVideo/NXVideoView.h:351'\n  - symbol: NXVideoView.ResetVideoChannel\n    declaration: 'void ResetVideoChannel();'\n    source: 'Source/NXVideo/NXVideoView.h:359'\n  - symbol: NXVideoView.RefreshScreen\n    declaration: 'bool RefreshScreen();'\n    source: 'Source/NXVideo/NXVideoView.h:193'\n  - symbol: NXVideoView.RequestRender\n    declaration: 'void RequestRender(UInt64 requestID);'\n    source: 'Source/NXVideo/NXVideoView.h:198'\n  - symbol: NXVideoView.AddRenderLayer\n    declaration: 'bool AddRenderLayer(NXVideoLayer^ layer);'\n    source: 'Source/NXVideo/NXVideoView.h:218'\n  - symbol: NXVideoView.CaptureFrame\n    declaration: 'cli::array<XTexture^>^ CaptureFrame(bool bPrimaryOnly);'\n    source: 'Source/NXVideo/NXVideoView.h:381'\n  - symbol: NXMpegTSAnalysis.GetKLVMetaData\n    declaration: 'bool GetKLVMetaData(cli::array<unsigned char>^ packet_data, int length, [OutAttribute] cli::array<unsigned char>^% meta_data);'\n    source: 'Source/NXVideo/NXMpegTSAnalysis.h:41'\n  - symbol: NXImageLayerVideo.SetVideoChannel\n    declaration: 'void SetVideoChannel(XVideoChannel^ channel);'\n    source: 'Source/NXVideo/NXImageLayerVideo.h:61'\n  - symbol: NXImageLayerVideo.ResetVideoChannel\n    declaration: 'void ResetVideoChannel();'\n    source: 'Source/NXVideo/NXImageLayerVideo.h:64'\n  - symbol: NXImageLayerVideo.SetInitialFrameSize\n    declaration: 'void SetInitialFrameSize(int width, int height);'\n    source: 'Source/NXVideo/NXImageLayerVideo.h:71'\nverification_rules:\n  - use_this_workflow_as_primary_path\n  - verify_method_vs_property_form\n  - verify_ref_out_and_enum_literals_when_signature_matters\n  - cross_check_runtime_methods_index_before_emitting_code\n```\n\n"
+      "source_anchors": [],
+      "content": "---\ntitle: VideoView API Workflow\ndescription: Open video, bind channels, capture frames, extract KLV, and explain embedded video-layer handling.\naliases:\n  - videoview api\n  - videoview 사용법\n  - mpeg2ts playback\n  - video channel bind\n  - klv metadata extract\n  - videoview frame capture\n  - video fusion\n  - mpeg2ts 동영상 파일을 로드해서 화면에 도시\n  - videoview에 비디오 채널 연결\n  - videoview 현재 프레임 캡처\n  - mpeg2ts에서 klv 메타데이터 추출\n  - imageview 안에 비디오 레이어 연결\n  - imageview 안에 비디오 레이어를 연결하는 방법\n  - imageview video layer\n  - video image layer\n  - videoview에서 영상 융합 활성화\n  - imageview 비디오 레이어에 채널 연결하는 방법\n  - imageview 비디오 레이어 채널 해제하는 방법\n  - imageview 비디오 레이어 초기 프레임 크기 설정 방법\n  - imageview 비디오 레이어 화면 좌표를 실제 좌표로 변환하는 방법\n  - imageview 비디오 레이어에서 to 실제 좌표 사용하는 방법\n  - imageview 비디오 레이어에서 to 공간 사용하는 방법\n  - imageview 비디오 레이어에서 to 영상 사용하는 방법\n  - imageview 비디오 레이어에서 to 화면 좌표 사용하는 방법\n  - milmapview에서 동영상 채널 초기화\n  - milmapview 비디오 레이어 사용법\n  - planetview에서 동영상 채널 초기화\n  - planetview 비디오 레이어 사용법\n  - milmapview에서 동영상 프레임 설정\n  - planetview에서 동영상 프레임 설정\n  - 비디오 필터에서 up 사용\n  - 비디오 그룹에서 group metad add handler 설정\nsymbols:\n  - NXVideoView\n  - XVideoIO\n  - XVideo\n  - XVideoChannel\n  - NXMpegTSAnalysis\n  - NXImageLayerVideo\n  - NXMilmapLayerVideoBase\n  - NXPlanetLayerVideoBase\n  - XVideoGroup\n  - XVideoMosaic\n  - XVideoStabilizer\n  - XVideoFrameFilter\ntags:\n  - engine\n  - workflow\n  - api\n  - video\n---\n\n# Overview\n- Goal: cover open/bind/render/capture/KLV questions for the video family.\n- This workflow covers `XVideoIO`, `NXVideoView`, `NXImageLayerVideo`, and `NXMpegTSAnalysis`.\n- For the current wiki routing, even when `ImageView` is explicitly named, `비디오 레이어`, `채널 연결/해제`, `초기 프레임 크기`, and video-layer screen/world conversion are treated as `VideoView`.\n- The same routing rule applies when `MilmapView` or `PlanetView` is named and the intent is video channel wiring, KLV, frame capture, or embedded video-layer conversion.\n\n## Primary Usage Buckets\n- `동영상 열기`: `XVideoIO.OpenFile`\n- `화면 표시`: `SetVideoChannel`, `ResetVideoChannel`, `RefreshScreen`, `RequestRender`\n- `프레임 캡처`: `CaptureFrame`\n- `KLV`: `NXMpegTSAnalysis.GetKLVMetaData`\n- `ImageView 안의 비디오`: `NXImageLayerVideo.SetVideoChannel`, `ResetVideoChannel`, `SetInitialFrameSize`\n- `영상 융합`: `SetVideoChannelFuse`, `EnableVideoFusion`\n\n## Practical Answer Shape\n- `파일 열기 + 표시`: `OpenFile` -> `SetVideoChannel` -> `RefreshScreen/RequestRender`\n- `채널 교체/해제`: `SetVideoChannel`과 `ResetVideoChannel`을 같은 흐름 안에서 설명\n- `프레임 캡처`: live view 캡처인지, embedded video layer인지 먼저 나눈 뒤 `CaptureFrame` 또는 layer-side API를 제시\n- `embedded video layer`: `NXImageLayerVideo` 계열은 view family가 아니라 video family 책임으로 설명\n- `필터/그룹/모자이크/안정화`: low-level helper가 나오면 `XVideoFrameFilter`, `XVideoGroup`, `XVideoMosaic`, `XVideoStabilizer`를 묶어 답합니다\n\n\n## Answering Guidance\n- Start with this workflow to confirm the question belongs to this API family before writing code or steps.\n- Use the usage buckets and boundary notes to narrow the task to the smallest relevant slice.\n- Read the linked howto, concept, and source pages from the Knowledge Bundle before giving a procedural answer.\n- Use `Verified Facts` for exact method names and declarations; if this page is overview-only, say that and lean on the related pages for concrete steps.\n\n## Knowledge Bundle\n```yaml\nconcept_terms:\n- video channel\n- klv\n- frame capture\n- fusion\nrouting_hints:\n- all_of: [imageview, 비디오 레이어]\n- all_of: [imageview, 비디오 레이어]\n  any_of: [채널, 프레임, 영상, 공간, 화면, 실제 좌표]\n- all_of: [imageview, 동영상 채널]\n- all_of: [imageview, 동영상 프레임]\n- all_of: [milmapview, 동영상 채널]\n- all_of: [milmapview, 동영상 프레임]\n- all_of: [milmapview]\n  any_of: [동영상 채널, 동영상 프레임, 비디오 레이어]\n- all_of: [planetview, 동영상 채널]\n- all_of: [planetview, 동영상 프레임]\n- all_of: [planetview]\n  any_of: [동영상 채널, 동영상 프레임, 비디오 레이어]\nbundle_pages:\n- path: pages/howtos/videoview-playback-and-klv.md\n  relation: family_howto\n- path: pages/howtos/video-helper-processing-recipes.md\n  relation: family_howto\n- path: pages/concepts/video-channel-klv-and-fusion.md\n  relation: family_concept\n- path: workflows/wf-api-imageview.md\n  relation: dependency_workflow\n- path: pages/sources/nxvideo.md\n  relation: source_summary\n```\n\n<!-- GENERATED:RUNTIME_STATUS:START -->\n## Runtime Ingest Status\n- Auto-generated from raw source ingest at `2026-04-20T02:38:44Z`.\n- Resolved required symbols: `13/13`\n- Linked modules:\n  - `NXVideo`\n- Missing required symbols: `0`\n<!-- GENERATED:RUNTIME_STATUS:END -->\n## Verified Facts\n```yaml\nworkflow_family: api_videoview\noutput_shape: workflow_bound_to_host_context\nrequired_symbols:\n  - XVideoIO.OpenFile\n  - NXVideoView.SetVideoChannel\n  - NXVideoView.ResetVideoChannel\n  - NXVideoView.RefreshScreen\n  - NXVideoView.RequestRender\n  - NXVideoView.AddRenderLayer\n  - NXVideoView.CaptureFrame\n  - NXMpegTSAnalysis.GetKLVMetaData\n  - NXImageLayerVideo.SetVideoChannel\n  - NXImageLayerVideo.ResetVideoChannel\n  - NXImageLayerVideo.SetInitialFrameSize\n  - NXImageLayerVideo.ScreenToWorld\n  - NXImageLayerVideo.WorldToScreen\nverification_rules:\n  - use_this_workflow_as_primary_path\n  - verify_method_vs_property_form\n  - verify_ref_out_and_enum_literals_when_signature_matters\n  - cross_check_runtime_methods_index_before_emitting_code\n```\n\n\n"
     }
   ]
 }

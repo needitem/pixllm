@@ -1,4 +1,4 @@
-﻿---
+---
 title: Raster and XDM API Workflow
 description: Load raster files, fetch bands, build XDM composites, and tune display enhancement parameters.
 aliases:
@@ -186,55 +186,6 @@ required_symbols:
   - XDMCompManager.RemoveXDMCompositeAll
   - XDMCompManager.MoveComposite
   - XDMCompManager.HitTest
-required_facts:
-  - symbol: XRasterIO.Initialize
-    declaration: 'bool Initialize([OutAttribute] String^% strError);'
-    source: 'Source/NXDLio/NXDLio.h:198'
-  - symbol: XRasterIO.LoadFile
-    declaration_candidates:
-      - declaration: 'NRS::XRSLoadFile^ LoadFile(String^ strFileKey, String^ strFileName, [OutAttribute] String^% strError, bool bCalcStatistics , eIOCreateXLDMode CreateXLD);'
-        source: 'Source/NXDLio/NXDLio.h:222'
-      - declaration: 'NRS::XRSLoadFile^ LoadFile(String^ strFileName, [OutAttribute] String^% strError, bool bCalcStatistics, eIOCreateXLDMode CreateXLD);'
-        source: 'Source/NXDLio/NXDLio.h:230'
-  - symbol: XRasterIO.GetSubDatasets
-    declaration: 'cli::array<String^>^ GetSubDatasets(String^ strFileName);'
-    source: 'Source/NXDLio/NXDLio.h:340'
-  - symbol: XRasterIO.LoadRawFile
-    declaration: 'NRS::XRSLoadFile^ LoadRawFile(String^ strFileName, XRawDataParam^ param, [OutAttribute] String^% strError, bool bCalcStatistics, eIOCreateXLDMode CreateXLD);'
-    source: 'Source/NXDLio/NXDLio.h:557'
-  - symbol: XRasterIO.GetFileInfo
-    declaration: 'String^ GetFileInfo(String^ strFileName, [OutAttribute] String^% strError);'
-    source: 'Source/NXDLio/NXDLio.h:568'
-  - symbol: XRSLoadFile.GetBandAt
-    declaration: 'XDMBand^ GetBandAt(int nIndex);'
-    source: 'Source/NXDLrs/XRSFile.h:986'
-  - symbol: XDMComposite.SetBand
-    declaration_candidates:
-      - declaration: 'void SetBand(XDMBand^% band, int Idx);'
-        source: 'Source/NXDLrs/NXDLrs.h:1423'
-      - declaration: 'void SetBand(XDMBand^% band, eCompBandIdx Idx);'
-        source: 'Source/NXDLrs/NXDLrs.h:1428'
-  - symbol: XDMComposite.SetCutType
-    declaration: 'void SetCutType(eCompCutType CutType, int Idx);'
-    source: 'Source/NXDLrs/NXDLrs.h:1445'
-  - symbol: XDMComposite.SetCutMin
-    declaration: 'void SetCutMin(double min, int Idx);'
-    source: 'Source/NXDLrs/NXDLrs.h:1455'
-  - symbol: XDMComposite.SetCutMax
-    declaration: 'void SetCutMax(double max, int Idx);'
-    source: 'Source/NXDLrs/NXDLrs.h:1465'
-  - symbol: XDMComposite.SetStretchCoverage
-    declaration: 'void SetStretchCoverage(eCompStretchCoverage StretchCoverage, int Idx);'
-    source: 'Source/NXDLrs/NXDLrs.h:1477'
-  - symbol: XDMComposite.SetStretchType
-    declaration: 'void SetStretchType(eCompStretchType StretchType, int Idx);'
-    source: 'Source/NXDLrs/NXDLrs.h:1487'
-  - symbol: XDMCompManager.AddXDMComposite
-    declaration: 'bool AddXDMComposite(XDMComposite^% Comp);'
-    source: 'Source/NXDLrs/NXDLrs.h:1867'
-  - symbol: XDMCompManager.RemoveXDMCompositeAll
-    declaration: 'void RemoveXDMCompositeAll();'
-    source: 'Source/NXDLrs/NXDLrs.h:1880'
 verification_rules:
   - use_this_workflow_as_primary_path
   - verify_method_vs_property_form

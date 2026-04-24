@@ -1,4 +1,4 @@
-﻿---
+---
 title: Sensor Model API Workflow
 description: Configure sensor parameters and project between image, world, and geographic coordinates.
 aliases:
@@ -93,28 +93,6 @@ required_symbols:
   - XSensorModel.WorldToImageG
   - XSensorModel.ImageToWorldG
   - XSensorModel.GetMapCoordOfImageCenter
-required_facts:
-  - symbol: XFrameSensor.SetParamsLocal
-    declaration: 'bool SetParamsLocal(XFrameSensorParams^ param);'
-    source: 'Source/NXDLsm/NXDLsm.h:273'
-  - symbol: XFrameSensor.SetParamsEarth
-    declaration: 'bool SetParamsEarth(XFrameSensorParams^ param);'
-    source: 'Source/NXDLsm/NXDLsm.h:268'
-  - symbol: XSensorModel.WorldToImageE
-    declaration: 'virtual bool WorldToImageE(NXDL::XVertex3d^ ptEuc, [OutAttribute] XVertex2d^% ptImg);'
-    source: 'Source/NXDLsm/NXDLsm.h:57'
-  - symbol: XSensorModel.ImageToWorldE
-    declaration: 'virtual bool ImageToWorldE(XVertex2d^ ptImg, double hEuc, [OutAttribute] NXDL::XVertex3d^% ptEuc);'
-    source: 'Source/NXDLsm/NXDLsm.h:64'
-  - symbol: XSensorModel.WorldToImageG
-    declaration: 'virtual bool WorldToImageG(NXDL::XVertex3d^ ptGeo,[OutAttribute] NXDL::XVertex2d^% ptImg);'
-    source: 'Source/NXDLsm/NXDLsm.h:70'
-  - symbol: XSensorModel.ImageToWorldG
-    declaration: 'virtual bool ImageToWorldG(NXDL::XVertex2d^ ptImg, const double hGeo, [OutAttribute] NXDL::XVertex3d^% ptGeo);'
-    source: 'Source/NXDLsm/NXDLsm.h:77'
-  - symbol: XSensorModel.GetMapCoordOfImageCenter
-    declaration: 'virtual NXDL::XVertex3d^ GetMapCoordOfImageCenter();'
-    source: 'Source/NXDLsm/NXDLsm.h:81'
 verification_rules:
   - use_this_workflow_as_primary_path
   - verify_method_vs_property_form

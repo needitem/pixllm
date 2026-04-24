@@ -98,7 +98,7 @@ def _normalize_page_path(value: str) -> str:
 
 
 def _read_frontmatter(raw_text: str) -> Tuple[Dict[str, Any], str]:
-    text = str(raw_text or "")
+    text = str(raw_text or "").lstrip("\ufeff")
     if not text.startswith("---\n"):
         return {}, text
     end = text.find("\n---\n", 4)
@@ -201,7 +201,7 @@ def _load_runtime_manifest_for_root(root: Path) -> Dict[str, Any]:
     if cached and cached[0] == mtime:
         return cached[1]
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(path.read_text(encoding="utf-8-sig"))
     except Exception:
         return {}
     normalized = payload if isinstance(payload, dict) else {}

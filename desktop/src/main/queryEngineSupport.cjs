@@ -38,8 +38,8 @@ function deriveLoopControlState({
     && referenceEvidence.hasVerifiedCodeEvidence
     && (
       referenceEvidence.hasMethodEvidence
-      || Number(referenceEvidence.apiFactCount || 0) > 0
-      || Number(referenceEvidence.workflowRequiredFactCount || 0) > 0
+      || Number(referenceEvidence.apiEvidenceCount || 0) > 0
+      || Number(referenceEvidence.workflowRequiredSymbolCount || 0) > 0
     ),
   );
   const finalAnswerPolicyLocked = Boolean(
@@ -216,8 +216,8 @@ function buildFinalAnswerPolicyRetrySignature(finalAnswerCheck = {}) {
     hasWorkflowEvidence: Boolean(referenceEvidence.hasWorkflowEvidence),
     hasMethodEvidence: Boolean(referenceEvidence.hasMethodEvidence),
     hasVerifiedCodeEvidence: Boolean(referenceEvidence.hasVerifiedCodeEvidence),
-    apiFactCount: Number(referenceEvidence.apiFactCount || 0),
-    workflowRequiredFactCount: Number(referenceEvidence.workflowRequiredFactCount || 0),
+    apiEvidenceCount: Number(referenceEvidence.apiEvidenceCount || 0),
+    workflowRequiredSymbolCount: Number(referenceEvidence.workflowRequiredSymbolCount || 0),
     searchCount: Number(referenceEvidence.searchCount || 0),
     candidatePaths: Array.isArray(details.candidatePaths)
       ? details.candidatePaths.map((item) => toStringValue(item)).filter(Boolean).slice(0, 8)

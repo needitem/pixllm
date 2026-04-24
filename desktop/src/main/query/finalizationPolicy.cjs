@@ -198,8 +198,8 @@ function evaluateFinalAnswerPolicy({
   const hasGroundedChangeEvidence =
     hasWorkspaceGrounding
     || referenceEvidence.hasVerifiedCodeEvidence;
-  const hasVerifiedWorkflowFacts = Number(referenceEvidence.apiFactCount || 0) > 0
-    || Number(referenceEvidence.workflowRequiredFactCount || 0) > 0;
+  const hasVerifiedWorkflowEvidence = Number(referenceEvidence.apiEvidenceCount || 0) > 0
+    || Number(referenceEvidence.workflowRequiredSymbolCount || 0) > 0;
   const matchedForbiddenAnswerPatterns = matchForbiddenAnswerPatterns(
     finalAnswer,
     referenceEvidence.workflowForbiddenAnswerPatterns,
@@ -255,7 +255,7 @@ function evaluateFinalAnswerPolicy({
     && !requestRequiresWorkspaceEdit(requestContext)
     && containsCodeExample
     && !acknowledgesMissingVerification
-    && !hasVerifiedWorkflowFacts
+    && !hasVerifiedWorkflowEvidence
   ) {
     return {
       ok: false,

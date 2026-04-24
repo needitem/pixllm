@@ -1,4 +1,4 @@
-﻿---
+---
 title: Vector API Workflow
 description: Load vector files, inspect vector metadata, create geometry objects, and overlay them onto views.
 aliases:
@@ -108,37 +108,6 @@ required_symbols:
   - XvcPolygon.Add
   - XvcLayer.HitTest
   - NXImageView.AddImageLayer
-required_facts:
-  - symbol: XVectorIO.Initialize
-    declaration: 'bool Initialize([OutAttribute] String^% strError);'
-    source: 'Source/NXDLio/NXDLio.h:802'
-  - symbol: XVectorIO.LoadFile
-    declaration: 'NVC::XvcBase^ LoadFile(String^ strFileName, [OutAttribute] String^% strError, NCC::XSpatialReference^% pInSR);'
-    source: 'Source/NXDLio/NXDLio.h:824'
-  - symbol: XVectorIO.GetFileInfo
-    declaration: 'bool GetFileInfo(String^ strFileName, double% minx, double% miny, double% minz, double% maxx, double% maxy, double% maxz, NCC::XSpatialReference^% sr);'
-    source: 'Source/NXDLio/NXDLio.h:865'
-  - symbol: XvcObj.GetPropertyNameAt
-    declaration: 'String^ GetPropertyNameAt(int idx);'
-    source: 'Source/NXDLvc/NXDLvc.h:233'
-  - symbol: XvcObj.GetPropertyValueAt
-    declaration: 'String^ GetPropertyValueAt(int idx);'
-    source: 'Source/NXDLvc/NXDLvc.h:234'
-  - symbol: XvcPoint.SetVertex
-    declaration: 'void SetVertex(double x, double y, double z);'
-    source: 'Source/NXDLvc/NXDLvc.h:349'
-  - symbol: XvcLine.SetVertices
-    declaration: 'void SetVertices(double x1, double y1, double z1, double x2, double y2, double z2);'
-    source: 'Source/NXDLvc/NXDLvc.h:411'
-  - symbol: XvcPolyline.Add
-    declaration: 'void Add(double x, double y, double z);'
-    source: 'Source/NXDLvc/NXDLvc.h:572'
-  - symbol: XvcPolygon.Add
-    declaration: 'void Add(double x, double y, double z);'
-    source: 'Source/NXDLvc/NXDLvc.h:945'
-  - symbol: XvcLayer.HitTest
-    declaration: 'bool HitTest(double x, double y, double tol, [OutAttribute] ArrayList^% results);'
-    source: 'Source/NXDLvc/NXDLvc.h:1341'
 verification_rules:
   - use_this_workflow_as_primary_path
   - verify_method_vs_property_form
