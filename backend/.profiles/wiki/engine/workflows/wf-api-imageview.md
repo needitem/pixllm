@@ -101,7 +101,7 @@ bundle_pages:
 
 <!-- GENERATED:RUNTIME_STATUS:START -->
 ## Runtime Ingest Status
-- Auto-generated from raw source ingest at `2026-04-20T02:38:44Z`.
+- Auto-generated from raw source ingest at `2026-04-24T01:05:26Z`.
 - Resolved required symbols: `20/20`
 - Linked modules:
   - `NXImage`

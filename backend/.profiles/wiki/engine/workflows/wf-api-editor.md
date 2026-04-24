@@ -25,6 +25,12 @@ aliases:
   - 편집 화면에서 component 사용하는 방법
   - 편집 화면에서 픽셀 to 실제 좌표 length 사용하는 방법
   - 편집 화면에서 영상 캡처하는 방법
+  - z-order move forward
+  - object order bring to front
+  - bring object to front
+  - move selected object forward
+  - 객체 순서를 앞으로 보내는 방법
+  - 객체를 앞으로 보내는 방법
 symbols:
   - NEditor
 tags:
@@ -72,6 +78,12 @@ concept_terms:
 routing_hints:
 - all_of: [편집 화면, 영상 캡처]
 - all_of: [편집 화면, to front]
+- all_of: [z-order]
+  any_of: [front, forward, bring]
+- all_of: [object, order]
+  any_of: [front, forward, bring]
+- all_of: [객체, 순서]
+  any_of: [앞으로, 맨앞]
 - all_of: [편집 화면, component]
 - all_of: [편집 화면, canvas]
 - all_of: [편집 화면]
@@ -89,7 +101,7 @@ bundle_pages:
 
 <!-- GENERATED:RUNTIME_STATUS:START -->
 ## Runtime Ingest Status
-- Auto-generated from raw source ingest at `2026-04-20T02:38:44Z`.
+- Auto-generated from raw source ingest at `2026-04-24T01:05:26Z`.
 - Resolved required symbols: `0/0`
 - Missing required symbols: `0`
 <!-- GENERATED:RUNTIME_STATUS:END -->

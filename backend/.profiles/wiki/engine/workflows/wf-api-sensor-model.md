@@ -15,6 +15,8 @@ aliases:
   - 영상 중심점의 지도 좌표를 얻기
   - world to image projection
   - image to world projection
+  - ground to image projection
+  - geo to image projection
   - sensor model 기반 위치 투영을 구현하는 방법
   - image center map coordinate
   - 영상 중심점의 지도 좌표를 얻는 방법
@@ -58,10 +60,16 @@ tags:
 concept_terms:
 - projection
 - image to ground
+- ground to image
+- geo to image
 - sensor geometry
 routing_hints:
 - all_of: [영상 중심점, 지도 좌표]
 - all_of: [image center, map coordinate]
+- all_of: [ground, image]
+  any_of: [projection, project, pixel]
+- all_of: [지상 좌표, 영상 좌표]
+- all_of: [지리 좌표, 영상 좌표]
 bundle_pages:
 - path: pages/howtos/sensor-model-image-ground-projection.md
   relation: family_howto
@@ -75,7 +83,7 @@ bundle_pages:
 
 <!-- GENERATED:RUNTIME_STATUS:START -->
 ## Runtime Ingest Status
-- Auto-generated from raw source ingest at `2026-04-20T02:38:44Z`.
+- Auto-generated from raw source ingest at `2026-04-24T01:05:26Z`.
 - Resolved required symbols: `7/7`
 - Linked modules:
   - `NXDLsm`
