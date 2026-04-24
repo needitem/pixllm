@@ -907,6 +907,12 @@ function buildSystemPrompt({
       ? '- SHOULD: Treat workflow/howto/concept pages as procedural guidance. Treat declarations and source snippets as the hard authority only for code signatures and source-backed behavior.'
       : '',
     prefersWorkflowFirst
+      ? '- SHOULD: For .NET DLL/API usage, answer code examples in C# by default unless the user explicitly asks for C++/CLI or another language. Keep C++/CLI declarations as evidence, but translate example calls to C# syntax.'
+      : '',
+    prefersWorkflowFirst
+      ? '- SHOULD: When a declaration uses C++/CLI by-ref syntax such as Type^%, use the corresponding C# ref argument in examples while still showing the original declaration when relevant.'
+      : '',
+    prefersWorkflowFirst
       ? '- If a workflow describes a non-obvious enum or integer mapping, prefer named enum members in code examples. If you must use integers, state the verified mapping explicitly instead of implying a conventional order.'
       : '',
     prefersWorkflowFirst

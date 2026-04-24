@@ -451,6 +451,8 @@ def _build_answer_grounding(method_declarations: Sequence[Dict[str, Any]]) -> Di
         ],
         "should": [
             "Use workflow/howto/concept pages for the ordered procedure and API family choice.",
+            "For .NET DLL usage, keep C++/CLI declarations as evidence but write usage examples in C# unless the user explicitly asks for another language.",
+            "Translate C++/CLI by-ref parameters such as Type^% to C# ref arguments in examples while preserving the original declaration.",
             "If workflow prose conflicts with declarations or source snippets, follow the code evidence.",
         ],
         "may": [
@@ -545,6 +547,7 @@ def build_workflow_evidence_pack(
             "Use bundled pages for procedural context.",
             "Must verify API signatures, ref/out/% parameters, overloads, enum literals, and property-vs-method form from declarations.",
             "Should use source snippets for concrete side effects and implementation behavior.",
+            "For .NET DLL usage, keep declarations as source evidence but answer with C# examples by default; translate C++/CLI by-ref syntax such as Type^% to C# ref usage.",
             "May use normal SDK reasoning for high-level procedure and sample structure when it does not change verified signatures or source-backed behavior.",
             "If a required signature or risky behavior is absent from this pack, state only that specific detail as unverified.",
         ],
