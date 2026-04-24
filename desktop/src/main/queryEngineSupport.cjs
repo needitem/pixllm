@@ -5,6 +5,141 @@ const { summarizeWikiEvidence } = require('./query/referenceEvidence.cjs');
 const DEFAULT_MODEL_CONTEXT_WINDOW = 16384;
 const MODEL_PREVIEW_LIMIT = 180;
 
+function uniqueStrings(items = [], limit = 160) {
+  const seen = new Set();
+  const output = [];
+  for (const item of Array.isArray(items) ? items : []) {
+    const normalized = toStringValue(item);
+    if (!normalized) continue;
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    output.push(normalized);
+    if (output.length >= limit) break;
+  }
+  return output;
+}
+
+function evidenceHaystack(referenceEvidence = {}) {
+  return [
+    ...(Array.isArray(referenceEvidence.evidenceSymbols) ? referenceEvidence.evidenceSymbols : []),
+    ...(Array.isArray(referenceEvidence.evidenceDeclarations) ? referenceEvidence.evidenceDeclarations : []),
+    ...(Array.isArray(referenceEvidence.evidencePaths) ? referenceEvidence.evidencePaths : []),
+  ].map((item) => toStringValue(item).toLowerCase()).filter(Boolean).join('\n');
+}
+
+function evidenceItems(referenceEvidence = {}) {
+  const symbols = Array.isArray(referenceEvidence.evidenceSymbols) ? referenceEvidence.evidenceSymbols : [];
+  const declarations = Array.isArray(referenceEvidence.evidenceDeclarations) ? referenceEvidence.evidenceDeclarations : [];
+  const paths = Array.isArray(referenceEvidence.evidencePaths) ? referenceEvidence.evidencePaths : [];
+  const facts = Array.isArray(referenceEvidence.evidenceFacts) ? referenceEvidence.evidenceFacts : [];
+  return uniqueStrings([
+    ...facts,
+    ...symbols,
+    ...declarations,
+    ...paths,
+  ], 160);
+}
+
+function matchesAny(text = '', patterns = []) {
+  return (Array.isArray(patterns) ? patterns : []).some((pattern) => pattern.test(text));
+}
+
+function buildWikiCoverageSlots(requestContext = {}) {
+  const prompt = toStringValue(requestContext?.prompt).toLowerCase();
+  const hints = (Array.isArray(requestContext?.symbolHints) ? requestContext.symbolHints : [])
+    .map((item) => toStringValue(item).toLowerCase())
+    .filter(Boolean)
+    .join(' ');
+  const source = `${prompt} ${hints}`.trim();
+  const mentionsImageView = /\b(?:nx)?imageview\b/.test(source);
+  const mentionsXdm = /\bxdm\b/.test(source);
+  const wantsLoad = /\b(?:load|open|read|file)\b/.test(source)
+    || /(?:\uB85C\uB4DC|\uBD88\uB7EC|\uC77D|\uD30C\uC77C)/.test(source);
+  const wantsDisplay = /\b(?:display|show|view|draw|render|visuali[sz]e)\b/.test(source)
+    || /(?:\uB3C4\uC2DC|\uD45C\uC2DC|\uD654\uBA74|\uBCF4\uC5EC)/.test(source);
+  const wantsFit = /\b(?:zoomfit|fit|full|screen)\b/.test(source)
+    || /(?:\uB9DE|\uC804\uCCB4)/.test(source);
+  const slots = [];
+
+  if (mentionsImageView || wantsDisplay) {
+    slots.push({
+      name: 'view_layer_display',
+      patterns: [
+        /\bnximageview\b/,
+        /\baddimagelayer\b/,
+        /\bnximagelayer(?:composites)?\b/,
+      ],
+    });
+  }
+  if (mentionsXdm && wantsLoad) {
+    slots.push({
+      name: 'xdm_file_load',
+      patterns: [
+        /\bxrasterio\.loadrawfile\b/,
+        /\bxrsloadfile\.getbandat\b/,
+        /\bloadrawfile\b/,
+        /\bgetbandat\b/,
+      ],
+    });
+  }
+  if (mentionsXdm && (wantsLoad || wantsDisplay)) {
+    slots.push({
+      name: 'xdm_composite_binding',
+      patterns: [
+        /\bgetxdmcompmanager\b/,
+        /\bxdmcompmanager\.addxdmcomposite\b/,
+        /\bxdmcomposite\.setband\b/,
+        /\baddxdmcomposite\b/,
+        /\bsetband\b/,
+      ],
+    });
+  }
+  if (wantsFit) {
+    slots.push({
+      name: 'zoom_fit',
+      patterns: [
+        /\bzoomfit\b/,
+      ],
+    });
+  }
+  return slots;
+}
+
+function evaluateWikiEvidenceCoverage(requestContext = {}, referenceEvidence = {}) {
+  const slots = buildWikiCoverageSlots(requestContext);
+  const haystack = evidenceHaystack(referenceEvidence);
+  const coveredSlots = [];
+  const missingSlots = [];
+  const slotEvidence = {};
+  const items = evidenceItems(referenceEvidence);
+  for (const slot of slots) {
+    const matchedItems = items
+      .filter((item) => matchesAny(toStringValue(item).toLowerCase(), slot.patterns))
+      .slice(0, 4);
+    if (matchedItems.length > 0 || matchesAny(haystack, slot.patterns)) {
+      coveredSlots.push(slot.name);
+      slotEvidence[slot.name] = matchedItems;
+    } else {
+      missingSlots.push(slot.name);
+    }
+  }
+  const ready = slots.length > 0
+    ? missingSlots.length === 0
+    : Boolean(
+        referenceEvidence.hasVerifiedCodeEvidence
+        || Number(referenceEvidence.apiEvidenceCount || 0) > 0
+        || Number(referenceEvidence.methodSourceCount || 0) > 0,
+      );
+  return {
+    ready,
+    expectedSlots: slots.map((slot) => slot.name),
+    coveredSlots,
+    missingSlots,
+    slotEvidence,
+  };
+}
+
 function deriveLoopControlState({
   availableToolNames = [],
   requestContext = {},
@@ -21,27 +156,57 @@ function deriveLoopControlState({
     ? requestContext.intent
     : {};
   const requiresWorkspaceArtifact = Boolean(requestIntent.wantsChanges);
-  const workflowAnswerLocked = Boolean(
-    turn >= 4
+  const requestMode = toStringValue(requestContext?.mode || '');
+  const isWikiMode = requestMode === 'wiki';
+  const hasUsableWikiEvidence = Boolean(
+    referenceEvidence.hasVerifiedCodeEvidence
+    || referenceEvidence.hasWorkflowEvidence
+    || Number(referenceEvidence.apiEvidenceCount || 0) > 0
+    || Number(referenceEvidence.methodSourceCount || 0) > 0
+    || Number(referenceEvidence.docResultCount || 0) >= 3,
+  );
+  const wikiEvidenceCoverage = evaluateWikiEvidenceCoverage(requestContext, referenceEvidence);
+  const wikiEvidenceReady = Boolean(
+    isWikiMode
+    && hasUsableWikiEvidence
+    && wikiEvidenceCoverage.ready,
+  );
+  const wikiSearchBudgetReached = Boolean(
+    isWikiMode
     && !requiresWorkspaceArtifact
-    && requestContext?.workflowPlan?.preferWikiFirst
+    && (
+      Number(referenceEvidence.searchCount || 0) >= 8
+      || (turn >= 7 && Number(referenceEvidence.docResultCount || 0) > 0)
+    ),
+  );
+  const workflowEvidenceComplete = Boolean(
+    requestContext?.workflowPlan?.preferWikiFirst
     && referenceEvidence.hasWorkflowEvidence
     && referenceEvidence.hasVerifiedCodeEvidence
     && (
       referenceEvidence.hasMethodEvidence
       || Number(referenceEvidence.apiEvidenceCount || 0) > 0
       || Number(referenceEvidence.workflowRequiredSymbolCount || 0) > 0
+    )
+  );
+  const workflowAnswerLocked = Boolean(
+    !requiresWorkspaceArtifact
+    && (
+      (turn >= 2 && wikiEvidenceReady)
+      || (turn >= 4 && workflowEvidenceComplete && wikiEvidenceCoverage.expectedSlots.length === 0)
+      || wikiSearchBudgetReached
     ),
   );
 
   return {
     phase: workflowAnswerLocked
-        ? 'workflow_answer'
+        ? 'answer_from_collected_evidence'
         : '',
     activeToolNames: workflowAnswerLocked
       ? []
       : scopedAvailable,
     workflowAnswerLocked,
+    wikiEvidenceCoverage,
   };
 }
 
@@ -178,7 +343,10 @@ function toolUseCacheKey(toolUse = {}) {
   return `${toStringValue(toolUse?.name)}:${stableSerialize(toolUse?.input || {})}`;
 }
 
-async function describeTools(toolCollection, allowedToolNames = []) {
+async function describeTools(toolCollection, allowedToolNames = null) {
+  if (Array.isArray(allowedToolNames) && allowedToolNames.length === 0) {
+    return [];
+  }
   const allowed = new Set((Array.isArray(allowedToolNames) ? allowedToolNames : []).map((item) => toStringValue(item)));
   const items = [];
   for (const tool of Array.isArray(toolCollection?.tools) ? toolCollection.tools : []) {

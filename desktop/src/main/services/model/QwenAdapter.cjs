@@ -308,10 +308,13 @@ function buildActiveToolNameSet(recoveryContext = {}) {
 }
 
 function choosePreferredToolName(activeToolNames, candidates = []) {
+  if (!(activeToolNames instanceof Set) || activeToolNames.size === 0) {
+    return '';
+  }
   for (const candidate of Array.isArray(candidates) ? candidates : []) {
     const normalized = toStringValue(candidate);
     if (!normalized) continue;
-    if (activeToolNames.size === 0 || activeToolNames.has(normalized)) {
+    if (activeToolNames.has(normalized)) {
       return normalized;
     }
   }
@@ -865,21 +868,34 @@ function buildSystemPrompt({
     isWikiMode
       ? 'Current lane: backend wiki guidance only.'
       : 'Current lane: local code review and explanation only.',
-    'Decide whether to answer directly or call tools.',
+    toolCatalog
+      ? 'Decide whether to answer directly or call tools.'
+      : 'Answer directly from the evidence already in the transcript. Tools are disabled for this turn.',
     'The user may write in Korean. Answer in the user language when possible and translate Korean technical phrases into likely English code terms yourself when searching.',
     '# Enabled tools',
     toolCatalog || '- no_tools() :: No tools are enabled for this turn.',
     '',
-    'Tool call format:',
-    '<tool_call>',
-    '{"name":"grep","arguments":{"query":"image registration","limit":10}}',
-    '</tool_call>',
-    '',
+    toolCatalog ? 'Tool call format:' : '',
+    toolCatalog ? '<tool_call>' : '',
+    toolCatalog ? '{"name":"grep","arguments":{"query":"image registration","limit":10}}' : '',
+    toolCatalog ? '</tool_call>' : '',
+    toolCatalog ? '' : '',
     'Rules:',
-    '- Use only enabled tool names and put JSON arguments under "arguments".',
-    '- Do not wrap tool calls in markdown fences. You may emit multiple independent <tool_call> blocks.',
-    '- After the last </tool_call>, write nothing else. Tool results will arrive inside <tool_response> blocks.',
-    '- Prefer dedicated tools over shell commands. Use discovery tools for search, read tools for inspection, and write/edit tools for file changes.',
+    toolCatalog
+      ? '- Use only enabled tool names and put JSON arguments under "arguments".'
+      : '- Do not search for alternate APIs or emit tool calls. If an exact alternate API name is absent, answer from the declarations already collected and state the limitation briefly.',
+    toolCatalog
+      ? ''
+      : '- No tools are enabled this turn. Do not emit <tool_call> blocks; answer directly from the evidence already in the transcript.',
+    toolCatalog
+      ? '- Do not wrap tool calls in markdown fences. You may emit multiple independent <tool_call> blocks.'
+      : '',
+    toolCatalog
+      ? '- After the last </tool_call>, write nothing else. Tool results will arrive inside <tool_response> blocks.'
+      : '',
+    toolCatalog
+      ? '- Prefer dedicated tools over shell commands. Use discovery tools for search, read tools for inspection, and write/edit tools for file changes.'
+      : '',
     requestMode === 'local'
       ? '- Local-code requests use the workspace for review, explanation, and limited comment-oriented edits on existing files. Do not create new files.'
       : '- Wiki requests use backend wiki/reference evidence to explain usage. Do not edit local workspace files in wiki mode.',
@@ -896,6 +912,9 @@ function buildSystemPrompt({
       : '',
     prefersWorkflowFirst
       ? '- MUST: Preserve API signatures, ref/out/% parameters, overloads, method-vs-property form, and enum names exactly as shown in declarations or method facts.'
+      : '',
+    prefersWorkflowFirst
+      ? '- MUST NOT: Invent constructors, Load/Open methods, enum values, or parameter forms that are absent from collected declarations. If a convenient API name is missing, use the actual matched declaration evidence and mention the limitation briefly.'
       : '',
     prefersWorkflowFirst
       ? '- MUST: Use source snippets as the highest-priority evidence for concrete implementation side effects, ownership/lifetime behavior, default layer choice, active/front behavior, and object relationships.'

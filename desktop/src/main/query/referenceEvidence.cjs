@@ -194,6 +194,50 @@ function collectEvidencePackPages(pack = {}) {
   return pages;
 }
 
+function collectEvidencePackFacts(pack = {}) {
+  const facts = [];
+  if (!pack || typeof pack !== 'object' || Array.isArray(pack)) {
+    return facts;
+  }
+  const append = (item = {}) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      return;
+    }
+    const symbol = toStringValue(item.symbol || item.title || item.name || item.path);
+    const declaration = toStringValue(item.declaration) || (Array.isArray(item.declarations)
+      ? item.declarations.map((value) => toStringValue(value)).filter(Boolean).join(' | ')
+      : '');
+    const pathValue = normalizePath(item.path);
+    if (!symbol && !declaration && !pathValue) {
+      return;
+    }
+    facts.push({
+      symbol,
+      declaration,
+      path: pathValue,
+    });
+  };
+
+  const grounding = pack.answer_grounding && typeof pack.answer_grounding === 'object' && !Array.isArray(pack.answer_grounding)
+    ? pack.answer_grounding
+    : {};
+  for (const item of Array.isArray(grounding.facts) ? grounding.facts : []) {
+    append(item);
+  }
+  for (const item of Array.isArray(pack.method_declarations) ? pack.method_declarations : []) {
+    append(item);
+  }
+  if (pack.workflow && typeof pack.workflow === 'object' && !Array.isArray(pack.workflow)) {
+    for (const symbol of Array.isArray(pack.workflow.required_symbols) ? pack.workflow.required_symbols : []) {
+      append({
+        symbol,
+        path: pack.workflow.path,
+      });
+    }
+  }
+  return facts;
+}
+
 function hasVerifiedSourceMarkers(content = '') {
   const source = String(content || '');
   if (!source) return false;
@@ -217,6 +261,28 @@ function summarizeWikiEvidence(trace = []) {
   const workflowForbiddenAnswerPatterns = [];
   const workflowMissingSlots = [];
   const evidenceTypes = new Set();
+  const evidenceSymbols = [];
+  const evidenceDeclarations = [];
+  const evidencePaths = [];
+  const evidenceFacts = [];
+
+  const addEvidenceString = (target, value, limit = 160) => {
+    const normalized = toStringValue(value);
+    if (!normalized) return;
+    const key = normalized.toLowerCase();
+    if (target.some((item) => item.toLowerCase() === key)) return;
+    if (target.length >= limit) return;
+    target.push(normalized);
+  };
+
+  const ingestEvidencePackFacts = (pack = {}) => {
+    for (const fact of collectEvidencePackFacts(pack)) {
+      addEvidenceString(evidenceSymbols, fact.symbol);
+      addEvidenceString(evidenceDeclarations, fact.declaration);
+      addEvidenceString(evidencePaths, fact.path);
+      addEvidenceString(evidenceFacts, [fact.symbol, fact.declaration].filter(Boolean).join(' :: '));
+    }
+  };
 
   for (const step of Array.isArray(trace) ? trace : []) {
     if (step?.observation?.ok === false) {
@@ -231,6 +297,7 @@ function summarizeWikiEvidence(trace = []) {
       searchCount += 1;
       const results = Array.isArray(observation.results) ? observation.results : [];
       docResultCount += results.length;
+      ingestEvidencePackFacts(observation.evidence_pack);
       const pages = collectEvidencePackPages(observation.evidence_pack);
       docResultCount += pages.length;
       for (const page of pages) {
@@ -242,6 +309,10 @@ function summarizeWikiEvidence(trace = []) {
           ...(Array.isArray(page.requiredSymbols) ? page.requiredSymbols : []),
         ]);
         const verifiedBySource = hasVerifiedSourceMarkers(content);
+        addEvidenceString(evidencePaths, pathValue);
+        for (const symbol of requiredSymbols) {
+          addEvidenceString(evidenceSymbols, symbol);
+        }
 
         if (isWorkflowPath(pathValue) || toStringValue(page.kind) === 'workflow') {
           workflowSourceCount += 1;
@@ -286,6 +357,10 @@ function summarizeWikiEvidence(trace = []) {
         ...(Array.isArray(page.requiredSymbols) ? page.requiredSymbols : []),
       ]);
       const verifiedBySource = hasVerifiedSourceMarkers(content);
+      addEvidenceString(evidencePaths, pathValue);
+      for (const symbol of requiredSymbols) {
+        addEvidenceString(evidenceSymbols, symbol);
+      }
 
       if (isWorkflowPath(pathValue)) {
         workflowSourceCount += 1;
@@ -331,10 +406,12 @@ function summarizeWikiEvidence(trace = []) {
       }
     }
 
+    ingestEvidencePackFacts(observation.evidence_pack);
     for (const page of collectEvidencePackPages(observation.evidence_pack)) {
       const pathValue = normalizePath(page.path);
       const content = String(page.content || '');
       const verifiedBySource = hasVerifiedSourceMarkers(content);
+      addEvidenceString(evidencePaths, pathValue);
       if (isMethodPath(pathValue) || toStringValue(page.kind) === 'method') {
         methodSourceCount += 1;
         if (verifiedBySource) {
@@ -368,6 +445,10 @@ function summarizeWikiEvidence(trace = []) {
     workflowBundleSeen,
     workflowSlotsComplete,
     workflowMissingSlots,
+    evidenceSymbols,
+    evidenceDeclarations,
+    evidencePaths,
+    evidenceFacts,
   };
 }
 

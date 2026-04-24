@@ -15,6 +15,7 @@ function stableSerialize(value) {
 class StreamingToolExecutor {
   constructor({
     turn = 0,
+    activeToolNames = null,
     signal = null,
     runtime = null,
     onToolUse = async () => {},
@@ -24,6 +25,12 @@ class StreamingToolExecutor {
     toolUseKey = null,
   } = {}) {
     this.turn = Number(turn || 0);
+    this.activeToolNames = Array.isArray(activeToolNames)
+      ? activeToolNames.map((item) => toStringValue(item)).filter(Boolean)
+      : null;
+    this.activeToolNameSet = Array.isArray(this.activeToolNames)
+      ? new Set(this.activeToolNames)
+      : null;
     this.signal = signal;
     this.runtime = runtime;
     this.onToolUse = typeof onToolUse === 'function' ? onToolUse : async () => {};
@@ -52,7 +59,17 @@ class StreamingToolExecutor {
     return this.runtime?.tools?.describe ? this.runtime.tools.describe(toolUse?.name) : null;
   }
 
+  _isToolAllowed(toolUse = {}) {
+    if (!this.activeToolNameSet) {
+      return true;
+    }
+    return this.activeToolNameSet.has(toStringValue(toolUse?.name));
+  }
+
   _canStartStreaming(toolUse = {}) {
+    if (!this._isToolAllowed(toolUse)) {
+      return false;
+    }
     const descriptor = this._descriptor(toolUse);
     if (!descriptor || typeof descriptor.isConcurrencySafe !== 'function') {
       return false;
@@ -101,6 +118,7 @@ class StreamingToolExecutor {
       turn: this.turn,
       assistantText: toStringValue(this.getAssistantText()),
       toolUse: entry.toolUse,
+      activeToolNames: Array.isArray(this.activeToolNames) ? this.activeToolNames : [],
       signal: this.signal,
       onToolUse: this.onToolUse,
       onToolResult: this.onToolResult,
@@ -123,6 +141,9 @@ class StreamingToolExecutor {
       const name = toStringValue(rawToolCall?.name);
       const argumentsText = toStringValue(rawToolCall?.arguments);
       if (!name) {
+        continue;
+      }
+      if (!this._isToolAllowed({ name })) {
         continue;
       }
 

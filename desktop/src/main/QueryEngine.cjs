@@ -50,6 +50,7 @@ const MAX_CONSECUTIVE_PARSE_ERRORS = 2;
 const MAX_MODEL_RETRIES = 2;
 const MAX_OUTPUT_TOKENS_RECOVERY_LIMIT = 3;
 const ESCALATED_MAX_TOKENS = 6400;
+const LOCKED_ANSWER_MAX_TOKENS = 4096;
 const DEFAULT_MODEL_OUTPUT_TOKENS = 1600;
 const MIN_DYNAMIC_OUTPUT_TOKENS = 64;
 const REQUEST_TOKEN_SAFETY_MARGIN = 64;
@@ -417,7 +418,10 @@ class QueryEngine {
     return controlState;
   }
 
-  async _describeTools(allowedToolNames = []) {
+  async _describeTools(allowedToolNames = null) {
+    if (Array.isArray(allowedToolNames) && allowedToolNames.length === 0) {
+      return [];
+    }
     const key = (Array.isArray(allowedToolNames) ? allowedToolNames : [])
       .map((item) => toStringValue(item))
       .filter(Boolean)
@@ -434,6 +438,7 @@ class QueryEngine {
     onModelToken = async () => {},
     onToolCalls = async () => {},
     turn = 0,
+    extraBody = null,
   } = {}) {
     let lastError = null;
     for (let attempt = 0; attempt <= MAX_MODEL_RETRIES; attempt += 1) {
@@ -458,6 +463,7 @@ class QueryEngine {
           messages,
           maxTokens,
           temperature: 0.2,
+          extraBody,
           signal,
           onToken: async (delta, aggregate) => {
             this.state.totalUsage.streamed_chars += String(delta || '').length;
@@ -561,6 +567,7 @@ class QueryEngine {
 
   _createStreamingToolPrefetch({
     turn = 0,
+    activeToolNames = null,
     signal = null,
     onToolUse = async () => {},
     onToolResult = async () => {},
@@ -568,6 +575,7 @@ class QueryEngine {
   } = {}) {
     return new StreamingToolExecutor({
       turn,
+      activeToolNames,
       signal,
       runtime: this.runtime,
       onToolUse,
@@ -576,6 +584,18 @@ class QueryEngine {
       parseToolInput: safeJsonParseObject,
       toolUseKey: toolUseCacheKey,
     });
+  }
+
+  _modelExtraBodyForTurn(controlState = null) {
+    if (!controlState?.workflowAnswerLocked || !/qwen/i.test(toStringValue(this.model))) {
+      return null;
+    }
+    return {
+      chat_template_kwargs: {
+        enable_thinking: false,
+      },
+      top_k: 20,
+    };
   }
 
   async _recoverStreamingToolPrefetch({
@@ -814,8 +834,27 @@ class QueryEngine {
     if (toStringValue(resolvedControlState.phase)) {
       lines.push(`Current loop phase: ${toStringValue(resolvedControlState.phase)}`);
     }
+    const coverage = resolvedControlState.wikiEvidenceCoverage && typeof resolvedControlState.wikiEvidenceCoverage === 'object'
+      ? resolvedControlState.wikiEvidenceCoverage
+      : null;
+    if (coverage && Array.isArray(coverage.expectedSlots) && coverage.expectedSlots.length > 0) {
+      lines.push(`Wiki evidence coverage: ${coverage.ready ? 'ready' : 'missing'}; covered=${(coverage.coveredSlots || []).join(', ') || 'none'}; missing=${(coverage.missingSlots || []).join(', ') || 'none'}`);
+      const slotEvidence = coverage.slotEvidence && typeof coverage.slotEvidence === 'object'
+        ? coverage.slotEvidence
+        : {};
+      for (const slotName of Array.isArray(coverage.coveredSlots) ? coverage.coveredSlots.slice(0, 4) : []) {
+        const facts = Array.isArray(slotEvidence[slotName]) ? slotEvidence[slotName] : [];
+        if (facts.length === 0) continue;
+        lines.push(`Evidence for ${slotName}: ${facts.slice(0, 3).map((item) => toStringValue(item).slice(0, 220)).join(' | ')}`);
+      }
+      if (coverage.ready) {
+        lines.push('Wiki coverage is complete. Write the final answer from these declarations instead of searching for alternate API names.');
+      }
+    }
     if (activeToolNames.length > 0) {
       lines.push(`Enabled tools this turn: ${activeToolNames.slice(0, 16).join(', ')}`);
+    } else {
+      lines.push('Enabled tools this turn: none. Answer directly from the evidence already in the transcript.');
     }
     if (toStringValue(this.state.pendingToolUseSummary)) {
       lines.push(`Pending tool-use summary: ${toStringValue(this.state.pendingToolUseSummary)}`);
@@ -833,6 +872,29 @@ class QueryEngine {
     return lines.join('\n').trim();
   }
 
+  _messagesForModel(controlState = null) {
+    if (!controlState?.workflowAnswerLocked) {
+      return this.state.messages;
+    }
+    return (Array.isArray(this.state.messages) ? this.state.messages : [])
+      .map((message) => {
+        const role = toStringValue(message?.role).toLowerCase() === 'user' ? 'user' : 'assistant';
+        if (role === 'user') {
+          return message;
+        }
+        const textBlocks = (Array.isArray(message?.content) ? message.content : [])
+          .filter((block) => block?.type === 'text' && toStringValue(block?.text));
+        if (textBlocks.length === 0) {
+          return null;
+        }
+        return {
+          role,
+          content: textBlocks,
+        };
+      })
+      .filter(Boolean);
+  }
+
   _modelMessages(systemPrompt, controlState = null) {
     const runtimeContext = this._runtimeContextMessage(controlState);
     const mergedSystemPrompt = [
@@ -840,7 +902,7 @@ class QueryEngine {
       toStringValue(this.projectContextPrompt),
       toStringValue(runtimeContext),
     ].filter(Boolean).join('\n\n');
-    const flattenedMessages = flattenMessagesForModel(this.state.messages);
+    const flattenedMessages = flattenMessagesForModel(this._messagesForModel(controlState));
     if (!hasSubstantiveUserQueryMessage(flattenedMessages)) {
       const fallbackPrompt = toStringValue(this.runtime?.requestContext?.prompt);
       if (fallbackPrompt) {
@@ -1014,6 +1076,14 @@ class QueryEngine {
 
         const controlState = this._loopControlState(turn);
         const activeToolNames = controlState.activeToolNames;
+        if (controlState.workflowAnswerLocked && !Number(this.state.maxOutputTokensOverride || 0)) {
+          this.state.maxOutputTokensOverride = LOCKED_ANSWER_MAX_TOKENS;
+          this._recordTranscript({
+            kind: 'locked_answer_token_budget',
+            turn,
+            maxTokens: LOCKED_ANSWER_MAX_TOKENS,
+          });
+        }
         const toolDefinitions = await this._describeTools(activeToolNames);
         const systemPrompt = buildSystemPrompt({
           workspacePath: this.workspacePath,
@@ -1031,6 +1101,7 @@ class QueryEngine {
         let streamedAssistantText = '';
         const streamingPrefetch = this._createStreamingToolPrefetch({
           turn,
+          activeToolNames,
           signal,
           onToolUse,
           onToolResult,
@@ -1041,6 +1112,7 @@ class QueryEngine {
           completion = await this._callModel(modelMessages, {
             signal,
             turn,
+            extraBody: this._modelExtraBodyForTurn(controlState),
             onToolCalls: async (toolCalls) => {
               streamingPrefetch.sync(toolCalls);
             },
@@ -1141,10 +1213,42 @@ class QueryEngine {
         }
 
         parseErrors = 0;
-        const assistantBlocks = parsed.blocks;
+        const activeToolNameSet = new Set(
+          (Array.isArray(activeToolNames) ? activeToolNames : [])
+            .map((item) => toStringValue(item))
+            .filter(Boolean),
+        );
+        const assistantBlocks = parsed.blocks
+          .filter((block) => {
+            if (block?.type !== 'tool_use') {
+              return true;
+            }
+            return activeToolNameSet.has(toStringValue(block?.name));
+          });
+        const rejectedToolUseCount = parsed.blocks.length - assistantBlocks.length;
         const assistantText = extractTextFromBlocks(assistantBlocks);
         const toolUses = toolUseBlocks(assistantBlocks);
         const needsFollowUp = toolUses.length > 0;
+        if (rejectedToolUseCount > 0) {
+          this._recordTranscript({
+            kind: 'tool_use_rejected',
+            turn,
+            rejected: rejectedToolUseCount,
+            activeToolNames: Array.from(activeToolNameSet),
+          });
+          this._recordTransition('tool_use_rejected', {
+            turn,
+            rejected: rejectedToolUseCount,
+          });
+        }
+        if (assistantBlocks.length === 0 && rejectedToolUseCount > 0) {
+          this._pushMetaUserMessage(
+            'No tools are enabled this turn. Answer directly from the collected evidence in the transcript without calling tools.',
+            { turn, rejectedToolUseCount },
+          );
+          this._persistState();
+          continue;
+        }
         this.state.messages.push({ role: 'assistant', content: assistantBlocks });
         this._recordTransition('assistant_message', { turn, toolUses: toolUses.length });
         this._recordTranscript({

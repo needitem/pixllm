@@ -84,7 +84,24 @@ function saveAgentState({ sessionId = '', workspacePath = '', payload = {} } = {
   return target;
 }
 
+function clearAgentState({ sessionId = '', workspacePath = '' } = {}) {
+  const stateKey = buildStateKey(sessionId, workspacePath);
+  const target = path.join(stateRoot(), `${stateKey}.json`);
+  try {
+    if (fs.existsSync(target)) {
+      fs.unlinkSync(target);
+    }
+  } catch {
+    // Best-effort cleanup; session creation must not fail on stale state deletion.
+  }
+  const nextIndex = loadStateIndex()
+    .filter((entry) => toStringValue(entry?.key) !== stateKey);
+  saveStateIndex(nextIndex);
+  return target;
+}
+
 module.exports = {
+  clearAgentState,
   loadAgentState,
   saveAgentState,
 };

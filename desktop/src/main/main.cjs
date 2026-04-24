@@ -10,7 +10,12 @@ const {
   apiRun,
   apiRuns,
 } = require('./server.cjs');
-const { startLocalAgentStream, cancelLocalAgentStream, answerLocalAgentQuestion } = require('./queryEngineService.cjs');
+const {
+  startLocalAgentStream,
+  cancelLocalAgentStream,
+  answerLocalAgentQuestion,
+  resetLocalAgentEngine,
+} = require('./queryEngineService.cjs');
 const { loadBuildInfo } = require('./build_info.cjs');
 const { loadSettings, saveSettings } = require('./settings.cjs');
 const {
@@ -27,6 +32,7 @@ const {
   createSession,
   saveSession
 } = require('./sessions.cjs');
+const { clearAgentState } = require('./state/agentStateStore.cjs');
 const { desktopDataRoot } = require('./storage_paths.cjs');
 
 const isDev = Boolean(process.env.PIXLLM_DESKTOP_DEV_SERVER_URL);
@@ -140,7 +146,12 @@ app.whenReady().then(() => {
   ipcMain.handle('settings:save', async (_, patch) => saveSettings(patch));
   ipcMain.handle('sessions:list', async (_, workspacePath) => listSessions(workspacePath));
   ipcMain.handle('sessions:get', async (_, sessionId) => getSession(sessionId));
-  ipcMain.handle('sessions:create', async (_, workspacePath, title) => createSession(workspacePath, title));
+  ipcMain.handle('sessions:create', async (_, workspacePath, title) => {
+    const session = createSession(workspacePath, title);
+    clearAgentState({ sessionId: session.id, workspacePath: session.workspacePath });
+    resetLocalAgentEngine({ sessionId: session.id, workspacePath: session.workspacePath });
+    return session;
+  });
   ipcMain.handle('sessions:save', async (_, session) => saveSession(session));
 
   ipcMain.handle('api:health', async (_, baseUrl) => apiHealth(baseUrl));

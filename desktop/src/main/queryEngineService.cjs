@@ -26,6 +26,11 @@ function getOrCreateEngine(payload = {}) {
   return engine;
 }
 
+function resetLocalAgentEngine({ sessionId = '', workspacePath = '' } = {}) {
+  const key = engineKey(sessionId, workspacePath);
+  return ENGINE_REGISTRY.delete(key);
+}
+
 async function startLocalAgentStream(eventSender, streamControllers, payload = {}) {
   const requestId = randomUUID();
   const controller = new AbortController();
@@ -153,4 +158,5 @@ module.exports = {
   startLocalAgentStream,
   cancelLocalAgentStream,
   answerLocalAgentQuestion,
+  resetLocalAgentEngine,
 };
