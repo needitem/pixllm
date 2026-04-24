@@ -1,15 +1,9 @@
 const { createHash } = require('node:crypto');
 const { createTextBlock, toStringValue } = require('./query/blocks.cjs');
-const { evaluateFinalAnswerPolicy } = require('./query/finalizationPolicy.cjs');
-const { findUngroundedSourceMentions } = require('./query/sourceGuard.cjs');
 const { summarizeWikiEvidence } = require('./query/referenceEvidence.cjs');
 
 const DEFAULT_MODEL_CONTEXT_WINDOW = 16384;
 const MODEL_PREVIEW_LIMIT = 180;
-const FINAL_ANSWER_POLICY_TOOL_LOCK_NAMES = Object.freeze([
-  'wiki_search',
-  'wiki_read',
-]);
 
 function deriveLoopControlState({
   availableToolNames = [],
@@ -22,9 +16,6 @@ function deriveLoopControlState({
     .map((item) => toStringValue(item))
     .filter((item) => item && available.has(item));
   const scopedAvailable = requested.length > 0 ? requested : Array.from(available);
-  const finalAnswerPolicyLock = state?.finalAnswerPolicyLock && typeof state.finalAnswerPolicyLock === 'object'
-    ? state.finalAnswerPolicyLock
-    : null;
   const referenceEvidence = summarizeWikiEvidence(Array.isArray(state?.trace) ? state.trace : []);
   const requestIntent = requestContext?.intent && typeof requestContext.intent === 'object'
     ? requestContext.intent
@@ -42,90 +33,15 @@ function deriveLoopControlState({
       || Number(referenceEvidence.workflowRequiredSymbolCount || 0) > 0
     ),
   );
-  const finalAnswerPolicyLocked = Boolean(
-    !requiresWorkspaceArtifact
-    && finalAnswerPolicyLock?.kind === 'answer_only',
-  );
-  const filteredToolNames = finalAnswerPolicyLocked
-    ? scopedAvailable.filter((item) => !FINAL_ANSWER_POLICY_TOOL_LOCK_NAMES.includes(toStringValue(item)))
-    : scopedAvailable;
 
   return {
-    phase: finalAnswerPolicyLocked
-        ? 'final_answer_policy'
-      : workflowAnswerLocked
+    phase: workflowAnswerLocked
         ? 'workflow_answer'
         : '',
     activeToolNames: workflowAnswerLocked
       ? []
-      : finalAnswerPolicyLocked
-        ? []
-        : filteredToolNames,
-    finalAnswerPolicyLocked,
+      : scopedAvailable,
     workflowAnswerLocked,
-  };
-}
-
-function evaluateFinalAnswerState({
-  requestContext = {},
-  trace = [],
-  finalAnswer = '',
-  groundedPaths = [],
-  describeTool = () => null,
-} = {}) {
-  if (toStringValue(requestContext?.mode) === 'wiki') {
-    return {
-      ok: true,
-      type: 'final',
-      details: {
-        postAnswerValidationSkipped: true,
-        reason: 'wiki_mode_uses_evidence_first_pack',
-        referenceEvidence: summarizeWikiEvidence(trace),
-        groundingWarnings: [],
-      },
-    };
-  }
-
-  const policyResult = evaluateFinalAnswerPolicy({
-    requestContext,
-    trace,
-    finalAnswer,
-    describeTool,
-  });
-  if (!policyResult?.ok) {
-    return {
-      ok: false,
-      type: 'policy',
-      reason: toStringValue(policyResult.reason || 'final_answer_policy'),
-      blockingMessage: toStringValue(policyResult.blockingMessage),
-      details: policyResult.details || {},
-    };
-  }
-
-  const unknownMentions = findUngroundedSourceMentions(finalAnswer, groundedPaths);
-  if (unknownMentions.length > 0) {
-    return {
-      ok: false,
-      type: 'grounding',
-      mentions: unknownMentions.slice(0, 8),
-      details: {
-        ...(policyResult.details || {}),
-        groundingWarnings: [{
-          type: 'grounding',
-          mentions: unknownMentions.slice(0, 8),
-          count: unknownMentions.length,
-        }],
-      },
-    };
-  }
-
-  return {
-    ok: true,
-    type: 'final',
-    details: {
-      ...(policyResult.details || {}),
-      groundingWarnings: [],
-    },
   };
 }
 
@@ -200,45 +116,10 @@ function buildFallbackAnswer({ terminalReason = '', failedStep = null } = {}) {
       ? `The desktop agent stopped after tool failures. Last error: ${toStringValue(failedStep?.observation?.error)}`
       : 'The desktop agent stopped after tool failures.';
   }
-  if (reason === 'ungrounded_answer') {
-    return 'The desktop agent stopped because it could not produce a grounded final answer from the collected evidence.';
-  }
   if (reason === 'parse_error_budget') {
     return 'The desktop agent stopped because the assistant repeatedly returned malformed output.';
   }
-  if (reason === 'final_answer_policy') {
-    return 'The desktop agent stopped because it could not satisfy the final answer grounding policy from the collected evidence.';
-  }
   return 'The desktop agent reached its turn budget before producing a final answer.';
-}
-
-function buildFinalAnswerPolicyRetrySignature(finalAnswerCheck = {}) {
-  const details = finalAnswerCheck?.details && typeof finalAnswerCheck.details === 'object'
-    ? finalAnswerCheck.details
-    : {};
-  const referenceEvidence = details.referenceEvidence && typeof details.referenceEvidence === 'object'
-    ? details.referenceEvidence
-    : {};
-  return hashText(JSON.stringify({
-    reason: toStringValue(finalAnswerCheck?.reason || 'final_answer_policy'),
-    workflowBundleSeen: Boolean(referenceEvidence.workflowBundleSeen),
-    workflowSlotsComplete: Boolean(referenceEvidence.workflowSlotsComplete),
-    workflowMissingSlots: Array.isArray(referenceEvidence.workflowMissingSlots)
-      ? referenceEvidence.workflowMissingSlots.map((item) => toStringValue(item)).filter(Boolean).slice(0, 12)
-      : [],
-    hasWorkflowEvidence: Boolean(referenceEvidence.hasWorkflowEvidence),
-    hasMethodEvidence: Boolean(referenceEvidence.hasMethodEvidence),
-    hasVerifiedCodeEvidence: Boolean(referenceEvidence.hasVerifiedCodeEvidence),
-    apiEvidenceCount: Number(referenceEvidence.apiEvidenceCount || 0),
-    workflowRequiredSymbolCount: Number(referenceEvidence.workflowRequiredSymbolCount || 0),
-    searchCount: Number(referenceEvidence.searchCount || 0),
-    candidatePaths: Array.isArray(details.candidatePaths)
-      ? details.candidatePaths.map((item) => toStringValue(item)).filter(Boolean).slice(0, 8)
-      : [],
-    successfulToolNames: Array.isArray(details.successfulToolNames)
-      ? details.successfulToolNames.map((item) => toStringValue(item)).filter(Boolean).slice(0, 8)
-      : [],
-  }));
 }
 
 function contentWithoutToolResponses(content = '') {
@@ -343,16 +224,12 @@ function initialState({ historyMessages = [] } = {}) {
     trace: [],
     transcript: [],
     transitions: [],
-    finalAnswerPolicyLock: null,
-    finalAnswerPolicyRetries: 0,
-    finalAnswerPolicyRetrySignature: '',
     pendingToolUseSummary: '',
     fileCache: {},
     lastTransition: null,
     maxOutputTokensRecoveryCount: 0,
     maxOutputTokensOverride: 0,
     pendingAssistantContinuation: '',
-    ungroundedAnswerRetries: 0,
     terminalReason: '',
     currentTurn: 0,
     totalUsage: normalizeUsage(),
@@ -361,12 +238,10 @@ function initialState({ historyMessages = [] } = {}) {
 
 module.exports = {
   buildFallbackAnswer,
-  buildFinalAnswerPolicyRetrySignature,
   buildUserBlocks,
   describeTools,
   deriveLoopControlState,
   estimateTokens,
-  evaluateFinalAnswerState,
   hasSubstantiveUserQueryMessage,
   hashText,
   initialState,
