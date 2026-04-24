@@ -889,7 +889,10 @@ function buildSystemPrompt({
         : '- For explanation-style local requests, prefer direct workspace inspection over assumptions or remembered examples.'
       : '',
     prefersWorkflowFirst
-      ? '- Workflow-first guidance requests must follow this order: (1) search wiki workflow pages, (2) read the best matching workflow page, (3) search and read any directly referenced workflow or methods pages needed for the answer, (4) extract the verified declarations, structured fact lists, and verification rules from the pages you read before emitting code or concrete signatures, and only then (5) use broader wiki search if necessary.'
+      ? '- Workflow-first guidance requests must follow this order: (1) search wiki workflow pages, (2) use the returned evidence_pack when present, (3) read the best matching workflow page only if the evidence_pack is missing or insufficient, (4) search/read directly referenced methods only when the pack lacks the needed declaration, and only then (5) use broader wiki search if necessary.'
+      : '',
+    prefersWorkflowFirst
+      ? '- If a wiki tool response includes evidence_pack, treat it as the assembled answer bundle: workflow, selected bundle pages, method declarations, and source anchors. Do not re-read the same bundle pages unless the pack is missing the specific signature or procedure you need.'
       : '',
     prefersWorkflowFirst && prefersDirectChatGuidance
       ? '- For broad workflow guidance, converge once a workflow page and verified code facts are available. Prefer one short explanation path, at most one compact code sketch, and stop searching instead of expanding into every related API.'

@@ -55,6 +55,63 @@ function normalizeReadPage(item = {}) {
   };
 }
 
+function normalizeEvidencePage(item = {}) {
+  return {
+    path: toStringValue(item?.path),
+    title: toStringValue(item?.title),
+    kind: toStringValue(item?.kind),
+    relation: toStringValue(item?.relation),
+    summary: toStringValue(item?.summary),
+    content: String(item?.content || ''),
+    workflow_family: toStringValue(item?.workflow_family),
+    output_shape: toStringValue(item?.output_shape),
+    required_symbols: Array.isArray(item?.required_symbols)
+      ? item.required_symbols.map((value) => toStringValue(value)).filter(Boolean)
+      : [],
+    verification_rules: Array.isArray(item?.verification_rules)
+      ? item.verification_rules.map((value) => toStringValue(value)).filter(Boolean)
+      : [],
+  };
+}
+
+function normalizeEvidencePack(pack = {}) {
+  if (!pack || typeof pack !== 'object' || Array.isArray(pack)) {
+    return null;
+  }
+  const workflow = pack.workflow && typeof pack.workflow === 'object'
+    ? normalizeEvidencePage(pack.workflow)
+    : null;
+  return {
+    version: Number(pack.version || 1),
+    query: toStringValue(pack.query),
+    workflow,
+    bundle_pages: Array.isArray(pack.bundle_pages)
+      ? pack.bundle_pages.map((item) => normalizeEvidencePage(item)).filter((item) => item.path || item.content)
+      : [],
+    method_declarations: Array.isArray(pack.method_declarations)
+      ? pack.method_declarations.map((item) => ({
+        symbol: toStringValue(item?.symbol),
+        member_name: toStringValue(item?.member_name),
+        type_name: toStringValue(item?.type_name),
+        title: toStringValue(item?.title),
+        path: toStringValue(item?.path),
+        reason: toStringValue(item?.reason),
+        score: Number(item?.score || 0),
+        declarations: Array.isArray(item?.declarations)
+          ? item.declarations.map((value) => toStringValue(value)).filter(Boolean)
+          : [],
+        content: String(item?.content || ''),
+      })).filter((item) => item.symbol || item.path || item.content)
+      : [],
+    source_anchors: Array.isArray(pack.source_anchors)
+      ? pack.source_anchors.map((value) => toStringValue(value)).filter(Boolean)
+      : [],
+    answer_rules: Array.isArray(pack.answer_rules)
+      ? pack.answer_rules.map((value) => toStringValue(value)).filter(Boolean)
+      : [],
+  };
+}
+
 function WikiSearchTool() {
   return defineLocalTool({
     name: 'wiki_search',
@@ -133,6 +190,7 @@ function WikiSearchTool() {
             query,
             total: mergedResults.length,
             results: mergedResults,
+            evidence_pack: normalizeEvidencePack(workflowResult?.evidence_pack),
           };
         }
       }
@@ -152,6 +210,7 @@ function WikiSearchTool() {
         query,
         total: mergedResults.length > 0 ? mergedResults.length : Number(fallbackResult?.total || 0),
         results: mergedResults,
+        evidence_pack: normalizeEvidencePack(fallbackResult?.evidence_pack),
       };
     },
   });
@@ -194,6 +253,7 @@ function WikiReadTool() {
         updated_at: toStringValue(page?.updated_at),
         related_pages: Array.isArray(page?.related_pages) ? page.related_pages.map((item) => normalizeReadPage(item)) : [],
         related_paths: Array.isArray(page?.related_paths) ? page.related_paths.map((item) => toStringValue(item)).filter(Boolean) : [],
+        evidence_pack: normalizeEvidencePack(page?.evidence_pack),
       };
     },
   });

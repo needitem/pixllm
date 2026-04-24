@@ -98,6 +98,82 @@ function summarizePathItems(items = [], formatter, limit = 12) {
     .filter(Boolean);
 }
 
+function summarizeEvidencePackForModel(pack = {}) {
+  if (!pack || typeof pack !== 'object' || Array.isArray(pack)) {
+    return [];
+  }
+  const lines = ['evidence_pack:'];
+  const workflow = pack.workflow && typeof pack.workflow === 'object' ? pack.workflow : null;
+  if (workflow) {
+    const workflowHead = [
+      toStringValue(workflow.path),
+      toStringValue(workflow.title) ? `:: ${toStringValue(workflow.title)}` : '',
+      toStringValue(workflow.workflow_family) ? `[family=${toStringValue(workflow.workflow_family)}]` : '',
+    ].filter(Boolean).join(' ');
+    if (workflowHead) {
+      lines.push(`workflow: ${workflowHead}`);
+    }
+    const requiredSymbols = Array.isArray(workflow.required_symbols)
+      ? workflow.required_symbols.map((item) => toStringValue(item)).filter(Boolean)
+      : [];
+    if (requiredSymbols.length > 0) {
+      lines.push(`required_symbols: ${requiredSymbols.slice(0, 18).join(', ')}`);
+    }
+    const verificationRules = Array.isArray(workflow.verification_rules)
+      ? workflow.verification_rules.map((item) => toStringValue(item)).filter(Boolean)
+      : [];
+    if (verificationRules.length > 0) {
+      lines.push(`verification_rules: ${verificationRules.slice(0, 8).join('; ')}`);
+    }
+  }
+
+  const methodDeclarations = Array.isArray(pack.method_declarations) ? pack.method_declarations : [];
+  if (methodDeclarations.length > 0) {
+    lines.push('method_declarations:');
+    for (const item of methodDeclarations.slice(0, 10)) {
+      const symbol = toStringValue(item?.symbol || item?.title || item?.path);
+      const declaration = Array.isArray(item?.declarations) && item.declarations.length > 0
+        ? item.declarations.map((value) => toStringValue(value)).filter(Boolean).join(' | ')
+        : clipModelText(item?.content || '', 260).replace(/\s+/g, ' ');
+      if (symbol || declaration) {
+        lines.push(`- ${[symbol, declaration].filter(Boolean).join(' :: ')}`);
+      }
+    }
+  }
+
+  const bundlePages = Array.isArray(pack.bundle_pages) ? pack.bundle_pages : [];
+  if (bundlePages.length > 0) {
+    lines.push('bundle_pages:');
+    for (const item of bundlePages.slice(0, 4)) {
+      const pathValue = toStringValue(item?.path);
+      const title = toStringValue(item?.title);
+      const relation = toStringValue(item?.relation);
+      const summary = clipModelText(item?.summary || '', 180).replace(/\s+/g, ' ');
+      lines.push(`- ${pathValue}${title ? ` :: ${title}` : ''}${relation ? ` [${relation}]` : ''}${summary ? ` :: ${summary}` : ''}`);
+    }
+  }
+
+  if (workflow?.content) {
+    lines.push('workflow_content:');
+    lines.push(clipModelText(workflow.content, 2600));
+  }
+  for (const item of bundlePages.slice(0, 3)) {
+    const pathValue = toStringValue(item?.path);
+    const content = clipModelText(item?.content || '', 900);
+    if (!pathValue || !content) continue;
+    lines.push(`bundle_content: ${pathValue}`);
+    lines.push(content);
+  }
+
+  const sourceAnchors = Array.isArray(pack.source_anchors)
+    ? pack.source_anchors.map((item) => toStringValue(item)).filter(Boolean)
+    : [];
+  if (sourceAnchors.length > 0) {
+    lines.push(`source_anchors: ${sourceAnchors.slice(0, 16).join(', ')}`);
+  }
+  return lines;
+}
+
 function summarizeObservationForModel(toolName, observation = {}) {
   const name = toStringValue(toolName);
   const payload = observation && typeof observation === 'object' ? observation : {};
@@ -170,6 +246,7 @@ function summarizeObservationForModel(toolName, observation = {}) {
       lines.push('results:');
       lines.push(...results.map((item) => `- ${item}`));
     }
+    lines.push(...summarizeEvidencePackForModel(payload.evidence_pack));
     return lines.join('\n').trim();
   }
 
@@ -199,6 +276,7 @@ function summarizeObservationForModel(toolName, observation = {}) {
       lines.push(`related_content: ${relatedPath}`);
       lines.push(relatedContent);
     }
+    lines.push(...summarizeEvidencePackForModel(payload.evidence_pack));
     return lines.join('\n').trim();
   }
 

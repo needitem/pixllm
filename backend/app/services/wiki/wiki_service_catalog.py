@@ -4,6 +4,7 @@ from typing import Dict, Iterable, List, Optional
 
 from ... import config
 from ...utils.time import now_iso
+from .wiki_evidence_pack import build_workflow_evidence_pack
 from .wiki_pages import _page_payload
 from .wiki_runtime import (
     _BACKEND_ROOT,
@@ -146,7 +147,16 @@ class WikiServiceCatalogMixin:
         root = self._root(wiki_id)
         if not file_path.exists() or not file_path.is_file():
             return None
-        return _page_payload(root, file_path, include_related=True)
+        payload = _page_payload(root, file_path, include_related=True)
+        if str(payload.get("kind") or "") == "workflow":
+            evidence_pack = build_workflow_evidence_pack(
+                root,
+                query=str(payload.get("title") or ""),
+                workflow_path=str(payload.get("path") or ""),
+            )
+            if evidence_pack:
+                payload["evidence_pack"] = evidence_pack
+        return payload
 
 
 __all__ = ["WikiServiceCatalogMixin"]

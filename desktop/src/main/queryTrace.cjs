@@ -191,6 +191,52 @@ function referencePathsFromTrace(trace) {
   );
 }
 
+function summarizeEvidencePackPayload(pack, maxChars = 16000) {
+  if (!pack || typeof pack !== 'object' || Array.isArray(pack)) {
+    return null;
+  }
+  const workflow = pack.workflow && typeof pack.workflow === 'object'
+    ? {
+        path: pack.workflow.path || '',
+        title: pack.workflow.title || '',
+        kind: pack.workflow.kind || 'workflow',
+        summary: String(pack.workflow.summary || '').slice(0, 320),
+        workflow_family: pack.workflow.workflow_family || '',
+        output_shape: pack.workflow.output_shape || '',
+        required_symbols: Array.isArray(pack.workflow.required_symbols) ? pack.workflow.required_symbols.slice(0, 32) : [],
+        verification_rules: Array.isArray(pack.workflow.verification_rules) ? pack.workflow.verification_rules.slice(0, 16) : [],
+        content: String(pack.workflow.content || '').slice(0, Math.min(4200, maxChars)),
+      }
+    : null;
+  return {
+    version: Number(pack.version || 1),
+    query: pack.query || '',
+    workflow,
+    bundle_pages: Array.isArray(pack.bundle_pages)
+      ? pack.bundle_pages.slice(0, 4).map((item) => ({
+          path: item?.path || '',
+          title: item?.title || '',
+          kind: item?.kind || '',
+          relation: item?.relation || '',
+          summary: String(item?.summary || '').slice(0, 260),
+          content: String(item?.content || '').slice(0, Math.min(1200, maxChars)),
+        }))
+      : [],
+    method_declarations: Array.isArray(pack.method_declarations)
+      ? pack.method_declarations.slice(0, 14).map((item) => ({
+          symbol: item?.symbol || '',
+          title: item?.title || '',
+          path: item?.path || '',
+          reason: item?.reason || '',
+          declarations: Array.isArray(item?.declarations) ? item.declarations.slice(0, 4) : [],
+          content: String(item?.content || '').slice(0, Math.min(900, maxChars)),
+        }))
+      : [],
+    source_anchors: Array.isArray(pack.source_anchors) ? pack.source_anchors.slice(0, 32) : [],
+    answer_rules: Array.isArray(pack.answer_rules) ? pack.answer_rules.slice(0, 8) : [],
+  };
+}
+
 function summarizeObservation(toolName, observation, maxChars = 16000) {
   const payload = observation || {};
   if (toolName === 'list_files') {
@@ -279,6 +325,7 @@ function summarizeObservation(toolName, observation, maxChars = 16000) {
           summary: String(item?.summary || item?.excerpt || '').slice(0, 240),
         }))
         : [],
+      evidence_pack: summarizeEvidencePackPayload(payload.evidence_pack, maxChars),
       error: payload.error || '',
       message: payload.message || '',
     };
@@ -301,6 +348,7 @@ function summarizeObservation(toolName, observation, maxChars = 16000) {
             content: String(item?.content || '').slice(0, Math.min(1200, maxChars)),
           }))
         : [],
+      evidence_pack: summarizeEvidencePackPayload(payload.evidence_pack, maxChars),
       error: payload.error || '',
       message: payload.message || '',
     };

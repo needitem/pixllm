@@ -111,7 +111,10 @@ function isWorkflowPath(value = '') {
 
 function isMethodPath(value = '') {
   const normalized = normalizePath(value).toLowerCase();
-  return normalized.startsWith('methods/') || normalized.includes('/methods/');
+  return normalized.startsWith('methods/')
+    || normalized.includes('/methods/')
+    || normalized.startsWith('.runtime/methods_index.json#')
+    || normalized.includes('/.runtime/methods_index.json#');
 }
 
 function collectWikiReadPages(observation = {}) {
@@ -127,6 +130,9 @@ function collectWikiReadPages(observation = {}) {
       content,
       kind: toStringValue(item?.kind),
       summary: toStringValue(item?.summary),
+      requiredSymbols: Array.isArray(item?.required_symbols)
+        ? item.required_symbols.map((value) => toStringValue(value)).filter(Boolean)
+        : [],
     });
   };
 
@@ -137,10 +143,53 @@ function collectWikiReadPages(observation = {}) {
   return pages;
 }
 
+function collectEvidencePackPages(pack = {}) {
+  const pages = [];
+  if (!pack || typeof pack !== 'object' || Array.isArray(pack)) {
+    return pages;
+  }
+  const append = (item = {}, fallbackKind = '') => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      return;
+    }
+    const pathValue = normalizePath(item.path);
+    const content = String(item.content || '');
+    if (!pathValue && !content) {
+      return;
+    }
+    pages.push({
+      path: pathValue,
+      content,
+      kind: toStringValue(item.kind || fallbackKind),
+      summary: toStringValue(item.summary),
+      requiredSymbols: Array.isArray(item.required_symbols)
+        ? item.required_symbols.map((value) => toStringValue(value)).filter(Boolean)
+        : [],
+    });
+  };
+
+  append(pack.workflow, 'workflow');
+  for (const item of Array.isArray(pack.bundle_pages) ? pack.bundle_pages : []) {
+    append(item);
+  }
+  for (const item of Array.isArray(pack.method_declarations) ? pack.method_declarations : []) {
+    append({
+      path: item?.path,
+      content: item?.content,
+      kind: 'method',
+      summary: item?.title || item?.symbol,
+    }, 'method');
+  }
+  return pages;
+}
+
 function hasVerifiedSourceMarkers(content = '') {
   const source = String(content || '');
   if (!source) return false;
-  return /verified source/i.test(source) && /Source\/[^:\s`'"]+:\d+/i.test(source);
+  return (
+    /verified source/i.test(source)
+    || /-\s*(?:Declaration|Implementation):/i.test(source)
+  ) && /Source\/[^:\s`'"]+:\d+/i.test(source);
 }
 
 function summarizeWikiEvidence(trace = []) {
@@ -171,6 +220,41 @@ function summarizeWikiEvidence(trace = []) {
       searchCount += 1;
       const results = Array.isArray(observation.results) ? observation.results : [];
       docResultCount += results.length;
+      const pages = collectEvidencePackPages(observation.evidence_pack);
+      docResultCount += pages.length;
+      for (const page of pages) {
+        const pathValue = normalizePath(page.path);
+        const content = String(page.content || '');
+        const parsedSpec = parseVerifiedFactsYaml(content);
+        const requiredSymbols = uniqueStrings([
+          ...parsedSpec.requiredSymbols,
+          ...(Array.isArray(page.requiredSymbols) ? page.requiredSymbols : []),
+        ]);
+        const verifiedBySource = hasVerifiedSourceMarkers(content);
+
+        if (isWorkflowPath(pathValue) || toStringValue(page.kind) === 'workflow') {
+          workflowSourceCount += 1;
+          if (parsedSpec.hasBlock || requiredSymbols.length > 0) {
+            workflowBundleSeen = true;
+          }
+          if (requiredSymbols.length > 0 || verifiedBySource) {
+            hasVerifiedCodeEvidence = true;
+            evidenceTypes.add('declaration');
+          }
+          workflowRequiredSymbolCount += requiredSymbols.length;
+          apiEvidenceCount += requiredSymbols.length;
+          continue;
+        }
+
+        if (isMethodPath(pathValue) || toStringValue(page.kind) === 'method') {
+          methodSourceCount += 1;
+          if (requiredSymbols.length > 0 || verifiedBySource) {
+            hasVerifiedCodeEvidence = true;
+            evidenceTypes.add('declaration');
+          }
+          apiEvidenceCount += Math.max(1, requiredSymbols.length);
+        }
+      }
       continue;
     }
 
@@ -186,19 +270,23 @@ function summarizeWikiEvidence(trace = []) {
       const pathValue = normalizePath(page.path);
       const content = String(page.content || '');
       const parsedSpec = parseVerifiedFactsYaml(content);
+      const requiredSymbols = uniqueStrings([
+        ...parsedSpec.requiredSymbols,
+        ...(Array.isArray(page.requiredSymbols) ? page.requiredSymbols : []),
+      ]);
       const verifiedBySource = hasVerifiedSourceMarkers(content);
 
       if (isWorkflowPath(pathValue)) {
         workflowSourceCount += 1;
-        if (parsedSpec.hasBlock) {
+        if (parsedSpec.hasBlock || requiredSymbols.length > 0) {
           workflowBundleSeen = true;
         }
-        if (parsedSpec.requiredSymbols.length > 0 || verifiedBySource) {
+        if (requiredSymbols.length > 0 || verifiedBySource) {
           hasVerifiedCodeEvidence = true;
           evidenceTypes.add('declaration');
         }
-        workflowRequiredSymbolCount += parsedSpec.requiredSymbols.length;
-        apiEvidenceCount += parsedSpec.requiredSymbols.length;
+        workflowRequiredSymbolCount += requiredSymbols.length;
+        apiEvidenceCount += requiredSymbols.length;
         for (const pattern of parsedSpec.forbiddenAnswerPatterns) {
           if (!workflowForbiddenAnswerPatterns.includes(pattern)) {
             workflowForbiddenAnswerPatterns.push(pattern);
@@ -217,18 +305,32 @@ function summarizeWikiEvidence(trace = []) {
 
       if (isMethodPath(pathValue)) {
         methodSourceCount += 1;
-        if (parsedSpec.requiredSymbols.length > 0 || verifiedBySource) {
+        if (requiredSymbols.length > 0 || verifiedBySource) {
           hasVerifiedCodeEvidence = true;
           evidenceTypes.add('declaration');
         }
-        apiEvidenceCount += parsedSpec.requiredSymbols.length;
+        apiEvidenceCount += Math.max(1, requiredSymbols.length);
         continue;
       }
 
-      if (parsedSpec.requiredSymbols.length > 0 || verifiedBySource) {
+      if (requiredSymbols.length > 0 || verifiedBySource) {
         hasVerifiedCodeEvidence = true;
         evidenceTypes.add('declaration');
-        apiEvidenceCount += parsedSpec.requiredSymbols.length;
+        apiEvidenceCount += requiredSymbols.length;
+      }
+    }
+
+    for (const page of collectEvidencePackPages(observation.evidence_pack)) {
+      const pathValue = normalizePath(page.path);
+      const content = String(page.content || '');
+      const verifiedBySource = hasVerifiedSourceMarkers(content);
+      if (isMethodPath(pathValue) || toStringValue(page.kind) === 'method') {
+        methodSourceCount += 1;
+        if (verifiedBySource) {
+          hasVerifiedCodeEvidence = true;
+          evidenceTypes.add('declaration');
+          apiEvidenceCount += 1;
+        }
       }
     }
   }

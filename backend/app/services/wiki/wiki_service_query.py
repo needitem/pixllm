@@ -1,5 +1,6 @@
 from ... import config
 from .wiki_classifier import classify_workflow_family
+from .wiki_evidence_pack import build_workflow_evidence_pack
 from .wiki_runtime import *  # noqa: F401,F403
 
 
@@ -108,11 +109,17 @@ class WikiServiceQueryMixin:
                 priority_families=priority_families,
             )
             if workflow_results:
+                evidence_pack = build_workflow_evidence_pack(
+                    root,
+                    query=normalized_query,
+                    workflow_result=workflow_results[0],
+                )
                 return {
                     "wiki_id": normalized_wiki_id,
                     "query": normalized_query,
                     "total": len(workflow_results),
                     "results": workflow_results,
+                    **({"evidence_pack": evidence_pack} if evidence_pack else {}),
                 }
 
         pages = await self.list_pages(wiki_id)
