@@ -156,6 +156,21 @@ class WikiServiceCatalogMixin:
             )
             if evidence_pack:
                 payload["evidence_pack"] = evidence_pack
+        else:
+            workflow_path = ""
+            for related_page in payload.get("related_pages") if isinstance(payload.get("related_pages"), list) else []:
+                related_path = str(related_page.get("path") or "").strip() if isinstance(related_page, dict) else ""
+                if related_path.startswith("workflows/") or "/workflows/" in related_path:
+                    workflow_path = related_path
+                    break
+            if workflow_path:
+                evidence_pack = build_workflow_evidence_pack(
+                    root,
+                    query=str(payload.get("title") or payload.get("summary") or ""),
+                    workflow_path=workflow_path,
+                )
+                if evidence_pack:
+                    payload["evidence_pack"] = evidence_pack
         return payload
 
 

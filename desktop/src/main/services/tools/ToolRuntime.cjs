@@ -98,11 +98,65 @@ function summarizePathItems(items = [], formatter, limit = 12) {
     .filter(Boolean);
 }
 
+function summarizeAnswerGroundingForModel(pack = {}) {
+  const grounding = pack?.answer_grounding && typeof pack.answer_grounding === 'object' && !Array.isArray(pack.answer_grounding)
+    ? pack.answer_grounding
+    : {};
+  const lines = ['answer_grounding:'];
+  const must = Array.isArray(grounding.must) ? grounding.must.map((item) => toStringValue(item)).filter(Boolean) : [];
+  const should = Array.isArray(grounding.should) ? grounding.should.map((item) => toStringValue(item)).filter(Boolean) : [];
+  const may = Array.isArray(grounding.may) ? grounding.may.map((item) => toStringValue(item)).filter(Boolean) : [];
+  if (must.length > 0) {
+    lines.push(`must: ${must.slice(0, 6).join('; ')}`);
+  }
+  if (should.length > 0) {
+    lines.push(`should: ${should.slice(0, 6).join('; ')}`);
+  }
+  if (may.length > 0) {
+    lines.push(`may: ${may.slice(0, 6).join('; ')}`);
+  }
+  const facts = Array.isArray(grounding.facts) && grounding.facts.length > 0
+    ? grounding.facts
+    : (Array.isArray(pack.method_declarations) ? pack.method_declarations : []);
+  if (facts.length > 0) {
+    lines.push('facts:');
+    for (const item of facts.slice(0, 8)) {
+      const symbol = toStringValue(item?.symbol || item?.title || item?.path);
+      const declaration = toStringValue(item?.declaration) || (Array.isArray(item?.declarations)
+        ? item.declarations.map((value) => toStringValue(value)).filter(Boolean).join(' | ')
+        : '');
+      if (symbol || declaration) {
+        lines.push(`- ${[symbol, declaration].filter(Boolean).join(' :: ')}`);
+      }
+      const sourceRefs = Array.isArray(item?.source_refs)
+        ? item.source_refs
+          .slice(0, 3)
+          .map((sourceRef) => `${toStringValue(sourceRef?.path)}:${toStringValue(sourceRef?.line_range)}`.replace(/:$/, ''))
+          .filter(Boolean)
+        : [];
+      if (sourceRefs.length > 0) {
+        lines.push(`  source_refs: ${sourceRefs.join(', ')}`);
+      }
+      for (const snippet of (Array.isArray(item?.source_snippets) ? item.source_snippets : []).slice(0, 2)) {
+        const content = clipModelText(snippet?.content || '', 1100);
+        if (!content) continue;
+        const role = toStringValue(snippet?.role);
+        const snippetPath = toStringValue(snippet?.path);
+        const snippetRange = toStringValue(snippet?.line_range);
+        lines.push(`  source_snippet${role ? `(${role})` : ''}: ${snippetPath}${snippetRange ? `:${snippetRange}` : ''}`);
+        lines.push(content);
+      }
+    }
+  }
+  return lines.length > 1 ? lines : [];
+}
+
 function summarizeEvidencePackForModel(pack = {}) {
   if (!pack || typeof pack !== 'object' || Array.isArray(pack)) {
     return [];
   }
   const lines = ['evidence_pack:'];
+  lines.push(...summarizeAnswerGroundingForModel(pack));
   const workflow = pack.workflow && typeof pack.workflow === 'object' ? pack.workflow : null;
   if (workflow) {
     const workflowHead = [
@@ -263,6 +317,7 @@ function summarizeObservationForModel(toolName, observation = {}) {
 
   if (name === 'wiki_search') {
     lines.push('reference_origin: backend_wiki');
+    lines.push(...summarizeEvidencePackForModel(payload.evidence_pack));
     const results = summarizePathItems(payload.results, (item) => {
       const pathValue = toStringValue(item?.path);
       const title = toStringValue(item?.title);
@@ -273,12 +328,12 @@ function summarizeObservationForModel(toolName, observation = {}) {
       lines.push('results:');
       lines.push(...results.map((item) => `- ${item}`));
     }
-    lines.push(...summarizeEvidencePackForModel(payload.evidence_pack));
     return lines.join('\n').trim();
   }
 
   if (name === 'wiki_read') {
     lines.push('reference_origin: backend_wiki');
+    lines.push(...summarizeEvidencePackForModel(payload.evidence_pack));
     const relatedPages = Array.isArray(payload.related_pages) ? payload.related_pages : [];
     if (relatedPages.length > 0) {
       lines.push('related_pages:');
@@ -303,7 +358,6 @@ function summarizeObservationForModel(toolName, observation = {}) {
       lines.push(`related_content: ${relatedPath}`);
       lines.push(relatedContent);
     }
-    lines.push(...summarizeEvidencePackForModel(payload.evidence_pack));
     return lines.join('\n').trim();
   }
 

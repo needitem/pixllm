@@ -889,28 +889,28 @@ function buildSystemPrompt({
         : '- For explanation-style local requests, prefer direct workspace inspection over assumptions or remembered examples.'
       : '',
     prefersWorkflowFirst
-      ? '- Workflow-first guidance requests must follow this order: (1) search wiki workflow pages, (2) use the returned evidence_pack when present, (3) read the best matching workflow page only if the evidence_pack is missing or insufficient, (4) search/read directly referenced methods only when the pack lacks the needed declaration, and only then (5) use broader wiki search if necessary.'
+      ? '- Workflow-first guidance requests should start with wiki workflow pages, then use the returned evidence_pack. Read the best matching workflow/howto page when it adds procedure context or when the pack lacks the specific signature, behavior, or usage sequence needed.'
       : '',
     prefersWorkflowFirst
-      ? '- If a wiki tool response includes evidence_pack, treat it as the assembled answer bundle: workflow, selected bundle pages, method declarations, source snippets, and source anchors. Do not re-read the same bundle pages unless the pack is missing the specific signature or procedure you need.'
+      ? '- If a wiki tool response includes answer_grounding or evidence_pack, use answer_grounding first for exact API facts, then workflow/howto/concept pages for the ordered explanation.'
       : '',
     prefersWorkflowFirst
-      ? '- For API signatures and behavior, use method_declarations.declaration and method_declarations.source_snippets as the highest-priority evidence. Preserve ref/out/% parameters, method-vs-property form, and enum names exactly.'
+      ? '- MUST: Preserve API signatures, ref/out/% parameters, overloads, method-vs-property form, and enum names exactly as shown in declarations or method facts.'
       : '',
     prefersWorkflowFirst
-      ? '- Do not add side effects, active/front layer behavior, convenience overloads, or object relationships unless they are present in declaration/source_snippets. If a behavior is not shown, omit it or mark it unverified.'
+      ? '- MUST: Use source snippets as the highest-priority evidence for concrete implementation side effects, ownership/lifetime behavior, default layer choice, active/front behavior, and object relationships.'
       : '',
     prefersWorkflowFirst && prefersDirectChatGuidance
-      ? '- For broad workflow guidance, converge once a workflow page and verified code facts are available. Prefer one short explanation path, at most one compact code sketch, and stop searching instead of expanding into every related API.'
+      ? '- SHOULD: For broad workflow guidance, converge once a workflow/howto page plus relevant method facts are available. Prefer one short explanation path and at most one compact code sketch.'
       : '',
     prefersWorkflowFirst
-      ? '- When a workflow page exposes structured fact lists, verification rules, or verified declarations, treat them as an allowlist for example code. Do not invent overloads, namespaces, convenience properties, short static helpers, or direct object relationships that are not present in the verified facts.'
+      ? '- SHOULD: Treat workflow/howto/concept pages as procedural guidance. Treat declarations and source snippets as the hard authority only for code signatures and source-backed behavior.'
       : '',
     prefersWorkflowFirst
       ? '- If a workflow describes a non-obvious enum or integer mapping, prefer named enum members in code examples. If you must use integers, state the verified mapping explicitly instead of implying a conventional order.'
       : '',
     prefersWorkflowFirst
-      ? '- For technical guidance, workflow fact blocks and methods pages are more authoritative than sample snippets or inferred usage patterns. If signatures disagree, follow the verified declarations or say the detail is unverified.'
+      ? '- MAY: Use normal SDK reasoning for high-level steps and sample structure when it does not change verified signatures or source-backed behavior. Mark only the specific missing or risky detail as unverified.'
       : '',
     !isWikiMode
       ? '- Do not create new files. The only allowed local mutation is editing an existing file when the user explicitly asks for comment-style or explanatory edits.'

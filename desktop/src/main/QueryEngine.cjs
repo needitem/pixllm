@@ -461,11 +461,16 @@ class QueryEngine {
         }
         if (toStringValue(result?.reasoning_content)) {
           this._recordTranscript({
-            kind: 'model_reasoning',
+            kind: 'model_reasoning_summary',
             turn,
             attempt: attempt + 1,
-            preview: previewText(result.reasoning_content),
+            preview: 'Internal model reasoning hidden. Inspect tool evidence and final answer instead.',
             chars: String(result.reasoning_content || '').length,
+            payload: {
+              hidden: true,
+              reason: 'internal_reasoning_is_not_grounding_evidence',
+              chars: String(result.reasoning_content || '').length,
+            },
           });
         }
         return result;
@@ -1042,7 +1047,8 @@ class QueryEngine {
             finishReason,
             payload: {
               text: rawText,
-              reasoning: toStringValue(completion?.reasoning_content || ''),
+              reasoningHidden: Boolean(toStringValue(completion?.reasoning_content || '')),
+              reasoningChars: String(completion?.reasoning_content || '').length,
             },
           });
         }

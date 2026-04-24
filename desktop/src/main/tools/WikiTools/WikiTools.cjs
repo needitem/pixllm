@@ -74,6 +74,49 @@ function normalizeEvidencePage(item = {}) {
   };
 }
 
+function normalizeSourceRef(item = {}) {
+  return {
+    path: toStringValue(item?.path),
+    line_range: toStringValue(item?.line_range),
+  };
+}
+
+function normalizeSourceSnippet(item = {}) {
+  return {
+    path: toStringValue(item?.path),
+    line_range: toStringValue(item?.line_range),
+    role: toStringValue(item?.role),
+    content: String(item?.content || ''),
+  };
+}
+
+function normalizeGroundingFact(item = {}) {
+  return {
+    symbol: toStringValue(item?.symbol),
+    declaration: toStringValue(item?.declaration),
+    source_refs: Array.isArray(item?.source_refs)
+      ? item.source_refs.map((value) => normalizeSourceRef(value)).filter((value) => value.path)
+      : [],
+    source_snippets: Array.isArray(item?.source_snippets)
+      ? item.source_snippets.map((value) => normalizeSourceSnippet(value)).filter((value) => value.path || value.content)
+      : [],
+  };
+}
+
+function normalizeAnswerGrounding(item = {}) {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) {
+    return null;
+  }
+  return {
+    must: Array.isArray(item?.must) ? item.must.map((value) => toStringValue(value)).filter(Boolean) : [],
+    should: Array.isArray(item?.should) ? item.should.map((value) => toStringValue(value)).filter(Boolean) : [],
+    may: Array.isArray(item?.may) ? item.may.map((value) => toStringValue(value)).filter(Boolean) : [],
+    facts: Array.isArray(item?.facts)
+      ? item.facts.map((value) => normalizeGroundingFact(value)).filter((value) => value.symbol || value.declaration)
+      : [],
+  };
+}
+
 function normalizeEvidencePack(pack = {}) {
   if (!pack || typeof pack !== 'object' || Array.isArray(pack)) {
     return null;
@@ -97,6 +140,13 @@ function normalizeEvidencePack(pack = {}) {
         path: toStringValue(item?.path),
         reason: toStringValue(item?.reason),
         score: Number(item?.score || 0),
+        declaration: toStringValue(item?.declaration),
+        source_refs: Array.isArray(item?.source_refs)
+          ? item.source_refs.map((value) => normalizeSourceRef(value)).filter((value) => value.path)
+          : [],
+        source_snippets: Array.isArray(item?.source_snippets)
+          ? item.source_snippets.map((value) => normalizeSourceSnippet(value)).filter((value) => value.path || value.content)
+          : [],
         declarations: Array.isArray(item?.declarations)
           ? item.declarations.map((value) => toStringValue(value)).filter(Boolean)
           : [],
@@ -109,6 +159,7 @@ function normalizeEvidencePack(pack = {}) {
     answer_rules: Array.isArray(pack.answer_rules)
       ? pack.answer_rules.map((value) => toStringValue(value)).filter(Boolean)
       : [],
+    answer_grounding: normalizeAnswerGrounding(pack.answer_grounding),
   };
 }
 

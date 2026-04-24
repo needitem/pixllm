@@ -406,6 +406,61 @@ def _bundle_page_payloads(root: Path, bundle_pages: Sequence[Dict[str, Any]]) ->
     return payloads
 
 
+def _build_answer_grounding(method_declarations: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    facts: List[Dict[str, Any]] = []
+    for item in method_declarations or []:
+        if not isinstance(item, dict):
+            continue
+        symbol = str(item.get("symbol") or "").strip()
+        declaration = str(item.get("declaration") or "").strip()
+        source_refs = item.get("source_refs") if isinstance(item.get("source_refs"), list) else []
+        source_snippets = item.get("source_snippets") if isinstance(item.get("source_snippets"), list) else []
+        if not symbol and not declaration:
+            continue
+        facts.append(
+            {
+                "symbol": symbol,
+                "declaration": declaration,
+                "source_refs": [
+                    {
+                        "path": str(source_ref.get("path") or "").strip(),
+                        "line_range": str(source_ref.get("line_range") or "").strip(),
+                    }
+                    for source_ref in source_refs
+                    if isinstance(source_ref, dict) and str(source_ref.get("path") or "").strip()
+                ],
+                "source_snippets": [
+                    {
+                        "path": str(snippet.get("path") or "").strip(),
+                        "line_range": str(snippet.get("line_range") or "").strip(),
+                        "role": str(snippet.get("role") or "").strip(),
+                        "content": _clip_text(str(snippet.get("content") or ""), 1400),
+                    }
+                    for snippet in source_snippets[:2]
+                    if isinstance(snippet, dict) and (str(snippet.get("path") or "").strip() or str(snippet.get("content") or "").strip())
+                ],
+            }
+        )
+        if len(facts) >= 12:
+            break
+
+    return {
+        "must": [
+            "Verify API signatures, ref/out/% parameters, overloads, enum literals, and property-vs-method form from declarations.",
+            "Use source snippets as the highest-priority evidence for concrete side effects and implementation behavior.",
+        ],
+        "should": [
+            "Use workflow/howto/concept pages for the ordered procedure and API family choice.",
+            "If workflow prose conflicts with declarations or source snippets, follow the code evidence.",
+        ],
+        "may": [
+            "Use normal SDK reasoning for high-level explanation and sample structure when it does not change verified API signatures or source-backed behavior.",
+            "Mark only genuinely missing or risky details as unverified; do not overuse unverified wording for ordinary procedural glue.",
+        ],
+        "facts": facts,
+    }
+
+
 def build_workflow_evidence_pack(
     root: Path,
     *,
@@ -483,14 +538,15 @@ def build_workflow_evidence_pack(
         },
         "bundle_pages": bundle_pages,
         "method_declarations": method_declarations,
+        "answer_grounding": _build_answer_grounding(method_declarations),
         "source_anchors": source_anchors,
         "answer_rules": [
             "Use the workflow as the routing authority.",
             "Use bundled pages for procedural context.",
-            "Use method_declarations.declaration and source_snippets as the signature and behavior allowlist for code examples.",
-            "Preserve ref/out/% parameters, property-vs-method form, and enum names exactly as shown in declarations.",
-            "Do not infer side effects, default layer choice, active/front behavior, convenience overloads, or object relationships unless source_snippets or declarations show them.",
-            "If required signatures or behavior are absent from this pack, state the missing detail as unverified instead of guessing.",
+            "Must verify API signatures, ref/out/% parameters, overloads, enum literals, and property-vs-method form from declarations.",
+            "Should use source snippets for concrete side effects and implementation behavior.",
+            "May use normal SDK reasoning for high-level procedure and sample structure when it does not change verified signatures or source-backed behavior.",
+            "If a required signature or risky behavior is absent from this pack, state only that specific detail as unverified.",
         ],
     }
 

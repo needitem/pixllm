@@ -212,6 +212,33 @@ function summarizeEvidencePackPayload(pack, maxChars = 16000) {
     version: Number(pack.version || 1),
     query: pack.query || '',
     workflow,
+    answer_grounding: pack.answer_grounding && typeof pack.answer_grounding === 'object' && !Array.isArray(pack.answer_grounding)
+      ? {
+          must: Array.isArray(pack.answer_grounding.must) ? pack.answer_grounding.must.slice(0, 6) : [],
+          should: Array.isArray(pack.answer_grounding.should) ? pack.answer_grounding.should.slice(0, 6) : [],
+          may: Array.isArray(pack.answer_grounding.may) ? pack.answer_grounding.may.slice(0, 6) : [],
+          facts: Array.isArray(pack.answer_grounding.facts)
+            ? pack.answer_grounding.facts.slice(0, 12).map((item) => ({
+                symbol: item?.symbol || '',
+                declaration: String(item?.declaration || '').slice(0, 800),
+                source_refs: Array.isArray(item?.source_refs)
+                  ? item.source_refs.slice(0, 4).map((sourceRef) => ({
+                      path: sourceRef?.path || '',
+                      line_range: sourceRef?.line_range || '',
+                    }))
+                  : [],
+                source_snippets: Array.isArray(item?.source_snippets)
+                  ? item.source_snippets.slice(0, 2).map((snippet) => ({
+                      path: snippet?.path || '',
+                      line_range: snippet?.line_range || '',
+                      role: snippet?.role || '',
+                      content: String(snippet?.content || '').slice(0, Math.min(1000, maxChars)),
+                    }))
+                  : [],
+              }))
+            : [],
+        }
+      : null,
     bundle_pages: Array.isArray(pack.bundle_pages)
       ? pack.bundle_pages.slice(0, 4).map((item) => ({
           path: item?.path || '',

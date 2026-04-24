@@ -142,7 +142,10 @@ function transcriptItemTitle(kind: string): string | null {
     case 'model_retry':
       return 'Model retry';
     case 'model_reasoning':
-      return 'Model reasoning';
+    case 'model_reasoning_summary':
+      return 'Reasoning report';
+    case 'tool_use_summary':
+      return 'Evidence report';
     case 'prompt_token_count':
       return 'Prompt token count';
     case 'prompt_token_cache_hit':
@@ -164,6 +167,11 @@ function transcriptItemDetailTitle(kind: string): string {
       return 'Raw model response';
     case 'model_error':
       return 'Model request error';
+    case 'model_reasoning':
+    case 'model_reasoning_summary':
+      return 'Reasoning report';
+    case 'tool_use_summary':
+      return 'Evidence report';
     default:
       return transcriptItemTitle(kind) || 'Transcript detail';
   }
@@ -447,7 +455,13 @@ export function buildExecutionInspectorItems(message: ConversationMessage): Exec
     if (!title) {
       continue;
     }
-    const payload = entry?.payload !== undefined ? entry.payload : entry;
+    const payload = kind === 'model_reasoning'
+      ? {
+          hidden: true,
+          reason: 'internal_reasoning_is_not_grounding_evidence',
+          chars: Number(entry?.chars || 0)
+        }
+      : entry?.payload !== undefined ? entry.payload : entry;
     const attempt = Number(entry?.attempt || 0);
     const subtitleParts = [
       kind.replace(/_/g, ' '),
@@ -462,7 +476,9 @@ export function buildExecutionInspectorItems(message: ConversationMessage): Exec
       tone: transcriptItemTone(kind),
       detailTitle: transcriptItemDetailTitle(kind),
       detail: payload,
-      note: toNonEmptyString(entry?.preview) || toNonEmptyString(entry?.message)
+      note: kind === 'model_reasoning'
+        ? 'Internal model reasoning is hidden. Use tool evidence and final answer for audit.'
+        : toNonEmptyString(entry?.preview) || toNonEmptyString(entry?.message)
     });
   }
 
