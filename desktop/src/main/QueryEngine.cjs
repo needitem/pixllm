@@ -587,7 +587,12 @@ class QueryEngine {
   }
 
   _modelExtraBodyForTurn(controlState = null) {
-    if (!controlState?.workflowAnswerLocked || !/qwen/i.test(toStringValue(this.model))) {
+    const isWikiMode = toStringValue(this.runtime?.requestContext?.mode) === 'wiki';
+    const coverageReady = Boolean(controlState?.wikiEvidenceCoverage?.ready);
+    if (
+      (!isWikiMode && !controlState?.workflowAnswerLocked && !coverageReady)
+      || !/qwen/i.test(toStringValue(this.model))
+    ) {
       return null;
     }
     return {
