@@ -102,21 +102,6 @@ export function executionResultDetail(detail: unknown): unknown {
 }
 
 export function modelDetailPayload(item: ExecutionInspectorItem): unknown {
-  if (item.title === 'Raw assistant output') {
-    const record = isRecord(item.detail) ? item.detail : null;
-    if (!record) return item.detail;
-    const rawText = toNonEmptyString(record.text);
-    return rawText || record;
-  }
-  if (item.title === 'Model request payload') {
-    return item.detail;
-  }
-  if (item.title === 'Model response') {
-    const record = isRecord(item.detail) ? item.detail : null;
-    if (!record) return item.detail;
-    const rawText = toNonEmptyString(record.rawText);
-    return rawText || record.payload || record;
-  }
   if (item.title === 'Model error') {
     return item.detail;
   }
@@ -125,20 +110,8 @@ export function modelDetailPayload(item: ExecutionInspectorItem): unknown {
 
 function transcriptItemTitle(kind: string): string | null {
   switch (String(kind || '').trim()) {
-    case 'raw_assistant_output':
-      return 'Raw assistant output';
-    case 'model_request':
-      return 'Model request payload';
-    case 'model_response':
-      return 'Model response';
     case 'model_error':
       return 'Model error';
-    case 'model_budget':
-      return 'Model budget';
-    case 'model_transport':
-      return 'Model transport';
-    case 'model_tool_calls':
-      return 'Model tool calls';
     case 'model_retry':
       return 'Model retry';
     case 'model_reasoning':
@@ -146,12 +119,6 @@ function transcriptItemTitle(kind: string): string | null {
       return 'Reasoning report';
     case 'tool_use_summary':
       return 'Evidence report';
-    case 'prompt_token_count':
-      return 'Prompt token count';
-    case 'prompt_token_cache_hit':
-      return 'Prompt token cache';
-    case 'prompt_token_fallback':
-      return 'Prompt token fallback';
     default:
       return null;
   }
@@ -159,12 +126,6 @@ function transcriptItemTitle(kind: string): string | null {
 
 function transcriptItemDetailTitle(kind: string): string {
   switch (String(kind || '').trim()) {
-    case 'raw_assistant_output':
-      return 'Raw assistant output';
-    case 'model_request':
-      return 'Raw model request';
-    case 'model_response':
-      return 'Raw model response';
     case 'model_error':
       return 'Model request error';
     case 'model_reasoning':
@@ -199,19 +160,15 @@ export function upsertTranscriptEntry(
 }
 
 export function modelDetailLabel(item: ExecutionInspectorItem): string {
-  if (item.title === 'Raw assistant output') return 'Raw assistant output';
-  if (item.title === 'Model request payload') return 'Request payload';
-  if (item.title === 'Model response') return 'Model response';
   if (item.title === 'Model error') return 'Model error';
   return 'Detail';
 }
 
 export function executionInputLabel(item: ExecutionInspectorItem): string {
-  return item.title === 'Model request payload' ? 'Request payload' : 'Execution input';
+  return 'Execution input';
 }
 
 export function executionResultLabel(item: ExecutionInspectorItem): string {
-  if (item.title === 'Model response') return 'Model response';
   if (item.title === 'Model error') return 'Model error';
   return 'Execution detail';
 }
@@ -227,7 +184,7 @@ export function outputPreviewDetail(detail: unknown): string {
 }
 
 export function executionItemHasOutput(item: ExecutionInspectorItem): boolean {
-  if (item.title !== 'Model request payload' && modelDetailPayload(item) != null) {
+  if (modelDetailPayload(item) != null) {
     return true;
   }
   if (executionResultDetail(item.detail) !== null) {
@@ -243,10 +200,6 @@ export function executionItemHasOutput(item: ExecutionInspectorItem): boolean {
     return true;
   }
   return false;
-}
-
-export function showRawPayloadFallback(item: ExecutionInspectorItem): boolean {
-  return !['Raw assistant output', 'Model request payload', 'Model response', 'Model error'].includes(item.title);
 }
 
 function runTranscriptEntries(message: ConversationMessage): Array<Record<string, unknown>> {
@@ -365,9 +318,9 @@ export function summarizeExecutionMessage(message: ConversationMessage): string 
 
 export function defaultExecutionItemId(items: ExecutionInspectorItem[]): string {
   const preferred =
-    items.find((item) => item.title === 'Raw assistant output')
-    || items.find((item) => item.title === 'Model response')
-    || items.find((item) => item.title === 'Model error')
+    items.find((item) => item.title === 'Model error')
+    || items.find((item) => item.title === 'Evidence report')
+    || items.find((item) => item.title === 'Reasoning report')
     || items[items.length - 1];
   return preferred?.id || '';
 }
@@ -412,19 +365,18 @@ export function buildExecutionInspectorItems(message: ConversationMessage): Exec
     });
   }
 
-  if (message.localSummary || message.localError) {
+  if (message.localError) {
     items.push({
       id: `${message.id}-local-summary`,
-      title: 'Workspace context',
-      subtitle: message.localError ? 'Local loop ended with warnings' : 'Local loop completed',
+      title: 'Local warning',
+      subtitle: 'Local loop ended with warnings',
       badge: 'local',
-      tone: message.localError ? 'danger' : 'success',
-      detailTitle: 'Local context pass',
+      tone: 'danger',
+      detailTitle: 'Local warning',
       detail: {
-        summary: message.localSummary || '',
         error: message.localError || ''
       },
-      note: message.localSummary || message.localError || ''
+      note: message.localError || ''
     });
   }
 
@@ -483,27 +435,6 @@ export function buildExecutionInspectorItems(message: ConversationMessage): Exec
   }
 
   if (message.runSnapshot) {
-    const detail = {
-      run_id: message.runSnapshot.runId,
-      status: message.runSnapshot.status || '',
-      response_type: message.runSnapshot.responseType || '',
-      task_count: message.runSnapshot.tasks.length,
-      approval_count: message.runSnapshot.approvals.length,
-      artifact_count: message.runSnapshot.artifacts.length,
-      approvals: message.runSnapshot.approvals,
-      edit_summaries: message.runSnapshot.editSummaries
-    };
-    items.push({
-      id: `${message.id}-run-summary`,
-      title: 'Run snapshot',
-      subtitle: `${message.runSnapshot.status || 'unknown'} / ${message.runSnapshot.responseType || 'general'}`,
-      badge: 'run',
-      tone: toneClass(message.runSnapshot.status),
-      detailTitle: 'Server run snapshot',
-      detail,
-      diffs: diffViewsFromUnknown(detail)
-    });
-
     for (const task of message.runSnapshot.tasks) {
       for (const step of (task.steps ?? []).filter((entry) => entry.kind === 'tool')) {
         const detail = {

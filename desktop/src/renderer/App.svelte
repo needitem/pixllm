@@ -57,7 +57,6 @@
     modelDetailLabel,
     modelDetailPayload,
     outputPreviewDetail,
-    showRawPayloadFallback,
     summarizeExecutionMessage,
     upsertTranscriptEntry,
     executionInputLabel,
@@ -70,7 +69,6 @@
   } from './lib/execution';
   import {
     buildWorkspaceOptions,
-    compactEndpoint,
     formatDateTime,
     getPathTail,
     getWorkspaceName,
@@ -102,17 +100,6 @@
     updatedAt: string;
   };
 
-  type DesktopAppInfo = {
-    name: string;
-    version: string;
-    buildRevision: string;
-    buildTime: string;
-    buildId: string;
-    isPackaged: boolean;
-    platform: string;
-    dataRoot: string;
-  };
-
   const DEFAULT_SETTINGS: DesktopSettings = {
     serverBaseUrl: 'http://192.168.2.238:8000/api',
     llmBaseUrl: '',
@@ -126,7 +113,6 @@
   let settingsForm: DesktopSettings = { ...DEFAULT_SETTINGS };
   let settingsSaveMessage = '';
   let settingsSaveError = '';
-  let appInfo: DesktopAppInfo | null = null;
 
   let healthStatus = 'unknown';
   let healthMessage = '';
@@ -206,27 +192,19 @@
   $: workspaceName = getWorkspaceName(settings.workspacePath);
   $: workspaceOptions = buildWorkspaceOptions(settings.workspacePath, settings.recentWorkspaces);
   $: selectedSession = sessions.find((session) => session.id === selectedSessionId) || null;
-  $: workspaceFileCount = workspaceFiles.length;
   $: workspaceStatusPaths = extractChangedPathsCached(workspaceStatus);
   $: workspaceDiffPaths = extractChangedPathsCached(workspaceDiff);
   $: workspaceDirtyCount = workspaceStatusPaths.length;
   $: workspaceDiffCount = workspaceDiffPaths.length;
-  $: changedWorkspacePaths = workspaceStatusPaths.slice(0, 5);
   $: selectedSessionTimestamp = formatDateTime(
     selectedSession?.updatedAt || selectedSession?.createdAt || ''
   );
-  $: focusFilePath = selectedFilePath.trim() ? selectedFilePath : localPrimaryFilePath;
-  $: focusFileLabel = focusFilePath ? getPathTail(focusFilePath, 3) : 'No focused file';
   $: workspaceStateLabel = summarizeWorkspaceState(
     settings.workspacePath,
     workspaceDirtyCount,
     workspaceDiffCount
   );
   $: resolvedWikiId = resolveWikiId(settings.wikiId);
-  $: connectionHostLabel = compactEndpoint(settings.serverBaseUrl);
-  $: appBuildLabel = appInfo
-    ? `v${appInfo.version}${appInfo.isPackaged ? '' : ' · dev'}`
-    : 'Desktop shell';
   $: pendingApprovalCount = runApprovals.filter(
     (approval) => String(approval.status || '').toLowerCase() === 'pending'
   ).length;
@@ -1310,7 +1288,6 @@
           ? 'wiki'
           : 'main';
     }
-    appInfo = await desktop.appInfo();
     const loadedSettings = await desktop.loadSettings();
     applyLoadedSettings(loadedSettings);
     await Promise.all([
@@ -1636,23 +1613,8 @@
               <div class="eyebrow">PIXLLM Desktop</div>
               <div class="brand-title">Workspace cockpit</div>
               <div class="muted">
-                Sessions, run telemetry, and workspace context in one focused desktop console.
+                Ask questions, inspect answers, and keep sessions organized.
               </div>
-            </div>
-          </div>
-
-          <div class="summary-strip sidebar-summary-strip">
-            <div class="stat-card">
-              <span>Sessions</span>
-              <strong>{sessions.length}</strong>
-            </div>
-            <div class="stat-card">
-              <span>Changes</span>
-              <strong>{workspaceDirtyCount}</strong>
-            </div>
-            <div class="stat-card">
-              <span>Files</span>
-              <strong>{workspaceFileCount}</strong>
             </div>
           </div>
         </section>
@@ -1731,30 +1693,6 @@
           {/if}
         </section>
 
-        <section class="card sidebar-footer-card">
-          <div class="section-row">
-            <div>
-              <div class="section-title">System</div>
-              <div class="muted small">{appBuildLabel}</div>
-            </div>
-            <div class={`pill ${toneClass(healthStatus)}`}>API {healthStatus}</div>
-          </div>
-
-          <div class="sidebar-meta-list">
-            <div class="sidebar-meta-item">
-              <span>Model</span>
-              <strong>{settings.selectedModel || 'Not set'}</strong>
-            </div>
-            <div class="sidebar-meta-item">
-              <span>Endpoint</span>
-              <strong>{connectionHostLabel || 'No server configured'}</strong>
-            </div>
-            <div class="sidebar-meta-item">
-              <span>Data root</span>
-              <strong>{appInfo ? getPathTail(appInfo.dataRoot, 4) : 'Loading shell info'}</strong>
-            </div>
-          </div>
-        </section>
       </div>
     </aside>
 
@@ -1788,29 +1726,6 @@
                 {showConnectionEditor ? 'Close connection' : 'Connection'}
               </button>
             </div>
-          </div>
-
-          <div class="hero-metrics">
-            <article class="metric-card accent">
-              <span>Current session</span>
-              <strong>{selectedSession?.title || 'Create or select a session'}</strong>
-              <small>{selectedSession ? selectedSessionTimestamp : 'Ready for a fresh thread'}</small>
-            </article>
-            <article class="metric-card">
-              <span>Tracked changes</span>
-              <strong>{workspaceDirtyCount}</strong>
-              <small>{workspaceDiffCount} files in diff snapshot</small>
-            </article>
-            <article class="metric-card">
-              <span>Workspace files</span>
-              <strong>{workspaceFileCount}</strong>
-              <small>{focusFileLabel}</small>
-            </article>
-            <article class="metric-card">
-              <span>Connection</span>
-              <strong>{settings.selectedModel || 'No model selected'}</strong>
-              <small>{connectionHostLabel || 'No server configured'}</small>
-            </article>
           </div>
 
         {#if showConnectionEditor}
@@ -2026,7 +1941,7 @@
                             <div class="activity-panel">
                               <div class="activity-head">
                                 <div class="activity-title-row">
-                                  <span class="muted small">Select a step to inspect raw input and output.</span>
+                                  <span class="muted small">Select a step to inspect useful details.</span>
                                 </div>
                               </div>
                               <div class="activity-list">
@@ -2131,12 +2046,6 @@
                                             {/each}
                                           </div>
                                         {/if}
-                                        {#if showRawPayloadFallback(item) && item.detail != null}
-                                          <details class="activity-raw">
-                                            <summary>Raw payload</summary>
-                                            <pre>{stringifyDetail(item.detail)}</pre>
-                                          </details>
-                                        {/if}
                                       </div>
                                     {/if}
                                   </div>
@@ -2159,84 +2068,6 @@
               </div>
             </section>
 
-            <aside class="insight-rail">
-              <section class="panel insight-panel">
-                <div class="panel-head">
-                  <div>
-                    <div class="section-title">Workspace Snapshot</div>
-                    <div class="muted small">{workspaceStateLabel}</div>
-                  </div>
-                </div>
-
-                <div class="insight-list">
-                  <div class="insight-row">
-                    <span>Path</span>
-                    <strong class="path-emphasis" title={settings.workspacePath || 'Reference mode active'}>
-                      {settings.workspacePath ? getPathTail(settings.workspacePath, 5) : 'Reference mode active'}
-                    </strong>
-                  </div>
-                  <div class="insight-row">
-                    <span>Active session</span>
-                    <strong>{selectedSession?.title || 'No active session'}</strong>
-                  </div>
-                  <div class="insight-row">
-                    <span>Last session update</span>
-                    <strong>{selectedSession ? selectedSessionTimestamp : 'Waiting for the first session'}</strong>
-                  </div>
-                  <div class="insight-row">
-                    <span>Focused file</span>
-                    <strong>{focusFileLabel}</strong>
-                  </div>
-                </div>
-
-                <div class="insight-subsection">
-                  <div class="section-title">Changed Files</div>
-                  {#if changedWorkspacePaths.length > 0}
-                    <div class="file-chip-list">
-                      {#each changedWorkspacePaths as changedPath}
-                        <span class="file-chip">{getPathTail(changedPath, 3)}</span>
-                      {/each}
-                    </div>
-                  {:else}
-                    <div class="empty-state compact-empty">No tracked file changes yet.</div>
-                  {/if}
-                </div>
-              </section>
-
-              <section class="panel insight-panel secondary-panel">
-                <div class="panel-head">
-                  <div>
-                    <div class="section-title">System Detail</div>
-                    <div class="muted small">Connection, build, and runtime shell.</div>
-                  </div>
-                </div>
-
-                <div class="insight-list">
-                  <div class="insight-row">
-                    <span>Endpoint</span>
-                    <strong>{connectionHostLabel || 'No server configured'}</strong>
-                  </div>
-                  <div class="insight-row">
-                    <span>Model</span>
-                    <strong>{settings.selectedModel || 'No model selected'}</strong>
-                  </div>
-                  <div class="insight-row">
-                    <span>Build</span>
-                    <strong>{appBuildLabel}</strong>
-                  </div>
-                  <div class="insight-row">
-                    <span>Data root</span>
-                    <strong title={appInfo?.dataRoot || 'Loading shell info'}>
-                      {appInfo ? getPathTail(appInfo.dataRoot, 4) : 'Loading shell info'}
-                    </strong>
-                  </div>
-                </div>
-
-                {#if healthMessage}
-                  <div class="error-box compact-error">{healthMessage}</div>
-                {/if}
-              </section>
-            </aside>
           </div>
           <section class="composer-dock panel composer-panel">
             <div class="panel-head composer-head">
@@ -3719,7 +3550,6 @@
   }
 
   .sidebar-brand-card,
-  .sidebar-footer-card,
   .workspace-panel {
     align-content: start;
   }
@@ -3760,14 +3590,8 @@
     color: #f8fbff;
   }
 
-  .sidebar-summary-strip {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
   .workspace-switcher,
-  .session-list,
-  .sidebar-meta-list,
-  .insight-list {
+  .session-list {
     display: grid;
     gap: 10px;
   }
@@ -3855,34 +3679,6 @@
     color: rgba(188, 201, 216, 0.6);
   }
 
-  .sidebar-meta-item,
-  .insight-row {
-    display: grid;
-    gap: 6px;
-    padding: 14px 16px;
-    border-radius: 18px;
-    border: 1px solid rgba(148, 163, 184, 0.12);
-    background: rgba(8, 14, 24, 0.76);
-  }
-
-  .sidebar-meta-item span,
-  .insight-row span,
-  .metric-card span {
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    color: rgba(188, 201, 216, 0.64);
-  }
-
-  .sidebar-meta-item strong,
-  .insight-row strong {
-    font-size: 14px;
-    line-height: 1.45;
-    overflow-wrap: anywhere;
-    color: #f5f9ff;
-  }
-
   .hero-banner {
     display: flex;
     align-items: flex-start;
@@ -3924,43 +3720,6 @@
     justify-content: flex-end;
   }
 
-  .hero-metrics {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 14px;
-  }
-
-  .metric-card {
-    display: grid;
-    gap: 8px;
-    min-height: 128px;
-    padding: 18px;
-    border-radius: 22px;
-    border: 1px solid rgba(148, 163, 184, 0.12);
-    background:
-      linear-gradient(180deg, rgba(12, 19, 32, 0.94) 0%, rgba(8, 14, 24, 0.92) 100%);
-  }
-
-  .metric-card.accent {
-    border-color: rgba(20, 184, 166, 0.18);
-    background:
-      linear-gradient(135deg, rgba(20, 184, 166, 0.18) 0%, rgba(14, 165, 233, 0.14) 100%),
-      linear-gradient(180deg, rgba(12, 19, 32, 0.96) 0%, rgba(8, 14, 24, 0.94) 100%);
-  }
-
-  .metric-card strong {
-    font-size: 22px;
-    line-height: 1.15;
-    letter-spacing: -0.03em;
-    color: #f8fbff;
-  }
-
-  .metric-card small {
-    font-size: 12px;
-    line-height: 1.55;
-    color: rgba(188, 201, 216, 0.66);
-  }
-
   .panel {
     display: grid;
     gap: 14px;
@@ -3984,7 +3743,7 @@
 
   .studio-grid {
     display: grid;
-    grid-template-columns: minmax(0, 1.65fr) minmax(320px, 0.95fr);
+    grid-template-columns: minmax(0, 1fr);
     gap: 18px;
     min-height: clamp(420px, 54vh, 680px);
   }
@@ -4013,13 +3772,6 @@
     line-height: 1.7;
   }
 
-  .insight-rail {
-    display: grid;
-    gap: 16px;
-    min-height: 0;
-  }
-
-  .insight-panel,
   .composer-panel {
     align-content: start;
   }
@@ -4221,36 +3973,7 @@
     line-height: 1.45;
   }
 
-  .insight-subsection {
-    display: grid;
-    gap: 10px;
-  }
-
-  .file-chip-list {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-  }
-
-  .file-chip {
-    display: inline-flex;
-    align-items: center;
-    max-width: 100%;
-    padding: 8px 12px;
-    border-radius: 999px;
-    border: 1px solid rgba(148, 163, 184, 0.12);
-    background: rgba(15, 23, 42, 0.9);
-    font-size: 12px;
-    color: rgba(233, 242, 253, 0.82);
-    overflow-wrap: anywhere;
-  }
-
-  .path-emphasis {
-    overflow-wrap: anywhere;
-  }
-
-  .compact-empty,
-  .compact-error {
+  .compact-empty {
     padding: 12px 14px;
     border-radius: 16px;
   }
@@ -4405,12 +4128,6 @@
     }
   }
 
-  @media (max-width: 1520px) {
-    .hero-metrics {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-  }
-
   @media (max-width: 1360px) {
     .main-surface {
       width: 100%;
@@ -4419,10 +4136,6 @@
     .studio-grid {
       grid-template-columns: 1fr;
       min-height: 0;
-    }
-
-    .insight-rail {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
     .wiki-workspace-grid {
@@ -4443,11 +4156,6 @@
     .left-pane,
     .main-pane {
       padding: 20px;
-    }
-
-    .hero-metrics,
-    .insight-rail {
-      grid-template-columns: 1fr;
     }
 
     .wiki-toolbar {
@@ -4483,11 +4191,6 @@
     .workspace-item-top {
       flex-direction: column;
       align-items: flex-start;
-    }
-
-    .sidebar-summary-strip,
-    .hero-metrics {
-      grid-template-columns: 1fr;
     }
 
     .composer-actions {
