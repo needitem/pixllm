@@ -165,7 +165,7 @@ function markdownSectionByHeading(value = '', heading = '') {
 }
 
 function summarizeWorkflowGuidanceForModel(content = '', maxChars = 1100) {
-  const sections = ['Primary Usage Buckets', 'Practical Answer Shape', 'Answering Guidance']
+  const sections = ['Primary Usage Buckets', 'Practical Answer Shape']
     .map((heading) => {
       const section = stripFencedCodeBlocks(markdownSectionByHeading(content, heading));
       return section ? `## ${heading}\n${section}` : '';
@@ -182,7 +182,6 @@ function summarizeBundleGuidanceForModel(bundlePages = [], maxChars = 2200) {
     'Primary Usage Buckets',
     'Practical Answer Shape',
     'Common Recipes',
-    'Answering Guidance',
   ];
   const sections = [];
   for (const page of (Array.isArray(bundlePages) ? bundlePages : []).slice(0, 3)) {
@@ -222,32 +221,16 @@ function csharpInteropHints(declaration = '') {
   if (!/\[OutAttribute\]/.test(text) && /\^\s*%|%\s+\w+/.test(text)) {
     hints.push('C# call hint: non-out by-ref object parameters should be passed with ref.');
   }
-  if (/eIOCreateXLDMode/.test(text)) {
-    hints.push('C# call hint: use an enum literal shown in evidence, or keep the value as a caller-supplied variable; do not invent enum members.');
-  }
   return hints;
 }
 
 function summarizeAnswerGroundingForModel(pack = {}, {
-  includeRules = true,
   includeSourceRefs = true,
 } = {}) {
   const grounding = pack?.answer_grounding && typeof pack.answer_grounding === 'object' && !Array.isArray(pack.answer_grounding)
     ? pack.answer_grounding
     : {};
   const lines = ['answer_grounding:'];
-  const must = Array.isArray(grounding.must) ? grounding.must.map((item) => toStringValue(item)).filter(Boolean) : [];
-  const should = Array.isArray(grounding.should) ? grounding.should.map((item) => toStringValue(item)).filter(Boolean) : [];
-  const may = Array.isArray(grounding.may) ? grounding.may.map((item) => toStringValue(item)).filter(Boolean) : [];
-  if (includeRules && must.length > 0) {
-    lines.push(`must: ${must.slice(0, 6).join('; ')}`);
-  }
-  if (includeRules && should.length > 0) {
-    lines.push(`should: ${should.slice(0, 6).join('; ')}`);
-  }
-  if (includeRules && may.length > 0) {
-    lines.push(`may: ${may.slice(0, 6).join('; ')}`);
-  }
   const facts = Array.isArray(grounding.facts) && grounding.facts.length > 0
     ? grounding.facts
     : (Array.isArray(pack.method_declarations) ? pack.method_declarations : []);
@@ -355,7 +338,6 @@ function summarizeMethodDeclarationsForModel(pack = {}, {
 function summarizeEvidencePackForModel(pack = {}, {
   includeContent = true,
   includeBundlePages = true,
-  includeRules = true,
   includeSourceRefs = true,
   includeSnippets = true,
   includeSourceAnchors = true,
@@ -384,12 +366,6 @@ function summarizeEvidencePackForModel(pack = {}, {
     if (requiredSymbols.length > 0) {
       lines.push(`required_symbols: ${requiredSymbols.slice(0, 32).join(', ')}`);
     }
-    const verificationRules = Array.isArray(workflow.verification_rules)
-      ? workflow.verification_rules.map((item) => toStringValue(item)).filter(Boolean)
-      : [];
-    if (includeRules && verificationRules.length > 0) {
-      lines.push(`verification_rules: ${verificationRules.slice(0, 8).join('; ')}`);
-    }
     const workflowGuidance = includeWorkflowGuidance
       ? summarizeWorkflowGuidanceForModel(workflow.content, includeContent ? 1100 : 900)
       : '';
@@ -397,13 +373,6 @@ function summarizeEvidencePackForModel(pack = {}, {
       lines.push('workflow_guidance:');
       lines.push(workflowGuidance);
     }
-  }
-
-  const answerRules = Array.isArray(pack.answer_rules)
-    ? pack.answer_rules.map((item) => toStringValue(item)).filter(Boolean)
-    : [];
-  if (includeRules && answerRules.length > 0) {
-    lines.push(`answer_rules: ${answerRules.slice(0, 8).join('; ')}`);
   }
 
   if (includeBundlePages && bundlePages.length > 0) {
@@ -423,7 +392,7 @@ function summarizeEvidencePackForModel(pack = {}, {
   }
 
   if (includeAnswerGrounding) {
-    lines.push(...summarizeAnswerGroundingForModel(pack, { includeRules, includeSourceRefs }));
+    lines.push(...summarizeAnswerGroundingForModel(pack, { includeSourceRefs }));
   }
   lines.push(...summarizeMethodDeclarationsForModel(pack, {
     onlyMissingFacts: Array.isArray(pack?.answer_grounding?.facts) && pack.answer_grounding.facts.length > 0,
@@ -468,7 +437,6 @@ function summarizeEvidencePacksForModel(packs = [], query = '') {
     lines.push(...summarizeEvidencePackForModel(pack, {
       includeContent: false,
       includeBundlePages: false,
-      includeRules: false,
       includeSourceRefs: false,
       includeSnippets: false,
       includeSourceAnchors: false,

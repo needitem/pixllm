@@ -59,7 +59,6 @@ function compactWorkflowContentForTrace(value = '', maxChars = 4200) {
   const prioritySections = [
     'Primary Usage Buckets',
     'Practical Answer Shape',
-    'Answering Guidance',
   ]
     .map((heading) => markdownSectionByHeading(text, heading))
     .filter(Boolean);
@@ -251,7 +250,6 @@ function summarizeEvidencePackPayload(pack, maxChars = 16000) {
         workflow_family: pack.workflow.workflow_family || '',
         output_shape: pack.workflow.output_shape || '',
         required_symbols: Array.isArray(pack.workflow.required_symbols) ? pack.workflow.required_symbols.slice(0, 32) : [],
-        verification_rules: Array.isArray(pack.workflow.verification_rules) ? pack.workflow.verification_rules.slice(0, 16) : [],
         content: compactWorkflowContentForTrace(pack.workflow.content || '', Math.min(4200, maxChars)),
       }
     : null;
@@ -261,9 +259,6 @@ function summarizeEvidencePackPayload(pack, maxChars = 16000) {
     workflow,
     answer_grounding: pack.answer_grounding && typeof pack.answer_grounding === 'object' && !Array.isArray(pack.answer_grounding)
       ? {
-          must: Array.isArray(pack.answer_grounding.must) ? pack.answer_grounding.must.slice(0, 6) : [],
-          should: Array.isArray(pack.answer_grounding.should) ? pack.answer_grounding.should.slice(0, 6) : [],
-          may: Array.isArray(pack.answer_grounding.may) ? pack.answer_grounding.may.slice(0, 6) : [],
           facts: Array.isArray(pack.answer_grounding.facts)
             ? pack.answer_grounding.facts.slice(0, 24).map((item) => ({
                 symbol: item?.symbol || '',
@@ -326,7 +321,6 @@ function summarizeEvidencePackPayload(pack, maxChars = 16000) {
         })
       : [],
     source_anchors: Array.isArray(pack.source_anchors) ? pack.source_anchors.slice(0, 32) : [],
-    answer_rules: Array.isArray(pack.answer_rules) ? pack.answer_rules.slice(0, 8) : [],
   };
 }
 

@@ -105,14 +105,18 @@ function getLocalBaseTools(limits = {}) {
       async call(input, context) {
         const pattern = toStringValue(input.pattern || input.glob);
         const regex = wildcardToRegExp(pattern);
+        const limit = toPositiveInt(input.limit, resolved.maxListLimit);
         const result = await listWorkspaceFiles(context.workspacePath, {
-          limit: toPositiveInt(input.limit, resolved.maxListLimit),
+          limit: resolved.maxListLimit,
         });
         const items = Array.isArray(result?.items) ? result.items : [];
         return {
           ok: true,
           pattern,
-          items: regex ? items.filter((item) => regex.test(toStringValue(item?.path).replace(/\\/g, '/'))) : items,
+          items: (regex
+            ? items.filter((item) => regex.test(toStringValue(item?.path).replace(/\\/g, '/')))
+            : items
+          ).slice(0, limit),
         };
       },
     }),

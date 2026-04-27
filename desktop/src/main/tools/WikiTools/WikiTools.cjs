@@ -68,9 +68,6 @@ function normalizeEvidencePage(item = {}) {
     required_symbols: Array.isArray(item?.required_symbols)
       ? item.required_symbols.map((value) => toStringValue(value)).filter(Boolean)
       : [],
-    verification_rules: Array.isArray(item?.verification_rules)
-      ? item.verification_rules.map((value) => toStringValue(value)).filter(Boolean)
-      : [],
   };
 }
 
@@ -206,9 +203,6 @@ function normalizeEvidencePack(pack = {}) {
       : [],
     source_anchors: Array.isArray(pack.source_anchors)
       ? pack.source_anchors.map((value) => toStringValue(value)).filter(Boolean)
-      : [],
-    answer_rules: Array.isArray(pack.answer_rules)
-      ? pack.answer_rules.map((value) => toStringValue(value)).filter(Boolean)
       : [],
     answer_grounding: normalizeAnswerGrounding(pack.answer_grounding),
   });

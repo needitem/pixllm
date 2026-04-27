@@ -420,12 +420,7 @@ async function runQwenAgentBridge({
       .filter((message) => message.content),
     tools: normalizeToolDefinitions(toolDefinitions),
     tool_bridge_url: toolBridge.url,
-    wiki_mode: activeToolNames.includes('wiki_search'),
     max_llm_calls: Math.max(1, Math.min(20, Number(maxLlmCalls || 20))),
-    finalize_after_tools: true,
-    always_finalize_after_tools: activeToolNames.includes('wiki_search'),
-    final_context_chars: Number(process.env.PIXLLM_QWEN_AGENT_FINAL_CONTEXT_CHARS || 24000),
-    final_context_item_chars: Number(process.env.PIXLLM_QWEN_AGENT_FINAL_CONTEXT_ITEM_CHARS || 6000),
   };
 
   let stdoutBuffer = '';

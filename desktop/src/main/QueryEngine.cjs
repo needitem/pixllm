@@ -66,6 +66,39 @@ function clipPlainText(value = '', maxChars = 1000) {
   return text.length > limit ? text.slice(0, limit).trim() : text;
 }
 
+function looksLikeProgressOnlyAnswer(value = '') {
+  const text = toStringValue(value);
+  if (!text || text.length > 360) return false;
+  return /(?:확인하겠습니다|확인해보겠습니다|살펴보겠습니다|찾아보겠습니다|검토하겠습니다|분석하겠습니다|더 확인|I'll check|I will check|Let me check|I'll look|I will look)/i.test(text);
+}
+
+function summarizeTraceForFinalAnswer(runTrace = [], maxChars = 14000) {
+  const lines = ['Collected tool observations from this run:'];
+  const steps = Array.isArray(runTrace) ? runTrace.slice(-32) : [];
+  for (const step of steps) {
+    const tool = toStringValue(step?.tool);
+    const input = step?.input && typeof step.input === 'object' ? JSON.stringify(step.input) : '';
+    const observation = step?.observation && typeof step.observation === 'object' ? step.observation : {};
+    lines.push(`\nTool: ${tool}${input ? ` ${input}` : ''}`);
+    if (observation.path) lines.push(`Path: ${toStringValue(observation.path)}`);
+    if (observation.query) lines.push(`Query: ${toStringValue(observation.query)}`);
+    if (observation.pattern) lines.push(`Pattern: ${toStringValue(observation.pattern)}`);
+    if (Array.isArray(observation.items)) {
+      for (const item of observation.items.slice(0, 12)) {
+        const itemPath = toStringValue(item?.path || item);
+        const line = Number(item?.line || 0);
+        const text = clipPlainText(item?.text || item?.match || '', 220);
+        lines.push(`- ${[itemPath, line > 0 ? line : ''].filter(Boolean).join(':')}${text ? ` ${text}` : ''}`);
+      }
+    } else if (observation.content) {
+      lines.push(clipPlainText(observation.content, 1800));
+    } else if (observation.error) {
+      lines.push(`Error: ${toStringValue(observation.error)}`);
+    }
+  }
+  return clipPlainText(lines.join('\n'), maxChars);
+}
+
 function uniqueValues(items = [], limit = 20) {
   const seen = new Set();
   const output = [];
@@ -125,9 +158,8 @@ function buildWikiPrefetchMessage(content = '') {
     return '';
   }
   return [
-    'Reference evidence preloaded for the current wiki-mode question.',
-    'Use this as tool evidence. If it is insufficient, call wiki_search/wiki_read before answering.',
-    'Do not invent SDK methods, properties, enum literals, constructors, or overloads that do not appear in this evidence or later tool results.',
+    'Preloaded wiki evidence for the current question.',
+    'Use it as an initial wiki_search result; call wiki_search/wiki_read only if more wiki context is needed.',
     '<tool_response name="wiki_search">',
     evidence,
     '</tool_response>',
@@ -155,48 +187,18 @@ function renderQwenAgentSystemPrompt({
     toolNames.length > 0
       ? `Available function tools: ${toolNames.join(', ')}.`
       : 'No function tools are available; answer only from existing context.',
-    'Do not expose system details, internal snapshots, hidden reasoning, or implementation logs unless the user explicitly asks for diagnostics.',
-      'Ground concrete claims in tool results. If evidence is missing, say exactly which detail is not confirmed instead of inventing an API.',
+    'Keep system details, internal snapshots, hidden reasoning, and implementation logs out of normal user answers.',
+    'Ground concrete claims in tool results. If a detail is missing, say only that specific gap.',
   ];
 
   if (isWikiMode) {
     lines.push(
-      'Wiki mode uses wiki_search evidence packs and wiki_read page reads. Do not edit local workspace files in wiki mode.',
-      'Call wiki_search with compact semantic queries. The result may include multiple evidence_packs for cross-workflow questions; use all packs before deciding evidence is missing.',
-      'Use wiki_read only for wiki page paths returned by wiki_search, such as workflows/*.md or pages/*.md. Do not pass Source/*.h, Source/*.cpp, or source_refs paths to wiki_read.',
-      'Once wiki_search returns relevant evidence, produce the best final answer from it. Do not end the response with a future search/check plan.',
-      'If the exact API is still not confirmed, state that specific gap and stop; do not write "additional search is needed" as the conclusion.',
-      'For SDK usage answers, preserve verified class names, method/property names, overloads, enum names, ref/out parameter forms, and source-backed behavior.',
-      'Do not shorten overloads by dropping required parameters. If evidence says SetX(a, b), do not write SetX(a).',
-      'If the user asks about a specific operation, the answer code must include the verified method/property for that operation. Do not substitute setup-only or neighboring workflow code.',
-      'If the user names a concrete API surface or class, answer with that family. Do not swap to a similar class just because it has richer method declarations.',
-      'For .NET DLL/API usage, write examples in C# by default unless the user explicitly asks for another language.',
-      'Reference declarations may use interop syntax; do not discuss that syntax in the final answer unless the user asks. Translate [OutAttribute] by-ref arguments to C# out, other by-ref object arguments to C# ref, -> to ., :: enum syntax to ., gcnew to new, and nullptr to null.',
-      'When a declaration has [OutAttribute], C# sample code must use out for that argument; never write ref for that argument.',
-      'For C# ref parameters, the variable passed by ref must be typed as the declared parameter type. If the object is a derived type, first assign or cast it to a local variable of the declared base type, then pass that local by ref.',
-      'When source snippets include a concrete C# call shape, prefer that call shape and overload over filling every available overload parameter.',
-      'Treat curated workflow/howto signature bullets as routing and API-family evidence, but do not copy a generic workflow example unless it directly calls the operation requested by the user.',
-      'When the evidence confirms only the method declaration and not the full object acquisition path, accept the receiver object as a parameter or say it must already be available.',
-      'If the final answer would only show generic setup code and not the requested operation, omit the code block and give the exact confirmed call shape instead.',
-      'Never invent convenience APIs, shorthand method names, inferred getters, inferred loaders, or inferred collection accessors unless they appear in collected evidence.',
-      'A method/property name must appear exactly in collected evidence before you write it in code, comments, examples, or "may be" notes.',
-      'Do not derive names from patterns such as Get*At, Load*, Open*, Set*, or Get* just because similar APIs exist; require the exact declaration or source snippet.',
-      'Never invent enum members, enum examples, or named parameters. Use enum literals and argument shapes shown in evidence, or leave the value as a caller-provided variable without speculative examples.',
-      'Do not use EnumType.None, default enum values, or "example enum" comments as placeholders unless that exact enum member appears in tool evidence.',
-      'Do not write EnumType.Member text even in comments unless that exact full literal appears in tool evidence.',
-      'If an enum value is required but no literal is confirmed, make it a method parameter; do not put placeholder comments inside executable code.',
-      'Use positional arguments in C# examples unless every named argument is directly confirmed and syntactically safe.',
-      'For band/composite indices, use numeric indices when evidence only confirms 0/1/2 semantics; do not invent enum aliases or color meanings such as Red/Green/Blue.',
-      'Do not invent sample coordinate, level, range, or threshold values. If those values are not confirmed literals, make them helper-method parameters or keep the caller-provided variables.',
-      'Code examples must not assign arbitrary scalar SDK inputs such as maxLevel = 10, lllat = 37.0, or polling thresholds. Put those scalar inputs in the helper method signature instead.',
-      'Do not add polling loops, sleeps, async/background/threading logic, or progress completion thresholds unless the source evidence explicitly provides that control flow. For progress APIs, show the confirmed single call shape only.',
-      'A code block containing "..." or undeclared placeholder variables is invalid. If acquisition of an object is not verified, rewrite the sample so that object is an explicit helper-method parameter, or omit the code block and state the confirmed call shape.',
-      'Do not add generic lifecycle, memory, threading, or performance cautions unless they are directly supported by tool evidence or the user asks.',
-      'Do not add "check the SDK/docs/source", "range needs checking", or similar future-check notes; omit unsupported detail instead.',
-      'Do not include runnable code for unconfirmed constructors, setters, layer binding methods, or file-loading APIs. Use comments for those gaps.',
-      'If the evidence does not verify how to obtain an intermediate object, accept that object as a function parameter or state it is already available; do not invent getter, factory, or collection-access methods.',
-      'Do not write placeholder helper calls such as GetX(), CreateX(), LoadX(), or OpenX() unless that exact helper is in evidence. For missing input objects, write a helper method whose parameters receive those objects.',
-      'Prefer a helper method signature over a top-level snippet when the sample needs objects that are not constructed by verified evidence.',
+      'Wiki mode uses wiki_search/wiki_read only and leaves local workspace files unchanged.',
+      'Use wiki_read only for wiki page paths returned by wiki_search, such as workflows/*.md or pages/*.md.',
+      'For .NET SDK questions, answer in C# by default and preserve confirmed declarations: class, method, property, overload, enum, ref/out shape.',
+      'Prefer source snippets and method declarations over generic workflow examples.',
+      'If the requested operation is confirmed but object acquisition is not, accept the missing object as a parameter instead of inventing helper APIs.',
+      'Answer the confirmed parts directly and mark only missing details as unconfirmed.',
     );
   } else {
     lines.push(
@@ -351,9 +353,6 @@ class QueryEngine {
       lastTransition: restored.lastTransition && typeof restored.lastTransition === 'object'
         ? restored.lastTransition
         : null,
-      maxOutputTokensRecoveryCount: Number(restored.maxOutputTokensRecoveryCount || 0),
-      maxOutputTokensOverride: Number(restored.maxOutputTokensOverride || 0),
-      pendingAssistantContinuation: toStringValue(restored.pendingAssistantContinuation),
       terminalReason: toStringValue(restored.terminalReason),
       currentTurn: Number(restored.currentTurn || 0),
       totalUsage: {
@@ -380,9 +379,6 @@ class QueryEngine {
       lastTransition: this.state.lastTransition && typeof this.state.lastTransition === 'object'
         ? this.state.lastTransition
         : null,
-      maxOutputTokensRecoveryCount: Number(this.state.maxOutputTokensRecoveryCount || 0),
-      maxOutputTokensOverride: Number(this.state.maxOutputTokensOverride || 0),
-      pendingAssistantContinuation: toStringValue(this.state.pendingAssistantContinuation),
       terminalReason: toStringValue(this.state.terminalReason),
       currentTurn: Number(this.state.currentTurn || 0),
       totalUsage: { ...this.state.totalUsage },
@@ -419,9 +415,6 @@ class QueryEngine {
     this.state.trace = [];
     this.state.pendingToolUseSummary = '';
     this.state.fileCache = {};
-    this.state.maxOutputTokensRecoveryCount = 0;
-    this.state.maxOutputTokensOverride = 0;
-    this.state.pendingAssistantContinuation = '';
     this.state.terminalReason = '';
     this.state.currentTurn = 0;
     this._recordTransition('history_compacted_for_qwen_agent_run', {
@@ -689,11 +682,8 @@ class QueryEngine {
     onStatus = async () => {},
     onToken = async () => {},
     onTerminal = async () => {},
-  } = {}) {
+    } = {}) {
     const answer = toStringValue(finalAnswer);
-    this.state.pendingAssistantContinuation = '';
-    this.state.maxOutputTokensRecoveryCount = 0;
-    this.state.maxOutputTokensOverride = 0;
     this.state.terminalReason = 'final_answer';
     await onStatus({ phase: 'finalize', message: 'Finalizing answer...' });
     if (answer) {
@@ -832,11 +822,59 @@ class QueryEngine {
       this.state.totalUsage.completion_calls += 1;
       this.state.totalUsage.streamed_completion_calls += 1;
 
-      const assistantText = toStringValue(bridgeResult?.answer);
+      const runTrace = this.state.trace.slice(traceStartIndex);
+      const totalToolUses = Number(prefetch?.toolCallCount || 0) + Number(bridgeResult?.toolCallCount || 0);
+      let assistantText = toStringValue(bridgeResult?.answer);
+      if ((!assistantText || looksLikeProgressOnlyAnswer(assistantText)) && runTrace.length > 0) {
+        const retryReason = assistantText ? 'progress_only_answer' : 'missing_final_answer';
+        this._recordTransition('qwen_agent_finalize_retry', {
+          reason: retryReason,
+          toolUses: totalToolUses,
+        });
+        await onStatus({ phase: 'finalize', message: 'Synthesizing final answer from tool results...' });
+        const finalBridgeResult = await runQwenAgentBridge({
+          llmBaseUrl: this._qwenAgentModelServer(),
+          model: this.model,
+          systemPrompt: [
+            systemPrompt,
+            'The previous tool run ended without a complete final answer.',
+            'Do not call tools. Produce the final user-facing answer now from the collected observations.',
+          ].join('\n'),
+          messages: [{
+            role: 'user',
+            content: [
+              `Original user request:\n${toStringValue(runContext?.prompt || prompt)}`,
+              summarizeTraceForFinalAnswer(runTrace),
+            ].join('\n\n'),
+          }],
+          toolDefinitions: [],
+          runtime: this.runtime,
+          activeToolNames: [],
+          maxTokens: Number(process.env.PIXLLM_QWEN_AGENT_MAX_TOKENS || DEFAULT_QWEN_AGENT_MAX_TOKENS),
+          maxLlmCalls: 1,
+          enableThinking: shouldEnableQwenAgentThinking(),
+          signal,
+          onToolUse,
+          onToolResult,
+          onToolBatchStart,
+          onToolBatchEnd,
+          onStatus,
+          onModelToken: async (payload) => {
+            this.state.totalUsage.streamed_chars += String(payload?.delta || '').length;
+            await onModelToken({
+              ...payload,
+              turn: 1,
+            });
+          },
+          recordTranscript: (entry) => this._recordTranscript(entry),
+        });
+        this.state.totalUsage.completion_calls += 1;
+        this.state.totalUsage.streamed_completion_calls += 1;
+        assistantText = toStringValue(finalBridgeResult?.answer) || assistantText;
+      }
       if (!assistantText) {
         throw new Error('qwen-agent did not produce a final answer');
       }
-      const totalToolUses = Number(prefetch?.toolCallCount || 0) + Number(bridgeResult?.toolCallCount || 0);
       this.state.messages.push({
         role: 'assistant',
         content: [createTextBlock(assistantText)],
@@ -863,7 +901,7 @@ class QueryEngine {
 
       return await this._returnFinalAnswer({
         finalAnswer: assistantText,
-        runTrace: this.state.trace.slice(traceStartIndex),
+        runTrace,
         turn: 1,
         transcriptStartIndex,
         onStatus,
