@@ -32,8 +32,8 @@ tags:
 
 ## Primary Usage Buckets
 - `provider group 구성`: `AddPBIFile`, `AddXDMCompManager`, `AddXNS`, `Clear`
-- `PBI export`: `SetSource`, `Export2PBI`, `GetPercent`, `Cancel`
-- `PBE export`: `SetSource`, `Export2PBE`, `GetPercent`, `Cancel`
+- `PBI export`: `XPBIProviderExporter.SetSource`는 `XDMCompManager`와 ref/out 범위 값을 받음; provider group 자체를 `SetSource(group)`로 넘기지 않음
+- `PBE export`: `XPBEProviderExporter.SetSource`, `Export2PBE`, `GetPercent`, `Cancel`
 - `결과 상태 확인`: `GetPercent`와 `Cancel`을 짝으로 설명해 장시간 export 제어 흐름을 답합니다.
 - `view와의 경계`: 데이터셋을 어떤 view에 보여줄지는 `PlanetView` 또는 `MilmapView`, provider/export 파이프라인은 `DFS`로 분리합니다.
 
@@ -43,6 +43,12 @@ tags:
 - Use the usage buckets and boundary notes to narrow the task to the smallest relevant slice.
 - Read the linked howto, concept, and source pages from the Knowledge Bundle before giving a procedural answer.
 - Use `Verified Facts` for exact method names and declarations; if this page is overview-only, say that and lean on the related pages for concrete steps.
+
+## Practical Answer Shape
+- `provider group 등록`: `XPBIProviderGroup.AddXDMCompManager(providerName, ref compManager)`는 그룹 등록 단계입니다.
+- `PBI export 입력`: `XPBIProviderExporter.SetSource(ref compManager, ref minLevel, ref maxLevel, ref lllat, ref lllon, ref urlat, ref urlon)` 후 `Export2PBI(...)`를 호출합니다.
+- `PBE export 입력`: `XPBEProviderExporter.SetSource(...)`로 DEM 입력과 범위/레벨을 계산한 뒤 `Export2PBE(...)`를 호출합니다.
+- `진행률`: `GetPercent(ref allTileNum, ref proTileNum)`로 polling하고 중단은 `Cancel()`을 사용합니다.
 
 ## Knowledge Bundle
 ```yaml
@@ -68,8 +74,8 @@ bundle_pages:
 
 <!-- GENERATED:RUNTIME_STATUS:START -->
 ## Runtime Ingest Status
-- Auto-generated from raw source ingest at `2026-04-24T01:05:26Z`.
-- Resolved required symbols: `9/9`
+- Auto-generated from raw source ingest at `2026-04-27T01:07:34Z`.
+- Resolved required symbols: `11/11`
 - Linked modules:
   - `NXDLdfs`
 - Missing required symbols: `0`
@@ -82,9 +88,11 @@ required_symbols:
   - XPBIProviderGroup.AddPBIFile
   - XPBIProviderGroup.AddXDMCompManager
   - XPBIProviderGroup.AddXNS
+  - XPBIProviderExporter.SetSource
   - XPBIProviderExporter.Export2PBI
   - XPBIProviderExporter.GetPercent
   - XPBIProviderExporter.Cancel
+  - XPBEProviderExporter.SetSource
   - XPBEProviderExporter.Export2PBE
   - XPBEProviderExporter.GetPercent
   - XPBEProviderExporter.Cancel

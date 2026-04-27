@@ -1,68 +1,221 @@
 const { createLocalToolCollection, createWikiToolCollection } = require('./tools.cjs');
-const { streamModelCompletion, countPromptTokens } = require('./services/model/streamModelCompletion.cjs');
 const { ToolRuntime } = require('./services/tools/ToolRuntime.cjs');
-const { StreamingToolExecutor } = require('./services/tools/StreamingToolExecutor.cjs');
+const { runQwenAgentBridge } = require('./services/model/QwenAgentBridge.cjs');
 const { loadProjectContext } = require('./utils/projectContext/loadProjectContext.cjs');
 const { buildProjectContextPrompt } = require('./utils/projectContext/buildProjectContextPrompt.cjs');
 const {
   createTextBlock,
-  createToolUseBlock,
   normalizeMessageBlocks,
   serializeBlocks,
-  extractTextFromBlocks,
-  toolUseBlocks,
   toStringValue,
 } = require('./query/blocks.cjs');
-const {
-  parseAssistantResponse,
-  extractStreamingToolCalls,
-  flattenMessagesForModel,
-  buildSystemPrompt,
-} = require('./services/model/QwenAdapter.cjs');
 const { loadAgentState, saveAgentState } = require('./state/agentStateStore.cjs');
 const { listTasks, listTerminalCaptures } = require('./tasks/taskRuntime.cjs');
+const { readObservationsFromTrace } = require('./queryTrace.cjs');
 const {
-  readObservationsFromTrace,
-  failedSteps,
-} = require('./queryTrace.cjs');
-const {
-  buildFallbackAnswer,
   buildUserBlocks,
   describeTools,
-  deriveLoopControlState,
-  estimateTokens,
-  hasSubstantiveUserQueryMessage,
-  hashText,
   initialState,
-  isLengthFinishReason,
-  joinAnswerFragments,
   normalizeUsage,
   previewText,
-  resolveFallbackTerminalReason,
-  resolveModelContextWindow,
-  safeJsonParseObject,
-  toolUseCacheKey,
   toSerializableTraceStep,
 } = require('./queryEngineSupport.cjs');
 
-const MAX_TURNS = 14;
-const MAX_CONSECUTIVE_PARSE_ERRORS = 2;
-const MAX_MODEL_RETRIES = 2;
-const MAX_OUTPUT_TOKENS_RECOVERY_LIMIT = 3;
-const ESCALATED_MAX_TOKENS = 6400;
-const LOCKED_ANSWER_MAX_TOKENS = 4096;
-const DEFAULT_MODEL_OUTPUT_TOKENS = 1600;
-const MIN_DYNAMIC_OUTPUT_TOKENS = 64;
-const REQUEST_TOKEN_SAFETY_MARGIN = 64;
-const MAX_FILE_CACHE_ENTRIES = 24;
-const MAX_PROMPT_TOKEN_CACHE_ENTRIES = 32;
 const MAX_TRANSITIONS = 64;
 const MAX_HISTORY_MESSAGES_FOR_NEW_RUN = 8;
 const MAX_HISTORY_TEXT_CHARS = 3000;
-const NO_WORKSPACE_TOOL_NAMES = Object.freeze([
+const DEFAULT_QWEN_AGENT_MAX_TOKENS = 4096;
+const DEFAULT_QWEN_AGENT_WIKI_MAX_LLM_CALLS = 5;
+const DEFAULT_QWEN_AGENT_LOCAL_MAX_LLM_CALLS = 12;
+const WIKI_TOOL_NAMES = Object.freeze([
   'wiki_search',
   'wiki_read',
 ]);
+const WIKI_PREFETCH_TOOL_USE_ID = 'toolu_wiki_prefetch_1';
+const WIKI_PREFETCH_QUERY_CHARS = 900;
+const WIKI_PREFETCH_CONTEXT_CHARS = 2200;
+const WIKI_PREFETCH_RESULT_CHARS = 14000;
+
+function shouldEnableQwenAgentThinking() {
+  return ['1', 'true', 'yes', 'on'].includes(
+    toStringValue(process.env.PIXLLM_QWEN_AGENT_ENABLE_THINKING).toLowerCase(),
+  );
+}
+
+function engineModeFromContext(requestContext = {}, workspacePath = '') {
+  return toStringValue(requestContext?.mode || (workspacePath ? 'local' : 'wiki'));
+}
+
+function isBackendApiUrl(value = '') {
+  return /(?:^|\/)api(?:\/v\d+)?$/i.test(toStringValue(value).replace(/\/$/, ''));
+}
+
+function qwenAgentMaxLlmCallsForMode(requestMode) {
+  const envValue = Number(process.env.PIXLLM_QWEN_AGENT_MAX_LLM_CALLS || 0);
+  if (Number.isFinite(envValue) && envValue > 0) {
+    return envValue;
+  }
+  return requestMode === 'wiki'
+    ? DEFAULT_QWEN_AGENT_WIKI_MAX_LLM_CALLS
+    : DEFAULT_QWEN_AGENT_LOCAL_MAX_LLM_CALLS;
+}
+
+function clipPlainText(value = '', maxChars = 1000) {
+  const text = toStringValue(value).replace(/\s+/g, ' ');
+  const limit = Math.max(200, Number(maxChars || 0));
+  return text.length > limit ? text.slice(0, limit).trim() : text;
+}
+
+function uniqueValues(items = [], limit = 20) {
+  const seen = new Set();
+  const output = [];
+  for (const item of Array.isArray(items) ? items : []) {
+    const value = toStringValue(item);
+    const key = value.toLowerCase();
+    if (!value || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    output.push(value);
+    if (output.length >= limit) {
+      break;
+    }
+  }
+  return output;
+}
+
+function extractSearchSymbols(value = '') {
+  return uniqueValues(String(value || '').match(/\b[A-Z][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?\b/g) || [], 18);
+}
+
+function recentConversationText(messages = []) {
+  return (Array.isArray(messages) ? messages : [])
+    .slice(-5)
+    .map((message) => {
+      const role = toStringValue(message?.role).toLowerCase() === 'assistant' ? 'assistant' : 'user';
+      const content = serializeBlocks(normalizeMessageBlocks(message?.content));
+      return `${role}: ${clipPlainText(content, 700)}`;
+    })
+    .filter((line) => line.length > 8)
+    .join('\n')
+    .slice(0, WIKI_PREFETCH_CONTEXT_CHARS);
+}
+
+function buildWikiPrefetchQuery({ prompt = '', messages = [] } = {}) {
+  const userPrompt = clipPlainText(prompt, 500);
+  const recentText = userPrompt.length < 16 ? recentConversationText(messages) : '';
+  const searchText = `${userPrompt}\n${recentText}`
+    .replace(/\b(?:user|assistant|request|response)\b/gi, ' ');
+  const symbols = extractSearchSymbols(searchText)
+    .filter((symbol) => !['User', 'Assistant', 'Request', 'Response'].includes(symbol));
+  const textTerms = uniqueValues(
+    searchText.match(/[가-힣]{2,}|[a-zA-Z][A-Za-z0-9_]{2,}/g) || [],
+    24,
+  );
+  return clipPlainText([
+    userPrompt,
+    symbols.join(' '),
+    textTerms.join(' '),
+  ].filter(Boolean).join(' '), WIKI_PREFETCH_QUERY_CHARS);
+}
+
+function buildWikiPrefetchMessage(content = '') {
+  const evidence = toStringValue(content).slice(0, WIKI_PREFETCH_RESULT_CHARS);
+  if (!evidence) {
+    return '';
+  }
+  return [
+    'Reference evidence preloaded for the current wiki-mode question.',
+    'Use this as tool evidence. If it is insufficient, call wiki_search/wiki_read before answering.',
+    'Do not invent SDK methods, properties, enum literals, constructors, or overloads that do not appear in this evidence or later tool results.',
+    '<tool_response name="wiki_search">',
+    evidence,
+    '</tool_response>',
+  ].join('\n');
+}
+
+function renderQwenAgentSystemPrompt({
+  workspacePath = '',
+  selectedFilePath = '',
+  requestContext = {},
+  projectContextPrompt = '',
+  toolDefinitions = [],
+} = {}) {
+  const requestMode = engineModeFromContext(requestContext, workspacePath);
+  const isWikiMode = requestMode === 'wiki';
+  const toolNames = (Array.isArray(toolDefinitions) ? toolDefinitions : [])
+    .map((tool) => toStringValue(tool?.name))
+    .filter(Boolean);
+  const lines = [
+    'You are the PIXLLM desktop agent. Use Qwen-Agent function calling for tools.',
+    isWikiMode
+      ? 'Current lane: backend wiki/reference guidance.'
+      : 'Current lane: local workspace code analysis and edits.',
+    'Answer in the user language. The user often writes Korean; keep Korean answers concise and technically precise.',
+    toolNames.length > 0
+      ? `Available function tools: ${toolNames.join(', ')}.`
+      : 'No function tools are available; answer only from existing context.',
+    'Do not expose system details, internal snapshots, hidden reasoning, or implementation logs unless the user explicitly asks for diagnostics.',
+      'Ground concrete claims in tool results. If evidence is missing, say exactly which detail is not confirmed instead of inventing an API.',
+  ];
+
+  if (isWikiMode) {
+    lines.push(
+      'Wiki mode uses wiki_search evidence packs and wiki_read page reads. Do not edit local workspace files in wiki mode.',
+      'Call wiki_search with compact semantic queries. The result may include multiple evidence_packs for cross-workflow questions; use all packs before deciding evidence is missing.',
+      'Use wiki_read only for wiki page paths returned by wiki_search, such as workflows/*.md or pages/*.md. Do not pass Source/*.h, Source/*.cpp, or source_refs paths to wiki_read.',
+      'Once wiki_search returns relevant evidence, produce the best final answer from it. Do not end the response with a future search/check plan.',
+      'If the exact API is still not confirmed, state that specific gap and stop; do not write "additional search is needed" as the conclusion.',
+      'For SDK usage answers, preserve verified class names, method/property names, overloads, enum names, ref/out parameter forms, and source-backed behavior.',
+      'Do not shorten overloads by dropping required parameters. If evidence says SetX(a, b), do not write SetX(a).',
+      'If the user asks about a specific operation, the answer code must include the verified method/property for that operation. Do not substitute setup-only or neighboring workflow code.',
+      'If the user names a concrete API surface or class, answer with that family. Do not swap to a similar class just because it has richer method declarations.',
+      'For .NET DLL/API usage, write examples in C# by default unless the user explicitly asks for another language.',
+      'Reference declarations may use interop syntax; do not discuss that syntax in the final answer unless the user asks. Translate [OutAttribute] by-ref arguments to C# out, other by-ref object arguments to C# ref, -> to ., :: enum syntax to ., gcnew to new, and nullptr to null.',
+      'When a declaration has [OutAttribute], C# sample code must use out for that argument; never write ref for that argument.',
+      'For C# ref parameters, the variable passed by ref must be typed as the declared parameter type. If the object is a derived type, first assign or cast it to a local variable of the declared base type, then pass that local by ref.',
+      'When source snippets include a concrete C# call shape, prefer that call shape and overload over filling every available overload parameter.',
+      'Treat curated workflow/howto signature bullets as routing and API-family evidence, but do not copy a generic workflow example unless it directly calls the operation requested by the user.',
+      'When the evidence confirms only the method declaration and not the full object acquisition path, accept the receiver object as a parameter or say it must already be available.',
+      'If the final answer would only show generic setup code and not the requested operation, omit the code block and give the exact confirmed call shape instead.',
+      'Never invent convenience APIs, shorthand method names, inferred getters, inferred loaders, or inferred collection accessors unless they appear in collected evidence.',
+      'A method/property name must appear exactly in collected evidence before you write it in code, comments, examples, or "may be" notes.',
+      'Do not derive names from patterns such as Get*At, Load*, Open*, Set*, or Get* just because similar APIs exist; require the exact declaration or source snippet.',
+      'Never invent enum members, enum examples, or named parameters. Use enum literals and argument shapes shown in evidence, or leave the value as a caller-provided variable without speculative examples.',
+      'Do not use EnumType.None, default enum values, or "example enum" comments as placeholders unless that exact enum member appears in tool evidence.',
+      'Do not write EnumType.Member text even in comments unless that exact full literal appears in tool evidence.',
+      'If an enum value is required but no literal is confirmed, make it a method parameter; do not put placeholder comments inside executable code.',
+      'Use positional arguments in C# examples unless every named argument is directly confirmed and syntactically safe.',
+      'For band/composite indices, use numeric indices when evidence only confirms 0/1/2 semantics; do not invent enum aliases or color meanings such as Red/Green/Blue.',
+      'Do not invent sample coordinate, level, range, or threshold values. If those values are not confirmed literals, make them helper-method parameters or keep the caller-provided variables.',
+      'Code examples must not assign arbitrary scalar SDK inputs such as maxLevel = 10, lllat = 37.0, or polling thresholds. Put those scalar inputs in the helper method signature instead.',
+      'Do not add polling loops, sleeps, async/background/threading logic, or progress completion thresholds unless the source evidence explicitly provides that control flow. For progress APIs, show the confirmed single call shape only.',
+      'A code block containing "..." or undeclared placeholder variables is invalid. If acquisition of an object is not verified, rewrite the sample so that object is an explicit helper-method parameter, or omit the code block and state the confirmed call shape.',
+      'Do not add generic lifecycle, memory, threading, or performance cautions unless they are directly supported by tool evidence or the user asks.',
+      'Do not add "check the SDK/docs/source", "range needs checking", or similar future-check notes; omit unsupported detail instead.',
+      'Do not include runnable code for unconfirmed constructors, setters, layer binding methods, or file-loading APIs. Use comments for those gaps.',
+      'If the evidence does not verify how to obtain an intermediate object, accept that object as a function parameter or state it is already available; do not invent getter, factory, or collection-access methods.',
+      'Do not write placeholder helper calls such as GetX(), CreateX(), LoadX(), or OpenX() unless that exact helper is in evidence. For missing input objects, write a helper method whose parameters receive those objects.',
+      'Prefer a helper method signature over a top-level snippet when the sample needs objects that are not constructed by verified evidence.',
+    );
+  } else {
+    lines.push(
+      'Local mode may inspect and edit the selected workspace through tools. Keep file paths workspace-relative when calling tools.',
+      'Prefer focused reads before edits. Do not create unrelated files or broad rewrites unless the user explicitly asked for structural replacement.',
+    );
+  }
+
+  if (workspacePath && !isWikiMode) {
+    lines.push(`Workspace: ${workspacePath}`);
+  }
+  if (selectedFilePath && !isWikiMode) {
+    lines.push(`Selected file: ${selectedFilePath}`);
+  }
+  if (toStringValue(projectContextPrompt)) {
+    lines.push(projectContextPrompt);
+  }
+  return lines.filter(Boolean).join('\n');
+}
 
 class QueryEngine {
   constructor({
@@ -102,11 +255,10 @@ class QueryEngine {
     });
     this.tools = this._createToolCollection({
       mode: this.workspacePath ? 'local' : 'wiki',
-      allowedToolNames: this.workspacePath ? null : NO_WORKSPACE_TOOL_NAMES,
+      allowedToolNames: this.workspacePath ? null : WIKI_TOOL_NAMES,
     });
     this.runtime.setTools(this.tools);
     this.toolDescriptionCache = new Map();
-    this.promptTokenCountCache = new Map();
     this.projectContext = null;
     this.projectContextPrompt = '';
     this.runtimeHandlers = {};
@@ -131,7 +283,7 @@ class QueryEngine {
     this.baseUrl = this.llmBaseUrl || toStringValue(baseUrl) || this.baseUrl || this.serverBaseUrl;
     this.model = toStringValue(model) || this.model;
     this.selectedFilePath = toStringValue(selectedFilePath) || this.selectedFilePath;
-    this.promptTokenCountCache.clear();
+    this.toolDescriptionCache.clear();
     if (this.runtime) {
       this.runtime.selectedFilePath = this.selectedFilePath;
     }
@@ -157,15 +309,15 @@ class QueryEngine {
   }
 
   _configureToolsForRequest(requestContext = {}) {
-    const requestMode = toStringValue(requestContext?.mode || (this.workspacePath ? 'local' : 'wiki'));
+    const requestMode = engineModeFromContext(requestContext, this.workspacePath);
     const requestedToolNames = Array.isArray(requestContext?.initialToolNames)
       ? requestContext.initialToolNames.map((item) => toStringValue(item)).filter(Boolean)
       : [];
-    const allowedToolNames = requestedToolNames.length > 0
-      ? requestedToolNames
-      : requestMode === 'local'
-        ? null
-        : NO_WORKSPACE_TOOL_NAMES;
+    const allowedToolNames = requestMode === 'wiki'
+      ? WIKI_TOOL_NAMES
+      : requestedToolNames.length > 0
+        ? requestedToolNames
+        : null;
     this.tools = this._createToolCollection({
       mode: requestMode,
       allowedToolNames,
@@ -238,7 +390,6 @@ class QueryEngine {
   }
 
   _persistState() {
-    if (!this.workspacePath) return;
     saveAgentState({
       sessionId: this.sessionId,
       workspacePath: this.workspacePath,
@@ -248,112 +399,80 @@ class QueryEngine {
 
   _compactMessageForNewRun(message = {}) {
     const role = toStringValue(message?.role).toLowerCase() === 'user' ? 'user' : 'assistant';
-    const text = (Array.isArray(message?.content) ? message.content : [])
-      .filter((block) => block?.type === 'text')
-      .map((block) => toStringValue(block?.text))
-      .filter(Boolean)
-      .join('\n\n')
-      .trim();
+    const text = serializeBlocks(normalizeMessageBlocks(message?.content));
     if (!text) return null;
-    if (
-      role === 'assistant'
-      && /You passed\s+\d+\s+input tokens[\s\S]*maximum input length/i.test(text)
-    ) {
-      return null;
-    }
-    const boundedText = text.length > MAX_HISTORY_TEXT_CHARS
-      ? `${text.slice(0, Math.max(0, MAX_HISTORY_TEXT_CHARS - 20))}\n...[history truncated]`
+    const clipped = text.length > MAX_HISTORY_TEXT_CHARS
+      ? `${text.slice(0, MAX_HISTORY_TEXT_CHARS)}\n...[truncated previous message]`
       : text;
     return {
       role,
-      content: [createTextBlock(boundedText)],
+      content: [createTextBlock(clipped)],
     };
   }
 
   _compactStateForNewUserRun() {
-    const beforeCount = Array.isArray(this.state.messages) ? this.state.messages.length : 0;
-    const compacted = (Array.isArray(this.state.messages) ? this.state.messages : [])
+    const compactedMessages = (Array.isArray(this.state.messages) ? this.state.messages : [])
       .map((message) => this._compactMessageForNewRun(message))
       .filter(Boolean)
       .slice(-MAX_HISTORY_MESSAGES_FOR_NEW_RUN);
-    const changed = compacted.length !== beforeCount
-      || compacted.some((message) => toStringValue(message?.content?.[0]?.text).includes('[history truncated]'));
-    if (!changed) {
-      return;
-    }
-    this.state.messages = compacted;
+    this.state.messages = compactedMessages;
+    this.state.trace = [];
     this.state.pendingToolUseSummary = '';
-    this.state.pendingAssistantContinuation = '';
+    this.state.fileCache = {};
     this.state.maxOutputTokensRecoveryCount = 0;
     this.state.maxOutputTokensOverride = 0;
+    this.state.pendingAssistantContinuation = '';
     this.state.terminalReason = '';
-    this.promptTokenCountCache.clear();
-    this._recordTransition('history_compacted_for_new_run', {
-      beforeMessages: beforeCount,
-      afterMessages: compacted.length,
+    this.state.currentTurn = 0;
+    this._recordTransition('history_compacted_for_qwen_agent_run', {
+      messages: compactedMessages.length,
     });
-    this._persistState();
   }
 
   _recordTranscript(entry = {}) {
+    if (!Array.isArray(this.state.transcript)) {
+      this.state.transcript = [];
+    }
     this.state.transcript.push({
-      timestamp: new Date().toISOString(),
+      ts: new Date().toISOString(),
       ...entry,
     });
   }
 
-  _recordTransition(reason, extra = {}) {
+  _recordTransition(reason = '', extra = {}) {
     const transition = {
-      timestamp: new Date().toISOString(),
+      ts: new Date().toISOString(),
       reason: toStringValue(reason),
-      ...extra,
+      ...(extra && typeof extra === 'object' ? extra : {}),
     };
+    if (!Array.isArray(this.state.transitions)) {
+      this.state.transitions = [];
+    }
+    this.state.transitions.push(transition);
+    if (this.state.transitions.length > MAX_TRANSITIONS) {
+      this.state.transitions = this.state.transitions.slice(-MAX_TRANSITIONS);
+    }
     this.state.lastTransition = transition;
-    this.state.transitions = [...(Array.isArray(this.state.transitions) ? this.state.transitions : []), transition]
-      .slice(-MAX_TRANSITIONS);
     if (typeof this.runtimeHandlers?.onTransition === 'function') {
-      void Promise.resolve(this.runtimeHandlers.onTransition(transition)).catch(() => {});
+      void this.runtimeHandlers.onTransition(transition);
     }
   }
 
-  _runtimeSnapshot() {
-    const tasks = listTasks({ sessionId: this.sessionId, workspacePath: this.workspacePath });
-    const captures = listTerminalCaptures({ sessionId: this.sessionId, workspacePath: this.workspacePath, limit: 6 });
-    return {
-      messageCount: Array.isArray(this.state.messages) ? this.state.messages.length : 0,
-      transcriptCount: Array.isArray(this.state.transcript) ? this.state.transcript.length : 0,
-      transitionCount: Array.isArray(this.state.transitions) ? this.state.transitions.length : 0,
-      fileCacheKeys: Object.keys(this.state.fileCache && typeof this.state.fileCache === 'object' ? this.state.fileCache : {}).slice(-12),
-      pendingToolUseSummary: toStringValue(this.state.pendingToolUseSummary),
-      pendingAssistantContinuation: toStringValue(this.state.pendingAssistantContinuation),
-      terminalReason: toStringValue(this.state.terminalReason),
-      currentTurn: Number(this.state.currentTurn || 0),
-      taskCount: tasks.length,
-      activeTaskCount: tasks.filter((task) => /running|queued|pending|in_progress/i.test(String(task?.status || ''))).length,
-      recentTaskIds: tasks.slice(0, 6).map((task) => toStringValue(task?.id)).filter(Boolean),
-      terminalCaptureCount: captures.length,
+  _updateFileCache(toolName = '', observation = {}) {
+    const normalizedToolName = toStringValue(toolName);
+    if (!['read_file', 'read_symbol_span', 'symbol_neighborhood'].includes(normalizedToolName)) {
+      return;
+    }
+    const pathValue = toStringValue(observation?.path);
+    if (!pathValue) {
+      return;
+    }
+    this.state.fileCache[pathValue] = {
+      tool: normalizedToolName,
+      lineRange: toStringValue(observation?.lineRange || observation?.line_range),
+      updatedAt: new Date().toISOString(),
+      content: toStringValue(observation?.content).slice(0, 4000),
     };
-  }
-
-  _pushMetaUserMessage(text, meta = {}) {
-    const content = toStringValue(text);
-    if (!content) return;
-    this.state.messages.push({
-      role: 'user',
-      content: [createTextBlock(content)],
-    });
-    this._recordTranscript({
-      kind: 'meta_user',
-      message: content,
-      ...meta,
-    });
-  }
-
-  _addUsage(usage = {}) {
-    const payload = usage && typeof usage === 'object' ? usage : {};
-    this.state.totalUsage.prompt_tokens += Number(payload.prompt_tokens || 0);
-    this.state.totalUsage.completion_tokens += Number(payload.completion_tokens || 0);
-    this.state.totalUsage.total_tokens += Number(payload.total_tokens || 0);
   }
 
   async _askUserQuestion(payload = {}) {
@@ -402,536 +521,164 @@ class QueryEngine {
     this._persistState();
   }
 
-  _loopControlState(turn = 1) {
-    const availableToolNames = (Array.isArray(this.tools?.tools) ? this.tools.tools : [])
-      .map((tool) => toStringValue(tool?.name))
-      .filter(Boolean);
-    const controlState = deriveLoopControlState({
-      availableToolNames,
-      requestContext: this.runtime?.requestContext || {},
-      state: this.state,
-      turn,
-    });
-    if (this.runtime?.requestContext && typeof this.runtime.requestContext === 'object') {
-      this.runtime.requestContext.activeToolNames = controlState.activeToolNames;
-    }
-    return controlState;
+  _addUsage(usage = {}) {
+    const payload = usage && typeof usage === 'object' ? usage : {};
+    this.state.totalUsage.prompt_tokens += Number(payload.prompt_tokens || 0);
+    this.state.totalUsage.completion_tokens += Number(payload.completion_tokens || 0);
+    this.state.totalUsage.total_tokens += Number(payload.total_tokens || 0);
   }
 
   async _describeTools(allowedToolNames = null) {
-    if (Array.isArray(allowedToolNames) && allowedToolNames.length === 0) {
-      return [];
-    }
-    const key = (Array.isArray(allowedToolNames) ? allowedToolNames : [])
-      .map((item) => toStringValue(item))
-      .filter(Boolean)
-      .sort()
-      .join('|') || '*';
+    const key = Array.isArray(allowedToolNames)
+      ? allowedToolNames.map((item) => toStringValue(item)).sort().join('|')
+      : '*';
     if (!this.toolDescriptionCache.has(key)) {
       this.toolDescriptionCache.set(key, await describeTools(this.tools, allowedToolNames));
     }
     return this.toolDescriptionCache.get(key);
   }
 
-  async _callModel(messages, {
-    signal = null,
-    onModelToken = async () => {},
-    onToolCalls = async () => {},
-    turn = 0,
-    extraBody = null,
-  } = {}) {
-    let lastError = null;
-    for (let attempt = 0; attempt <= MAX_MODEL_RETRIES; attempt += 1) {
-      try {
-        const budgetState = await this._requestBudgetStateForMessages(messages, { signal });
-        const maxTokens = this._resolveMaxTokensForRequest(messages, budgetState);
-        this._recordTranscript({
-          kind: 'model_budget',
-          turn,
-          attempt: attempt + 1,
-          promptTokens: Number(budgetState?.promptTokens || 0),
-          exactPromptTokens: Number(budgetState?.exactPromptTokens || 0),
-          approxTokens: Number(budgetState?.approxTokens || 0),
-          exact: Boolean(budgetState?.exact),
-          contextWindow: Number(budgetState?.contextWindow || 0),
-          maxTokens,
-        });
-        const result = await streamModelCompletion({
-          baseUrl: this.llmBaseUrl || this.baseUrl || this.serverBaseUrl,
-          fallbackBaseUrl: this.serverBaseUrl,
-          model: this.model,
-          messages,
-          maxTokens,
-          temperature: 0.2,
-          extraBody,
-          signal,
-          onToken: async (delta, aggregate) => {
-            this.state.totalUsage.streamed_chars += String(delta || '').length;
-            await onModelToken({
-              delta: String(delta || ''),
-              aggregate: String(aggregate || ''),
-              preview: previewText(aggregate),
-            });
-          },
-          onToolCalls: async (toolCalls) => {
-            this._recordTranscript({
-              kind: 'model_tool_calls',
-              turn,
-              attempt: attempt + 1,
-              payload: Array.isArray(toolCalls)
-                ? toolCalls.map((item) => ({
-                    id: toStringValue(item?.id),
-                    name: toStringValue(item?.name),
-                    arguments: toStringValue(item?.arguments),
-                  }))
-                : [],
-            });
-            await onToolCalls(Array.isArray(toolCalls) ? toolCalls : []);
-          },
-        });
-        this._addUsage(result?.usage);
-        this.state.totalUsage.completion_calls += 1;
-        this.state.totalUsage.streamed_completion_calls += 1;
-        if (result?.debug?.request) {
-          this._recordTranscript({
-            kind: 'model_request',
-            turn,
-            attempt: attempt + 1,
-            payload: result.debug.request,
-          });
-        }
-        if (result?.debug?.response) {
-          this._recordTranscript({
-            kind: 'model_response',
-            turn,
-            attempt: attempt + 1,
-            payload: result.debug.response,
-          });
-        }
-        if (result?.debug?.meta) {
-          this._recordTranscript({
-            kind: 'model_transport',
-            turn,
-            attempt: attempt + 1,
-            payload: result.debug.meta,
-          });
-        }
-        if (toStringValue(result?.reasoning_content)) {
-          this._recordTranscript({
-            kind: 'model_reasoning_summary',
-            turn,
-            attempt: attempt + 1,
-            preview: 'Internal model reasoning hidden. Inspect tool evidence and final answer instead.',
-            chars: String(result.reasoning_content || '').length,
-            payload: {
-              hidden: true,
-              reason: 'internal_reasoning_is_not_grounding_evidence',
-              chars: String(result.reasoning_content || '').length,
-            },
-          });
-        }
-        return result;
-      } catch (error) {
-        lastError = error;
-        this._recordTranscript({
-          kind: 'model_error',
-          turn,
-          attempt: attempt + 1,
-          payload: {
-            message: error instanceof Error ? error.message : String(error),
-            debugMeta: error && typeof error === 'object' ? error.debugMeta || null : null,
-          },
-        });
-        if (signal?.aborted) throw error;
-        if (attempt >= MAX_MODEL_RETRIES) {
-          throw error;
-        }
-        this.state.totalUsage.model_retries += 1;
-        this._recordTranscript({
-          kind: 'model_retry',
-          turn,
-          attempt: attempt + 1,
-          payload: {
-            message: error instanceof Error ? error.message : String(error),
-            debugMeta: error && typeof error === 'object' ? error.debugMeta || null : null,
-          },
-        });
-        this._recordTransition('model_retry', {
-          attempt: attempt + 1,
-          message: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
-    throw lastError || new Error('model_completion_failed');
+  _runtimeSnapshot() {
+    return {
+      engine: 'qwen_agent_sidecar',
+      mode: engineModeFromContext(this.runtime?.requestContext || {}, this.workspacePath),
+      request: this.runtime?.requestContext || null,
+      tools: Array.isArray(this.tools?.toolNames) ? this.tools.toolNames : [],
+      transitions: Array.isArray(this.state.transitions) ? this.state.transitions.slice(-12) : [],
+      pendingTasks: listTasks({
+        sessionId: this.sessionId,
+        workspacePath: this.workspacePath,
+      }),
+      terminalCaptures: listTerminalCaptures({
+        sessionId: this.sessionId,
+        workspacePath: this.workspacePath,
+      }),
+    };
   }
 
-  _createStreamingToolPrefetch({
-    turn = 0,
-    activeToolNames = null,
+  _qwenAgentModelServer() {
+    const direct = toStringValue(this.llmBaseUrl || this.baseUrl);
+    if (direct && !isBackendApiUrl(direct)) {
+      return direct;
+    }
+    throw new Error('Qwen-Agent requires llmBaseUrl pointing to an OpenAI-compatible /v1 server.');
+  }
+
+  _messagesForAgent(extraMessages = []) {
+    const stateMessages = (Array.isArray(this.state.messages) ? this.state.messages : [])
+      .map((message) => ({
+        role: toStringValue(message?.role).toLowerCase() === 'assistant' ? 'assistant' : 'user',
+        content: serializeBlocks(normalizeMessageBlocks(message?.content)),
+      }))
+      .filter((message) => toStringValue(message.content));
+    const normalizedExtra = (Array.isArray(extraMessages) ? extraMessages : [])
+      .map((message) => ({
+        role: toStringValue(message?.role).toLowerCase() === 'assistant' ? 'assistant' : 'user',
+        content: toStringValue(message?.content),
+      }))
+      .filter((message) => message.content);
+    return [...stateMessages, ...normalizedExtra];
+  }
+
+  async _prefetchWikiEvidence({
+    runContext = {},
+    activeToolNames = [],
     signal = null,
     onToolUse = async () => {},
     onToolResult = async () => {},
-    getAssistantText = () => '',
+    onToolBatchStart = async () => {},
+    onToolBatchEnd = async () => {},
+    onStatus = async () => {},
   } = {}) {
-    return new StreamingToolExecutor({
-      turn,
-      activeToolNames,
-      signal,
-      runtime: this.runtime,
-      onToolUse,
-      onToolResult,
-      getAssistantText,
-      parseToolInput: safeJsonParseObject,
-      toolUseKey: toolUseCacheKey,
-    });
-  }
-
-  _modelExtraBodyForTurn(controlState = null) {
-    const isWikiMode = toStringValue(this.runtime?.requestContext?.mode) === 'wiki';
-    const coverageReady = Boolean(controlState?.wikiEvidenceCoverage?.ready);
-    if (
-      (!isWikiMode && !controlState?.workflowAnswerLocked && !coverageReady)
-      || !/qwen/i.test(toStringValue(this.model))
-    ) {
+    if (engineModeFromContext(runContext, this.workspacePath) !== 'wiki') {
       return null;
     }
-    return {
-      chat_template_kwargs: {
-        enable_thinking: false,
+    if (!Array.isArray(activeToolNames) || !activeToolNames.includes('wiki_search')) {
+      return null;
+    }
+    const query = buildWikiPrefetchQuery({
+      prompt: toStringValue(runContext?.prompt),
+      messages: this.state.messages,
+    });
+    if (!query) {
+      return null;
+    }
+    const toolUse = {
+      id: WIKI_PREFETCH_TOOL_USE_ID,
+      name: 'wiki_search',
+      input: {
+        query,
+        limit: 5,
       },
-      top_k: 20,
     };
-  }
-
-  async _recoverStreamingToolPrefetch({
-    streamingPrefetch = null,
-    turn = 0,
-    assistantText = '',
-    reason = 'stream_interrupted',
-  } = {}) {
-    if (!streamingPrefetch || typeof streamingPrefetch.snapshotToolUses !== 'function') {
-      return { toolUses: [], toolExecutions: [] };
-    }
-    const recoveredToolUses = streamingPrefetch.snapshotToolUses();
-    const recoveredExecutions = typeof streamingPrefetch.drainUnclaimed === 'function'
-      ? await streamingPrefetch.drainUnclaimed({
-          assistantText,
-          reason,
-        })
-      : [];
-    if (recoveredToolUses.length === 0 && recoveredExecutions.length === 0) {
-      return { toolUses: [], toolExecutions: [] };
-    }
-
-    const assistantBlocks = [];
-    if (toStringValue(assistantText)) {
-      assistantBlocks.push(createTextBlock(assistantText));
-    }
-    assistantBlocks.push(
-      ...recoveredToolUses.map((toolUse) => createToolUseBlock({
-        id: toolUse?.id,
-        name: toolUse?.name,
-        input: toolUse?.input || {},
-      })),
-    );
-    if (assistantBlocks.length > 0) {
-      this.state.messages.push({
-        role: 'assistant',
-        content: assistantBlocks,
-      });
-    }
-
-    const toolResultBlocks = recoveredExecutions
-      .map((item) => item?.resultBlock)
-      .filter(Boolean);
-    if (toolResultBlocks.length > 0) {
-      this.state.messages.push({
-        role: 'user',
-        content: toolResultBlocks,
-      });
-    }
-
-    this._recordTranscript({
-      kind: 'streaming_tool_recovery',
-      turn,
-      reason,
-      toolUses: recoveredToolUses.length,
-      toolResults: recoveredExecutions.length,
+    await onToolBatchStart({
+      turn: 0,
+      count: 1,
+      summary: 'wiki_search(query, limit)',
+      parallelCandidate: false,
     });
-    this._recordTransition('streaming_tool_recovery', {
-      turn,
-      reason,
-      toolUses: recoveredToolUses.length,
-      toolResults: recoveredExecutions.length,
+    await onStatus({
+      phase: 'tool',
+      message: 'Loading wiki evidence...',
+      tool: 'wiki_search',
     });
-    streamingPrefetch.discard();
-    this._persistState();
+    const execution = await this.runtime.executeToolUse({
+      turn: 0,
+      assistantText: 'wiki-mode evidence prefetch',
+      toolUse,
+      activeToolNames,
+      signal,
+      onToolUse,
+      onToolResult,
+    });
+    await onToolBatchEnd({
+      turn: 0,
+      count: 1,
+      summary: 'wiki_search',
+      parallel: false,
+    });
+    const content = toStringValue(execution?.resultBlock?.content);
+    this._recordTransition('wiki_evidence_prefetch', {
+      query,
+      ok: execution?.observation?.ok !== false,
+    });
     return {
-      toolUses: recoveredToolUses,
-      toolExecutions: recoveredExecutions,
+      toolCallCount: 1,
+      query,
+      content: buildWikiPrefetchMessage(content),
     };
   }
 
-  _updateFileCache(toolName, observation) {
-    if (!observation) return;
-    const normalizedToolName = toStringValue(toolName);
-    if (['edit', 'replace_in_file'].includes(normalizedToolName)) {
-      const pathValue = toStringValue(observation.path);
-      if (!pathValue) return;
-      const nextCache = { ...(this.state.fileCache && typeof this.state.fileCache === 'object' ? this.state.fileCache : {}) };
-      delete nextCache[pathValue];
-      this.state.fileCache = nextCache;
+  async _loadProjectContext(runContext = {}) {
+    if (!this.workspacePath || engineModeFromContext(runContext, this.workspacePath) !== 'local') {
+      this.projectContext = null;
+      this.projectContextPrompt = '';
       return;
     }
-    if (observation.ok === false) return;
-    if (!['read_file', 'read_symbol_span'].includes(normalizedToolName)) return;
-    const pathValue = toStringValue(observation.path);
-    const content = toStringValue(observation.content).slice(0, 4000);
-    if (!pathValue || !content) return;
-    const entries = Object.entries(this.state.fileCache && typeof this.state.fileCache === 'object' ? this.state.fileCache : {});
-    const nextCache = Object.fromEntries(entries.slice(-(MAX_FILE_CACHE_ENTRIES - 1)));
-    const fullRead = normalizedToolName === 'read_file' && observation.truncated !== true;
-    nextCache[pathValue] = {
-      lineRange: toStringValue(observation.lineRange),
-      updatedAt: new Date().toISOString(),
-      content,
-      contentHash: fullRead ? hashText(toStringValue(observation.content)) : '',
-      fullRead,
-      size: Number(observation.size || 0),
-      mtimeMs: Number(observation.mtimeMs || 0),
-    };
-    this.state.fileCache = nextCache;
-  }
-
-  _messageBudgetStateForMessages(messages = []) {
-    const serialized = Array.isArray(messages)
-      ? messages.map((message) => {
-          const role = toStringValue(message?.role || 'assistant');
-          const content = typeof message?.content === 'string'
-            ? message.content
-            : serializeBlocks(Array.isArray(message?.content) ? message.content : []);
-          return `${role}: ${content}`;
-        }).filter(Boolean).join('\n\n')
-      : '';
-    return {
-      chars: serialized.length,
-      approxTokens: estimateTokens(serialized),
-    };
-  }
-
-  _promptTokenCacheKey(messages = []) {
-    return [
-      toStringValue(this.model),
-      toStringValue(this.llmBaseUrl || this.baseUrl || this.serverBaseUrl),
-      toStringValue(this.serverBaseUrl),
-      hashText(JSON.stringify(Array.isArray(messages) ? messages : [])),
-    ].join('|');
-  }
-
-  async _requestBudgetStateForMessages(messages = [], { signal = null } = {}) {
-    const approxState = this._messageBudgetStateForMessages(messages);
-    const cacheKey = this._promptTokenCacheKey(messages);
-    if (this.promptTokenCountCache.has(cacheKey)) {
-      const cached = this.promptTokenCountCache.get(cacheKey);
-      this._recordTranscript({
-        kind: 'prompt_token_cache_hit',
-        promptTokens: Number(cached?.promptTokens || 0),
-        exactPromptTokens: Number(cached?.exactPromptTokens || 0),
-        exact: Boolean(cached?.exact),
-        contextWindow: Number(cached?.contextWindow || 0),
-        approxTokens: Number(approxState?.approxTokens || 0),
-      });
-      return {
-        ...approxState,
-        ...cached,
-      };
-    }
-
-    const fallbackState = {
-      ...approxState,
-      promptTokens: Number(approxState.approxTokens || 0),
-      exactPromptTokens: 0,
-      exact: false,
-      contextWindow: resolveModelContextWindow(this.model),
-    };
-
     try {
-      const payload = await countPromptTokens({
-        baseUrl: this.llmBaseUrl || this.baseUrl || this.serverBaseUrl,
-        fallbackBaseUrl: this.serverBaseUrl,
-        model: this.model,
-        messages,
-        signal,
+      this.projectContext = await loadProjectContext({
+        workspacePath: this.workspacePath,
+        selectedFilePath: toStringValue(runContext?.selectedFilePath || this.selectedFilePath),
+        explicitPaths: Array.isArray(runContext?.explicitPaths) ? runContext.explicitPaths : [],
       });
-      const exactPromptTokens = Number(payload?.count || 0);
-      const resolvedState = {
-        promptTokens: exactPromptTokens > 0 ? exactPromptTokens : Number(approxState.approxTokens || 0),
-        exactPromptTokens,
-        exact: exactPromptTokens > 0,
-        contextWindow: Number(payload?.maxModelLen || 0) || resolveModelContextWindow(this.model),
-      };
-      while (this.promptTokenCountCache.size >= MAX_PROMPT_TOKEN_CACHE_ENTRIES) {
-        const oldestKey = this.promptTokenCountCache.keys().next().value;
-        if (!oldestKey) break;
-        this.promptTokenCountCache.delete(oldestKey);
-      }
-      this.promptTokenCountCache.set(cacheKey, resolvedState);
-      this._recordTranscript({
-        kind: 'prompt_token_count',
-        promptTokens: Number(resolvedState?.promptTokens || 0),
-        exactPromptTokens: Number(resolvedState?.exactPromptTokens || 0),
-        exact: Boolean(resolvedState?.exact),
-        contextWindow: Number(resolvedState?.contextWindow || 0),
-        approxTokens: Number(approxState?.approxTokens || 0),
-      });
-      return {
-        ...approxState,
-        ...resolvedState,
-      };
-    } catch (error) {
-      this._recordTranscript({
-        kind: 'prompt_token_fallback',
-        message: error instanceof Error ? error.message : String(error),
-        promptTokens: Number(fallbackState?.promptTokens || 0),
-        approxTokens: Number(approxState?.approxTokens || 0),
-        contextWindow: Number(fallbackState?.contextWindow || 0),
-      });
-      return fallbackState;
-    }
-  }
-
-  _resolveMaxTokensForRequest(messages = [], budgetState = null) {
-    const requested = Math.max(
-      MIN_DYNAMIC_OUTPUT_TOKENS,
-      Number(this.state.maxOutputTokensOverride || 0) || DEFAULT_MODEL_OUTPUT_TOKENS,
-    );
-    const resolvedBudgetState = budgetState && typeof budgetState === 'object'
-      ? budgetState
-      : this._messageBudgetStateForMessages(messages);
-    const contextWindow = Number(resolvedBudgetState?.contextWindow || 0) || resolveModelContextWindow(this.model);
-    const promptTokens = Number(
-      resolvedBudgetState?.promptTokens
-      || resolvedBudgetState?.exactPromptTokens
-      || resolvedBudgetState?.approxTokens
-      || 0,
-    );
-    const available = contextWindow - promptTokens - REQUEST_TOKEN_SAFETY_MARGIN;
-    if (available <= 0) {
-      return 1;
-    }
-    if (available < requested) {
-      return Math.max(1, available);
-    }
-    return requested;
-  }
-
-  _runtimeContextMessage(controlState = null) {
-    const lines = [];
-    if (toStringValue(this.runtime?.contextSummary())) {
-      lines.push(toStringValue(this.runtime.contextSummary()));
-    }
-    const resolvedControlState = controlState && typeof controlState === 'object'
-      ? controlState
-      : this._loopControlState(Number(this.state.currentTurn || 1));
-    const activeToolNames = Array.isArray(resolvedControlState.activeToolNames)
-      ? resolvedControlState.activeToolNames
-      : [];
-    if (toStringValue(resolvedControlState.phase)) {
-      lines.push(`Current loop phase: ${toStringValue(resolvedControlState.phase)}`);
-    }
-    const coverage = resolvedControlState.wikiEvidenceCoverage && typeof resolvedControlState.wikiEvidenceCoverage === 'object'
-      ? resolvedControlState.wikiEvidenceCoverage
-      : null;
-    if (coverage && Array.isArray(coverage.expectedSlots) && coverage.expectedSlots.length > 0) {
-      lines.push(`Wiki evidence coverage: ${coverage.ready ? 'ready' : 'missing'}; covered=${(coverage.coveredSlots || []).join(', ') || 'none'}; missing=${(coverage.missingSlots || []).join(', ') || 'none'}`);
-      const slotEvidence = coverage.slotEvidence && typeof coverage.slotEvidence === 'object'
-        ? coverage.slotEvidence
-        : {};
-      for (const slotName of Array.isArray(coverage.coveredSlots) ? coverage.coveredSlots.slice(0, 4) : []) {
-        const facts = Array.isArray(slotEvidence[slotName]) ? slotEvidence[slotName] : [];
-        if (facts.length === 0) continue;
-        lines.push(`Evidence for ${slotName}: ${facts.slice(0, 3).map((item) => toStringValue(item).slice(0, 220)).join(' | ')}`);
-      }
-      if (coverage.ready) {
-        lines.push('Wiki coverage is complete. Write the final answer from these declarations instead of searching for alternate API names.');
-      }
-    }
-    if (activeToolNames.length > 0) {
-      lines.push(`Enabled tools this turn: ${activeToolNames.slice(0, 16).join(', ')}`);
-    } else {
-      lines.push('Enabled tools this turn: none. Answer directly from the evidence already in the transcript.');
-    }
-    if (toStringValue(this.state.pendingToolUseSummary)) {
-      lines.push(`Pending tool-use summary: ${toStringValue(this.state.pendingToolUseSummary)}`);
-    }
-    if (this.state.lastTransition && typeof this.state.lastTransition === 'object') {
-      lines.push(`Last transition: ${toStringValue(this.state.lastTransition.reason)}`);
-    }
-    const cachedEntries = Object.entries(this.state.fileCache && typeof this.state.fileCache === 'object' ? this.state.fileCache : {})
-      .slice(-6)
-      .map(([pathValue, meta]) => `- ${pathValue}${toStringValue(meta?.lineRange) ? ` lines ${toStringValue(meta.lineRange)}` : ''}`);
-    if (cachedEntries.length > 0) {
-      lines.push('Cached file context:');
-      lines.push(...cachedEntries);
-    }
-    return lines.join('\n').trim();
-  }
-
-  _messagesForModel(controlState = null) {
-    if (!controlState?.workflowAnswerLocked) {
-      return this.state.messages;
-    }
-    return (Array.isArray(this.state.messages) ? this.state.messages : [])
-      .map((message) => {
-        const role = toStringValue(message?.role).toLowerCase() === 'user' ? 'user' : 'assistant';
-        if (role === 'user') {
-          return message;
-        }
-        const textBlocks = (Array.isArray(message?.content) ? message.content : [])
-          .filter((block) => block?.type === 'text' && toStringValue(block?.text));
-        if (textBlocks.length === 0) {
-          return null;
-        }
-        return {
-          role,
-          content: textBlocks,
-        };
-      })
-      .filter(Boolean);
-  }
-
-  _modelMessages(systemPrompt, controlState = null) {
-    const runtimeContext = this._runtimeContextMessage(controlState);
-    const mergedSystemPrompt = [
-      toStringValue(systemPrompt),
-      toStringValue(this.projectContextPrompt),
-      toStringValue(runtimeContext),
-    ].filter(Boolean).join('\n\n');
-    const flattenedMessages = flattenMessagesForModel(this._messagesForModel(controlState));
-    if (!hasSubstantiveUserQueryMessage(flattenedMessages)) {
-      const fallbackPrompt = toStringValue(this.runtime?.requestContext?.prompt);
-      if (fallbackPrompt) {
-        const parts = [`User request:\n${fallbackPrompt}`];
-        const selectedFilePath = toStringValue(this.runtime?.requestContext?.selectedFilePath || this.selectedFilePath);
-        if (selectedFilePath) {
-          parts.push(`Current selected file: ${selectedFilePath}`);
-        }
-        flattenedMessages.unshift({
-          role: 'user',
-          content: parts.join('\n\n'),
+      this.projectContextPrompt = buildProjectContextPrompt(this.projectContext);
+      if (this.projectContextPrompt) {
+        this._recordTranscript({
+          kind: 'project_context_loaded',
+          summary: toStringValue(this.projectContext?.summary),
+        });
+        this._recordTransition('project_context_loaded', {
+          summary: toStringValue(this.projectContext?.summary),
         });
       }
+    } catch (error) {
+      this.projectContext = null;
+      this.projectContextPrompt = '';
+      this._recordTranscript({
+        kind: 'project_context_error',
+        message: error instanceof Error ? error.message : String(error),
+      });
     }
-    return [
-      { role: 'system', content: mergedSystemPrompt },
-      ...flattenedMessages,
-    ];
-  }
-
-  _resetPendingAnswerState() {
-    this.state.pendingAssistantContinuation = '';
-    this.state.maxOutputTokensRecoveryCount = 0;
-    this.state.maxOutputTokensOverride = 0;
   }
 
   async _returnFinalAnswer({
@@ -943,57 +690,35 @@ class QueryEngine {
     onToken = async () => {},
     onTerminal = async () => {},
   } = {}) {
-    this._resetPendingAnswerState();
+    const answer = toStringValue(finalAnswer);
+    this.state.pendingAssistantContinuation = '';
+    this.state.maxOutputTokensRecoveryCount = 0;
+    this.state.maxOutputTokensOverride = 0;
     this.state.terminalReason = 'final_answer';
     await onStatus({ phase: 'finalize', message: 'Finalizing answer...' });
-    if (finalAnswer) {
-      await onToken(finalAnswer);
+    if (answer) {
+      await onToken(answer);
     }
     const readObservations = readObservationsFromTrace(runTrace);
     const primary = readObservations[0] || {};
     this._recordTranscript({
       kind: 'final_answer',
       turn,
-      preview: previewText(finalAnswer),
+      preview: previewText(answer),
     });
     this._recordTransition('final_answer', { turn });
     this._persistState();
     await onTerminal({ reason: 'final_answer', turn });
     return {
-      answer: finalAnswer,
+      answer,
       trace: runTrace,
       transcript: this.state.transcript.slice(transcriptStartIndex),
       runtime: this._runtimeSnapshot(),
-      summary: `Completed in ${turn} turns.`,
+      summary: `Completed by qwen-agent with ${runTrace.length} tool observations.`,
       primaryFilePath: toStringValue(primary.path),
       primaryFileContent: toStringValue(primary.content).slice(0, 24000),
       usage: { ...this.state.totalUsage },
       sessionId: this.sessionId,
-    };
-  }
-
-  async _attemptFinalizeSuccessfulAnswer({
-    assistantText = '',
-    traceStartIndex = 0,
-    transcriptStartIndex = 0,
-    turn = 0,
-    onStatus = async () => {},
-    onToken = async () => {},
-    onTerminal = async () => {},
-  } = {}) {
-    const finalAnswer = joinAnswerFragments(this.state.pendingAssistantContinuation, assistantText);
-    const runTrace = this.state.trace.slice(traceStartIndex);
-    return {
-      status: 'final',
-      result: await this._returnFinalAnswer({
-        finalAnswer,
-        runTrace,
-        turn,
-        transcriptStartIndex,
-        onStatus,
-        onToken,
-        onTerminal,
-      }),
     };
   }
 
@@ -1019,7 +744,7 @@ class QueryEngine {
     this.runtimeHandlers = { onTransition, onUserQuestion, onBrief };
 
     try {
-      let runContext = this.runtime.beginRun({
+      const runContext = this.runtime.beginRun({
         prompt,
         selectedFilePath: this.selectedFilePath,
         engineQuestionOverride: this.engineQuestionOverride,
@@ -1037,383 +762,114 @@ class QueryEngine {
         explicitPaths: Array.isArray(runContext?.explicitPaths) ? runContext.explicitPaths.slice(0, 8) : [],
         initialToolNames: Array.isArray(runContext?.initialToolNames) ? runContext.initialToolNames.slice(0, 20) : [],
         symbolHints: Array.isArray(runContext?.symbolHints) ? runContext.symbolHints.slice(0, 6) : [],
+        engine: 'qwen_agent_sidecar',
       });
-      if (this.workspacePath && toStringValue(runContext?.mode) === 'local') {
-        try {
-          this.projectContext = await loadProjectContext({
-            workspacePath: this.workspacePath,
-            selectedFilePath: toStringValue(runContext?.selectedFilePath || this.selectedFilePath),
-            explicitPaths: Array.isArray(runContext?.explicitPaths) ? runContext.explicitPaths : [],
-          });
-          this.projectContextPrompt = buildProjectContextPrompt(this.projectContext);
-          if (this.projectContextPrompt) {
-            this._recordTranscript({
-              kind: 'project_context_loaded',
-              summary: toStringValue(this.projectContext?.summary),
-            });
-            this._recordTransition('project_context_loaded', {
-              summary: toStringValue(this.projectContext?.summary),
-            });
-          }
-        } catch (error) {
-          this.projectContext = null;
-          this.projectContextPrompt = '';
-          this._recordTranscript({
-            kind: 'project_context_error',
-            message: error instanceof Error ? error.message : String(error),
-          });
-        }
-      } else {
-        this.projectContext = null;
-        this.projectContextPrompt = '';
-      }
+      await this._loadProjectContext(runContext);
       this._persistState();
 
-      let parseErrors = 0;
-      let maxTurns = MAX_TURNS;
-      for (let turn = 1; turn <= maxTurns; turn += 1) {
-        this.state.currentTurn = turn;
-        if (signal?.aborted) {
-          this.state.terminalReason = 'cancelled';
-          this._recordTransition('cancelled', { turn });
-          throw new Error('Cancelled');
-        }
-
-        const controlState = this._loopControlState(turn);
-        const activeToolNames = controlState.activeToolNames;
-        if (controlState.workflowAnswerLocked && !Number(this.state.maxOutputTokensOverride || 0)) {
-          this.state.maxOutputTokensOverride = LOCKED_ANSWER_MAX_TOKENS;
-          this._recordTranscript({
-            kind: 'locked_answer_token_budget',
-            turn,
-            maxTokens: LOCKED_ANSWER_MAX_TOKENS,
-          });
-        }
-        const toolDefinitions = await this._describeTools(activeToolNames);
-        const systemPrompt = buildSystemPrompt({
-          workspacePath: this.workspacePath,
-          selectedFilePath: this.selectedFilePath,
-          toolDefinitions,
-          requestContext: this.runtime?.requestContext || {},
-        });
-
-        await onStatus({
-          phase: 'model',
-          message: turn === 1 ? 'Thinking...' : `Continuing reasoning (turn ${turn})...`,
-        });
-
-        let completion;
-        let streamedAssistantText = '';
-        const streamingPrefetch = this._createStreamingToolPrefetch({
-          turn,
-          activeToolNames,
-          signal,
-          onToolUse,
-          onToolResult,
-          getAssistantText: () => streamedAssistantText,
-        });
-        try {
-          const modelMessages = this._modelMessages(systemPrompt, controlState);
-          completion = await this._callModel(modelMessages, {
-            signal,
-            turn,
-            extraBody: this._modelExtraBodyForTurn(controlState),
-            onToolCalls: async (toolCalls) => {
-              streamingPrefetch.sync(toolCalls);
-            },
-            onModelToken: async (payload) => {
-              streamedAssistantText = toStringValue(payload?.aggregate || payload?.preview || '');
-              streamingPrefetch.sync(extractStreamingToolCalls(streamedAssistantText));
-              await onModelToken({
-                ...payload,
-                turn,
-              });
-            },
-          });
-        } catch (error) {
-          await this._recoverStreamingToolPrefetch({
-            streamingPrefetch,
-            turn,
-            assistantText: streamedAssistantText,
-            reason: signal?.aborted ? 'cancelled' : 'model_error',
-          });
-          throw error;
-        }
-
-        const finishReason = toStringValue(completion?.finish_reason);
-        const hitOutputLimit = isLengthFinishReason(finishReason);
-        const rawText = toStringValue(completion?.text);
-        if (hitOutputLimit && !Number(this.state.maxOutputTokensOverride || 0)) {
-          this.state.maxOutputTokensOverride = ESCALATED_MAX_TOKENS;
-          this._recordTranscript({
-            kind: 'max_output_tokens_escalate',
-            turn,
-            from: DEFAULT_MODEL_OUTPUT_TOKENS,
-            to: ESCALATED_MAX_TOKENS,
-          });
-          this._recordTransition('max_output_tokens_escalate', {
-            turn,
-            to: ESCALATED_MAX_TOKENS,
-          });
-          this._persistState();
-          continue;
-        }
-
-        const parsed = parseAssistantResponse({
-          text: rawText,
-          tool_calls: Array.isArray(completion?.tool_calls) ? completion.tool_calls : [],
-          reasoning_content: toStringValue(completion?.reasoning_content || ''),
-          recovery_context: {
-            user_prompt: toStringValue(runContext?.prompt || prompt),
-            active_tool_names: activeToolNames,
-            symbol_hints: Array.isArray(runContext?.symbolHints) ? runContext.symbolHints : [],
-          },
-        });
-        if (rawText) {
-          this._recordTranscript({
-            kind: 'raw_assistant_output',
-            turn,
-            finishReason,
-            payload: {
-              text: rawText,
-              reasoningHidden: Boolean(toStringValue(completion?.reasoning_content || '')),
-              reasoningChars: String(completion?.reasoning_content || '').length,
-            },
-          });
-        }
-        if (!parsed.ok) {
-          if (hitOutputLimit && this.state.maxOutputTokensRecoveryCount < MAX_OUTPUT_TOKENS_RECOVERY_LIMIT) {
-            this.state.maxOutputTokensRecoveryCount += 1;
-            this.state.maxOutputTokensOverride = 0;
-            this._pushMetaUserMessage(
-              'Output token limit hit while your previous reply was incomplete. Continue directly by completing the interrupted answer or pending tool call. No recap or apology.',
-              { turn, attempt: this.state.maxOutputTokensRecoveryCount },
-            );
-            this._recordTransition('truncated_assistant_recovery', {
-              turn,
-              attempt: this.state.maxOutputTokensRecoveryCount,
-            });
-            this._persistState();
-            continue;
-          }
-
-          parseErrors += 1;
-          this.state.totalUsage.parse_retries += 1;
-          this._recordTranscript({
-            kind: 'assistant_parse_error',
-            turn,
-            raw: rawText.slice(0, 2000),
-          });
-          this._recordTransition('assistant_parse_retry', { turn });
-          if (parseErrors > MAX_CONSECUTIVE_PARSE_ERRORS) {
-            this.state.terminalReason = 'parse_error_budget';
-            break;
-          }
-          this._pushMetaUserMessage(
-            'Your previous reply was malformed. Reply with plain assistant text and use the provided tool-calling interface for any tool use.',
-            { turn },
-          );
-          this._persistState();
-          continue;
-        }
-
-        parseErrors = 0;
-        const activeToolNameSet = new Set(
-          (Array.isArray(activeToolNames) ? activeToolNames : [])
-            .map((item) => toStringValue(item))
-            .filter(Boolean),
-        );
-        const assistantBlocks = parsed.blocks
-          .filter((block) => {
-            if (block?.type !== 'tool_use') {
-              return true;
-            }
-            return activeToolNameSet.has(toStringValue(block?.name));
-          });
-        const rejectedToolUseCount = parsed.blocks.length - assistantBlocks.length;
-        const assistantText = extractTextFromBlocks(assistantBlocks);
-        const toolUses = toolUseBlocks(assistantBlocks);
-        const needsFollowUp = toolUses.length > 0;
-        if (rejectedToolUseCount > 0) {
-          this._recordTranscript({
-            kind: 'tool_use_rejected',
-            turn,
-            rejected: rejectedToolUseCount,
-            activeToolNames: Array.from(activeToolNameSet),
-          });
-          this._recordTransition('tool_use_rejected', {
-            turn,
-            rejected: rejectedToolUseCount,
-          });
-        }
-        if (assistantBlocks.length === 0 && rejectedToolUseCount > 0) {
-          this._pushMetaUserMessage(
-            'No tools are enabled this turn. Answer directly from the collected evidence in the transcript without calling tools.',
-            { turn, rejectedToolUseCount },
-          );
-          this._persistState();
-          continue;
-        }
-        this.state.messages.push({ role: 'assistant', content: assistantBlocks });
-        this._recordTransition('assistant_message', { turn, toolUses: toolUses.length });
-        this._recordTranscript({
-          kind: 'assistant',
-          turn,
-          blocks: assistantBlocks,
-          preview: previewText(serializeBlocks(assistantBlocks)),
-        });
-        await onAssistantMessage({
-          turn,
-          text: assistantText,
-          rawText,
-          toolUses: toolUses.length,
-          finishReason,
-        });
-        this._persistState();
-
-        if (toolUses.length === 0 && assistantText && hitOutputLimit && this.state.maxOutputTokensRecoveryCount < MAX_OUTPUT_TOKENS_RECOVERY_LIMIT) {
-          this.state.pendingAssistantContinuation = joinAnswerFragments(
-            this.state.pendingAssistantContinuation,
-            assistantText,
-          );
-          this.state.maxOutputTokensRecoveryCount += 1;
-          this.state.maxOutputTokensOverride = 0;
-          this._pushMetaUserMessage(
-            'Output token limit hit. Continue directly from the cutoff. No recap or apology. Finish only the remaining answer.',
-            { turn, attempt: this.state.maxOutputTokensRecoveryCount },
-          );
-          this._recordTranscript({
-            kind: 'assistant_continuation',
-            turn,
-            attempt: this.state.maxOutputTokensRecoveryCount,
-            preview: previewText(assistantText),
-          });
-          this._recordTransition('max_output_tokens_recovery', {
-            turn,
-            attempt: this.state.maxOutputTokensRecoveryCount,
-          });
-          this._persistState();
-          continue;
-        }
-
-        if (!needsFollowUp && assistantText) {
-          const finalizeOutcome = await this._attemptFinalizeSuccessfulAnswer({
-            assistantText,
-            traceStartIndex,
-            transcriptStartIndex,
-            turn,
-            onStatus,
-            onToken,
-            onTerminal,
-          });
-          if (finalizeOutcome?.status === 'final' && finalizeOutcome?.result) {
-            return finalizeOutcome.result;
-          }
-        }
-
-        if (toolUses.length === 0 && !assistantText) {
-          this.state.totalUsage.parse_retries += 1;
-          this._recordTransition('missing_tool_use_or_answer', { turn });
-          this._persistState();
-          continue;
-        }
-
-        this.state.pendingAssistantContinuation = '';
-        this.state.maxOutputTokensRecoveryCount = 0;
-        this.state.maxOutputTokensOverride = 0;
-        const {
-          toolExecutions,
-          toolResultBlocks,
-          canParallelize,
-          allFailed,
-          interrupted,
-        } = await this.runtime.executeToolBatch({
-          turn,
-          assistantText,
-          toolUses,
-          activeToolNames,
-          signal,
-          onToolUse,
-          onToolResult,
-          onToolBatchStart,
-          onToolBatchEnd,
-          onStatus,
-          prefetchedExecutions: streamingPrefetch.prefetchedExecutions,
-          streamingExecutor: streamingPrefetch,
-        });
-        streamingPrefetch.discard();
-
-        this.state.messages.push({
-          role: 'user',
-          content: toolResultBlocks,
-        });
-
-        if (allFailed) {
-          const primaryFailure = toolExecutions.find((item) => item?.observation?.ok === false);
-          this._pushMetaUserMessage(
-            toStringValue(primaryFailure?.observation?.message)
-              || 'The previous tool batch failed. Change strategy, use a different tool, or answer with the blocker instead of repeating the same calls.',
-            {
-              turn,
-              tools: toolUses.map((toolUse) => toolUse.name),
-              error: toStringValue(primaryFailure?.observation?.error),
-            },
-          );
-          this._recordTransition('tool_failure_recovery', {
-            turn,
-            toolUses: toolUses.length,
-          });
-        }
-
-        this._recordTransition('next_turn', {
-          turn,
-          toolUses: toolUses.length,
-          parallel: canParallelize,
-        });
-        if (interrupted && signal?.aborted) {
-          this.state.pendingToolUseSummary = '';
-          this.state.terminalReason = 'cancelled';
-          this._persistState();
-          await onTerminal({ reason: 'cancelled', turn });
-          throw new Error('Cancelled');
-        }
-        this._persistState();
-      }
-
-      await onStatus({ phase: 'finalize', message: 'Preparing fallback answer...' });
-      const runTrace = this.state.trace.slice(traceStartIndex);
-      const readObservations = readObservationsFromTrace(runTrace);
-      const primary = readObservations[0] || {};
-      const failed = failedSteps(runTrace)[0];
-      const resolvedTerminalReason = resolveFallbackTerminalReason(
-        this.state.terminalReason,
-        failed,
-        runTrace.at(-1),
-      );
-      const fallbackAnswer = buildFallbackAnswer({
-        terminalReason: resolvedTerminalReason,
-        failedStep: failed,
+      const activeToolNames = Array.isArray(this.tools?.toolNames) ? this.tools.toolNames.slice() : [];
+      const requestMode = engineModeFromContext(runContext, this.workspacePath);
+      const toolDefinitions = await this._describeTools(activeToolNames);
+      const systemPrompt = renderQwenAgentSystemPrompt({
+        workspacePath: this.workspacePath,
+        selectedFilePath: this.selectedFilePath,
+        requestContext: this.runtime?.requestContext || {},
+        projectContextPrompt: this.projectContextPrompt,
+        toolDefinitions,
       });
-      this.state.terminalReason = resolvedTerminalReason;
-      await onToken(fallbackAnswer);
+
+      await onStatus({ phase: 'model', message: 'Running qwen-agent...' });
+      this.state.currentTurn = 1;
+      this._recordTransition('qwen_agent_start', {
+        tools: activeToolNames.length,
+        mode: engineModeFromContext(runContext, this.workspacePath),
+      });
       this._recordTranscript({
-        kind: 'fallback',
-        preview: previewText(fallbackAnswer),
+        kind: 'qwen_agent_request',
+        toolCount: activeToolNames.length,
+        thinking: shouldEnableQwenAgentThinking(),
       });
-      this._recordTransition('fallback', {});
+      const prefetch = await this._prefetchWikiEvidence({
+        runContext,
+        activeToolNames,
+        signal,
+        onToolUse,
+        onToolResult,
+        onToolBatchStart,
+        onToolBatchEnd,
+        onStatus,
+      });
+      const agentMessages = this._messagesForAgent(
+        prefetch?.content ? [{ role: 'user', content: prefetch.content }] : [],
+      );
+
+      const bridgeResult = await runQwenAgentBridge({
+        llmBaseUrl: this._qwenAgentModelServer(),
+        model: this.model,
+        systemPrompt,
+        messages: agentMessages,
+        toolDefinitions,
+        runtime: this.runtime,
+        activeToolNames,
+        maxTokens: Number(process.env.PIXLLM_QWEN_AGENT_MAX_TOKENS || DEFAULT_QWEN_AGENT_MAX_TOKENS),
+        maxLlmCalls: qwenAgentMaxLlmCallsForMode(requestMode),
+        enableThinking: shouldEnableQwenAgentThinking(),
+        signal,
+        onToolUse,
+        onToolResult,
+        onToolBatchStart,
+        onToolBatchEnd,
+        onStatus,
+        onModelToken: async (payload) => {
+          this.state.totalUsage.streamed_chars += String(payload?.delta || '').length;
+          await onModelToken({
+            ...payload,
+            turn: 1,
+          });
+        },
+        recordTranscript: (entry) => this._recordTranscript(entry),
+      });
+      this.state.totalUsage.completion_calls += 1;
+      this.state.totalUsage.streamed_completion_calls += 1;
+
+      const assistantText = toStringValue(bridgeResult?.answer);
+      if (!assistantText) {
+        throw new Error('qwen-agent did not produce a final answer');
+      }
+      const totalToolUses = Number(prefetch?.toolCallCount || 0) + Number(bridgeResult?.toolCallCount || 0);
+      this.state.messages.push({
+        role: 'assistant',
+        content: [createTextBlock(assistantText)],
+      });
+      this._recordTransition('assistant_message', {
+        turn: 1,
+        toolUses: totalToolUses,
+      });
+      this._recordTranscript({
+        kind: 'assistant',
+        turn: 1,
+        engine: 'qwen_agent_sidecar',
+        toolCallCount: totalToolUses,
+        preview: previewText(assistantText),
+      });
+      await onAssistantMessage({
+        turn: 1,
+        text: assistantText,
+        rawText: assistantText,
+        toolUses: totalToolUses,
+        finishReason: 'stop',
+      });
       this._persistState();
-      await onTerminal({ reason: this.state.terminalReason, turn: Number(this.state.currentTurn || 0) });
-      return {
-        answer: fallbackAnswer,
-        trace: runTrace,
-        transcript: this.state.transcript.slice(transcriptStartIndex),
-        runtime: this._runtimeSnapshot(),
-        summary: fallbackAnswer,
-        primaryFilePath: toStringValue(primary.path),
-        primaryFileContent: toStringValue(primary.content).slice(0, 24000),
-        usage: { ...this.state.totalUsage },
-        sessionId: this.sessionId,
-      };
+
+      return await this._returnFinalAnswer({
+        finalAnswer: assistantText,
+        runTrace: this.state.trace.slice(traceStartIndex),
+        turn: 1,
+        transcriptStartIndex,
+        onStatus,
+        onToken,
+        onTerminal,
+      });
     } finally {
       this.runtimeHandlers = {};
       if (this.runtime) {

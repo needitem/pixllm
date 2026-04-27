@@ -8,8 +8,6 @@ aliases:
   - nximageview wpf hosting
   - windowsformshost nximageview
   - wpf에서 nximageview를 호스팅
-  - imageview geotiff display
-  - imageview xdm display
   - imageview layer add
   - imageview background map
   - imageview zoom fit
@@ -41,7 +39,8 @@ tags:
 - Goal: answer most `NXImageView` usage questions from one page.
 - Default host context: WPF. `NXImageView` is a WinForms-backed control, so host it through `WindowsFormsHost` when the shell matters.
 - This workflow covers host setup, layer attach/remove, background-map configuration, zoom/world control, screen/world conversion, pixel read, and XDM composite hookup.
-- For the current wiki routing, treat view-owned operations such as layer attach, background map, zoom, refresh, and ImageView screen/world conversion as `ImageView`; if the question is really about XDM band/composite assembly, route to `Raster`.
+- For the current wiki routing, treat view-owned operations such as layer attach, background map, zoom, refresh, and ImageView screen/world conversion as `ImageView`; if the question is about loading XDM/GeoTiff/raster files, band extraction, composite assembly, or display enhancement, route to `Raster`.
+- For the current wiki routing, displayed XDM quality/enhancement/correction questions (`화질개선`, `보정`, stretch, gamma, contrast, interpolation) route to `Raster`; `ImageView` only contributes layer attach and refresh.
 - For the current wiki routing, questions about `NXImageLayerCompLink` comp-manager retrieval or composite `1/2 Front` settings stay in `ImageView`; those are documented here as view-owned composite-link operations.
 - For the current wiki routing, embedded video-layer channel wiring, channel reset, initial frame size, and video-layer screen/world conversion are handled by `VideoView`.
 
@@ -60,6 +59,7 @@ tags:
 
 ## Practical Answer Shape
 - `ImageView에 레이어 추가`: view 생성/호스팅 -> `AddImageLayer` -> `ZoomFit` 또는 `RefreshScreen`
+- `파생 레이어 추가`: `AddImageLayer` 선언은 `NXImageLayer` by-ref이므로 `NXImageLayerComposites`/`NXImageLayerVectorDisplay` 같은 파생 타입은 `NXImageLayer imageLayer = derivedLayer as NXImageLayer;` 후 `AddImageLayer(ref imageLayer)`로 답함
 - `배경지도 설정`: `SetBackgroundMap` 호출과 이후 view refresh를 같이 설명
 - `화면/실좌표 변환`: `ScreenToWorld` / `WorldToScreen`을 pair로 설명
 - `합성 관리자/comp-link`: `GetXDMCompManager` 또는 `GetXDLCompManager1/2`가 필요한지 먼저 가릅니다
@@ -101,7 +101,7 @@ bundle_pages:
 
 <!-- GENERATED:RUNTIME_STATUS:START -->
 ## Runtime Ingest Status
-- Auto-generated from raw source ingest at `2026-04-24T01:05:26Z`.
+- Auto-generated from raw source ingest at `2026-04-27T01:07:34Z`.
 - Resolved required symbols: `20/20`
 - Linked modules:
   - `NXImage`

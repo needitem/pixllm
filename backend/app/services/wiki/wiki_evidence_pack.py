@@ -11,13 +11,17 @@ from .wiki_pages import _page_payload
 
 _METHOD_TOKEN_RE = re.compile(r"\b[A-Z][A-Za-z0-9_]*(?:\.[A-Z][A-Za-z0-9_]*)?\b")
 _BACKTICK_RE = re.compile(r"`([^`]{2,160})`")
+_NEGATIVE_METHOD_LINE_RE = re.compile(
+    r"\bdo\s+not\b|\bdon't\b|\bmust\s+not\b|\bnever\b|확인\s*안\s*된|쓰지\s*않|넣지\s*않|하지\s*않|금지",
+    re.IGNORECASE,
+)
 
 _WORKFLOW_CONTENT_LIMIT = 5600
-_BUNDLE_CONTENT_LIMIT = 1600
+_BUNDLE_CONTENT_LIMIT = 3600
 _METHOD_CONTENT_LIMIT = 1200
 _METHOD_SOURCE_SNIPPET_LIMIT = 2200
 _MAX_BUNDLE_PAGES = 4
-_MAX_METHOD_DECLARATIONS = 14
+_MAX_METHOD_DECLARATIONS = 24
 _MAX_SOURCE_SNIPPETS_PER_METHOD = 3
 _SOURCE_TEXT_CACHE: Dict[str, Dict[str, Any]] = {}
 
@@ -123,17 +127,76 @@ def _source_snippet_from_ref(source_ref: Dict[str, Any], *, role: str) -> Option
     }
 
 
+def _source_example_snippet_for_record(record: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    member_name = str(record.get("member_name") or "").strip()
+    source_refs = record.get("source_refs") if isinstance(record.get("source_refs"), list) else []
+    first_ref = source_refs[0] if source_refs and isinstance(source_refs[0], dict) else {}
+    source_path = str(first_ref.get("path") or "").strip().replace("\\", "/")
+    declaration_line = _parse_start_line(str(first_ref.get("line_range") or ""))
+    if not member_name or declaration_line <= 0:
+        return None
+    target = _source_file_for_ref(source_path)
+    if not target or not target.exists() or not target.is_file():
+        return None
+    lines = _source_lines(target)
+    if not lines:
+        return None
+
+    call_pattern = re.compile(rf"\b{re.escape(member_name)}\s*\(")
+    search_start = max(0, declaration_line - 220)
+    search_end = min(len(lines), declaration_line + 80)
+    candidates: List[int] = []
+    for index in range(search_start, search_end):
+        line = lines[index]
+        if not call_pattern.search(line):
+            continue
+        # Prefer examples in XML doc comments; skip the actual declaration line.
+        if index == declaration_line - 1:
+            continue
+        stripped = line.strip()
+        if not stripped.startswith("///") and index < declaration_line - 1:
+            continue
+        candidates.append(index)
+
+    if not candidates:
+        return None
+    before_declaration = [index for index in candidates if index < declaration_line - 1]
+    match_index = before_declaration[-1] if before_declaration else candidates[0]
+    start_index = max(0, match_index - 8)
+    end_index = min(len(lines), match_index + 22)
+    rendered = "\n".join(
+        f"{index + 1}: {lines[index]}"
+        for index in range(start_index, end_index)
+    )
+    return {
+        "path": source_path,
+        "line_range": f"{start_index + 1}-{end_index}",
+        "role": "example",
+        "content": _clip_text(rendered, _METHOD_SOURCE_SNIPPET_LIMIT),
+    }
+
+
 def _source_snippets_for_record(record: Dict[str, Any]) -> List[Dict[str, Any]]:
     snippets: List[Dict[str, Any]] = []
-    for index, source_ref in enumerate(record.get("source_refs") if isinstance(record.get("source_refs"), list) else []):
-        if not isinstance(source_ref, dict):
-            continue
-        role = "declaration" if index == 0 else "implementation"
-        snippet = _source_snippet_from_ref(source_ref, role=role)
-        if snippet:
-            snippets.append(snippet)
+    source_refs = record.get("source_refs") if isinstance(record.get("source_refs"), list) else []
+    first_ref = source_refs[0] if source_refs and isinstance(source_refs[0], dict) else {}
+    declaration = _source_snippet_from_ref(first_ref, role="declaration") if first_ref else None
+    if declaration:
+        snippets.append(declaration)
+    example = _source_example_snippet_for_record(record)
+    if example and not any(
+        snippet.get("path") == example.get("path") and snippet.get("line_range") == example.get("line_range")
+        for snippet in snippets
+    ):
+        snippets.append(example)
+    for source_ref in source_refs[1:]:
         if len(snippets) >= _MAX_SOURCE_SNIPPETS_PER_METHOD:
             break
+        if not isinstance(source_ref, dict):
+            continue
+        snippet = _source_snippet_from_ref(source_ref, role="implementation")
+        if snippet:
+            snippets.append(snippet)
     return snippets
 
 
@@ -183,9 +246,12 @@ def _extract_method_candidate_tokens(*values: str, limit: int = 48) -> List[str]
         text = str(raw_value or "")
         if not text:
             continue
-        for backtick_value in _BACKTICK_RE.findall(text):
-            candidates.extend(_METHOD_TOKEN_RE.findall(backtick_value))
-        candidates.extend(_METHOD_TOKEN_RE.findall(text))
+        for line in text.splitlines():
+            if _NEGATIVE_METHOD_LINE_RE.search(line):
+                continue
+            for backtick_value in _BACKTICK_RE.findall(line):
+                candidates.extend(_METHOD_TOKEN_RE.findall(backtick_value))
+            candidates.extend(_METHOD_TOKEN_RE.findall(line))
     return _unique_strings(candidates, limit=limit)
 
 
@@ -195,8 +261,11 @@ def _extract_relevant_line_method_tokens(query: str, content: str, *, limit: int
         return []
     candidates: List[str] = []
     for line in str(content or "").splitlines():
+        if _NEGATIVE_METHOD_LINE_RE.search(line):
+            continue
         lowered = line.lower()
-        if not any(term and term in lowered for term in terms):
+        compact_lowered = re.sub(r"\s+", "", lowered)
+        if not any(term and (term in lowered or re.sub(r"\s+", "", term) in compact_lowered) for term in terms):
             continue
         for backtick_value in _BACKTICK_RE.findall(line):
             candidates.extend(_METHOD_TOKEN_RE.findall(backtick_value))
@@ -305,8 +374,9 @@ def _append_method_payload(
     payload: Dict[str, Any],
 ) -> None:
     symbol = str(payload.get("symbol") or "").strip()
+    declaration = str(payload.get("declaration") or "").strip()
     path_value = str(payload.get("path") or "").strip()
-    key = (symbol or path_value).lower()
+    key = f"{symbol}\n{declaration}".strip().lower() if declaration else (symbol or path_value).lower()
     if not key or key in seen:
         return
     seen.add(key)
@@ -318,8 +388,10 @@ def _build_method_declarations(
     *,
     query: str,
     workflow_content: str,
+    bundle_content: str = "",
     required_symbols: Sequence[str],
     linked_method_symbols: Sequence[str],
+    verification_rules: Sequence[str],
 ) -> List[Dict[str, Any]]:
     methods_index = load_methods_index_for_root(root)
     if not methods_index:
@@ -327,11 +399,30 @@ def _build_method_declarations(
 
     output: List[Dict[str, Any]] = []
     seen = set()
+    curated_source_backed = any(
+        str(rule or "").strip().lower() == "treat_this_page_as_source_backed_family_overview"
+        for rule in verification_rules or []
+    )
+    if curated_source_backed:
+        for record in _resolve_method_records_for_symbols(
+            _unique_strings([*required_symbols, *linked_method_symbols], limit=80),
+            methods_index,
+        ):
+            _append_method_payload(output, seen, _method_payload_from_record(record, reason="workflow_symbol"))
+            if len(output) >= _MAX_METHOD_DECLARATIONS:
+                return output
+        return output
+
+    method_context = "\n\n".join(
+        part
+        for part in (str(workflow_content or ""), str(bundle_content or ""))
+        if part.strip()
+    )
     candidate_tokens = _prioritize_method_tokens(
         _unique_strings(
             [
-                *_extract_relevant_line_method_tokens(query, workflow_content, limit=32),
-                *_extract_method_candidate_tokens(query, workflow_content, limit=48),
+                *_extract_relevant_line_method_tokens(query, method_context, limit=32),
+                *_extract_method_candidate_tokens(query, method_context, limit=48),
             ],
             limit=64,
         ),
@@ -451,8 +542,8 @@ def _build_answer_grounding(method_declarations: Sequence[Dict[str, Any]]) -> Di
         ],
         "should": [
             "Use workflow/howto/concept pages for the ordered procedure and API family choice.",
-            "For .NET DLL usage, keep C++/CLI declarations as evidence but write usage examples in C# unless the user explicitly asks for another language.",
-            "Translate C++/CLI by-ref parameters such as Type^% to C# ref arguments in examples while preserving the original declaration.",
+            "For .NET DLL usage, keep source declarations as evidence but write usage examples in C# unless the user explicitly asks for another language.",
+            "Translate [OutAttribute] Type^% parameters to C# out arguments, and non-out Type^% object parameters to C# ref arguments.",
             "If workflow prose conflicts with declarations or source snippets, follow the code evidence.",
         ],
         "may": [
@@ -476,19 +567,17 @@ def build_workflow_evidence_pack(
 
     entry = _workflow_entry_for_path(root, resolved_path)
     page = _workflow_page_payload(root, resolved_path)
-    workflow_content = str(entry.get("content") or page.get("content") or (workflow_result or {}).get("content") or "")
+    workflow_content = str(page.get("content") or entry.get("content") or (workflow_result or {}).get("content") or "")
     if not workflow_content:
         return {}
 
     verified_facts = _extract_section_yaml(workflow_content, "Verified Facts")
-    required_symbols = _unique_strings(
-        entry.get("required_symbols") if isinstance(entry.get("required_symbols"), list) else verified_facts.get("required_symbols"),
-        limit=80,
-    )
-    verification_rules = _unique_strings(
-        entry.get("verification_rules") if isinstance(entry.get("verification_rules"), list) else verified_facts.get("verification_rules"),
-        limit=32,
-    )
+    entry_required_symbols = entry.get("required_symbols") if isinstance(entry.get("required_symbols"), list) else []
+    fact_required_symbols = verified_facts.get("required_symbols") if isinstance(verified_facts.get("required_symbols"), list) else []
+    required_symbols = _unique_strings([*fact_required_symbols, *entry_required_symbols], limit=80)
+    entry_verification_rules = entry.get("verification_rules") if isinstance(entry.get("verification_rules"), list) else []
+    fact_verification_rules = verified_facts.get("verification_rules") if isinstance(verified_facts.get("verification_rules"), list) else []
+    verification_rules = _unique_strings([*fact_verification_rules, *entry_verification_rules], limit=32)
     bundle_pages = _bundle_page_payloads(
         root,
         entry.get("bundle_pages") if isinstance(entry.get("bundle_pages"), list) else [],
@@ -497,8 +586,14 @@ def build_workflow_evidence_pack(
         root,
         query=str(query or ""),
         workflow_content=workflow_content,
+        bundle_content="\n\n".join(
+            str(item.get("content") or "")
+            for item in bundle_pages[:_MAX_BUNDLE_PAGES]
+            if isinstance(item, dict)
+        ),
         required_symbols=required_symbols,
         linked_method_symbols=entry.get("linked_method_symbols") if isinstance(entry.get("linked_method_symbols"), list) else [],
+        verification_rules=verification_rules,
     )
     source_anchors = _unique_strings(
         [
@@ -547,7 +642,7 @@ def build_workflow_evidence_pack(
             "Use bundled pages for procedural context.",
             "Must verify API signatures, ref/out/% parameters, overloads, enum literals, and property-vs-method form from declarations.",
             "Should use source snippets for concrete side effects and implementation behavior.",
-            "For .NET DLL usage, keep declarations as source evidence but answer with C# examples by default; translate C++/CLI by-ref syntax such as Type^% to C# ref usage.",
+            "For .NET DLL usage, keep declarations as source evidence but answer with C# examples by default; translate [OutAttribute] by-ref parameters to C# out and non-out object by-ref parameters to C# ref.",
             "May use normal SDK reasoning for high-level procedure and sample structure when it does not change verified signatures or source-backed behavior.",
             "If a required signature or risky behavior is absent from this pack, state only that specific detail as unverified.",
         ],

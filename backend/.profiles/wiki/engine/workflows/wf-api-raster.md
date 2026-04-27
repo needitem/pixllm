@@ -7,6 +7,11 @@ aliases:
   - xrasterio usage
   - xdm composite usage
   - geotiff load
+  - imageview geotiff display
+  - imageview xdm display
+  - imageview xdm file load
+  - imageview xdm 파일 로드
+  - imageview를 이용하여 xdm 파일 로드하여 화면에 도시
   - xdm band display
   - grayscale rgb composite
   - raster enhance
@@ -24,6 +29,11 @@ aliases:
   - xdm 합성 순서 변경
   - xdm composite를 추가하는 방법
   - xdm stretch와 cut 값을 조정하는 방법
+  - xdm 영상 화질개선
+  - xdm 영상 보정
+  - imageview 화질개선
+  - imageview에서 도시한 영상의 화질개선
+  - 도시한 영상의 화질개선
   - xdm composite 추가
   - xdm composite 이동 제거
 symbols:
@@ -104,7 +114,8 @@ tags:
 - `밴드 접근`: `XRSLoadFile.GetBandAt`
 - `흑백/칼라 도시`: `XDMComposite.SetBand`, `XDMCompManager.AddXDMComposite`
 - `합성 순서/선택`: `MoveComposite`, `RemoveXDMComposite*`, `HitTest`
-- `화질 조정`: `SetCutType`, `SetStretchCoverage`, `SetStretchType`, `SetCutMin`, `SetCutMax`
+- `화질 개선/보정`: `SetCutType`, `SetStretchCoverage`, `SetStretchType`, `SetCutMin`, `SetCutMax`, `SetGammaValue`, `SetBrightness`, `SetContrast`, `SetSaturation`, `SetColorBalance`, `InterpolPixel`, `InterpolByCubic`
+- `확대 표시 품질`: `XDMComposite.InterpolPixel`, `XDMComposite.InterpolByCubic`
 - `고급 XDM 처리`: `XDMBandHistogramMatching`, `XDMBandImageSharpen`, `XDMBandNoiseInterpol`, `XDMBandGeoCorrect`, `XDMBandEpipolar`, `XDMBandOrthoRPC`, `XDMBandSarS2G`
 
 ## Family Boundaries
@@ -113,10 +124,33 @@ tags:
 - Source anchors for this family live in [NXDLio source](../pages/sources/nxdlio.md) and [NXDLrs source](../pages/sources/nxdlrs.md).
 
 ## Practical Answer Shape
-- `파일 로드`: `Initialize` -> `LoadFile`/`LoadRawFile` -> `GetSubDatasets` or `GetBandAt`
-- `흑백/칼라 합성`: `SetBand` -> `AddXDMComposite` -> 필요 시 `MoveComposite`
-- `화질 조정`: `SetCutType`, `SetStretchType`, `SetStretchCoverage`, `SetCutMin/Max`
-- `ImageView 표시`: composite를 만든 뒤 `ImageView` workflow로 넘겨 최종 view attach를 설명
+- `파일 로드`: 기본 XDM/GeoTiff 표시 예제는 짧은 `LoadFile(fileName, out error, calcStatistics, eIOCreateXLDMode.All_NoMsg)` overload를 우선 사용; 확인 안 된 `None`/placeholder enum을 쓰지 않음
+- `흑백/칼라 합성`: `SetBand(ref band, (eCompBandIdx)0/1/2)` -> `AddXDMComposite` -> 필요 시 `MoveComposite`; `Red/Green/Blue` enum member는 증거에 없으면 쓰지 않음
+- `화질 개선/보정`: 생성/등록 시 보관한 `XDMComposite` 참조에 `SetCutType`, `SetStretchType`, `SetStretchCoverage`, `SetCutMin/Max`, `SetGammaValue`, `SetBrightness`, `SetContrast`, `SetSaturation`, `SetColorBalance`, `InterpolPixel`, `InterpolByCubic`를 적용
+- `도시된 영상 보정 코드`: 반드시 `void ApplyDisplayQuality(NXImageView imageView, XDMComposite comp)` 같은 helper 형태로 작성하고, 이미 가진 `XDMComposite`를 파라미터로 받음; `NXImageView` getter나 확인 안 된 manager index getter를 만들지 않음
+- `확대 표시 품질`: `InterpolPixel`, `InterpolByCubic`
+- `ImageView 표시`: composite를 만든 뒤 `NXImageLayer imageLayer = compLayer as NXImageLayer; imageView.AddImageLayer(ref imageLayer);` 형태로 view attach를 설명
+
+## Display Quality / Enhancement Flow
+Use this exact helper shape for questions about improving an already displayed ImageView/XDM image. The composite reference must come from the earlier create/register step; do not invent ImageView or manager getter code to recover it.
+
+```csharp
+void ApplyDisplayQuality(NXImageView imageView, XDMComposite comp)
+{
+    if (imageView == null || comp == null)
+        return;
+
+    comp.SetBrightness(brightnessValue);
+    comp.SetContrast(contrastValue);
+    comp.SetSaturation(saturationValue);
+    comp.SetColorBalance(redBalance, greenBalance, blueBalance);
+    comp.SetGammaValue(gammaValue, 0);
+    comp.InterpolPixel = true;
+    comp.InterpolByCubic = true;
+
+    imageView.RefreshScreen();
+}
+```
 
 
 ## Answering Guidance
@@ -134,7 +168,15 @@ concept_terms:
 - enhancement
 routing_hints:
 - all_of: [xdm, 합성]
-  any_of: [순서, stretch, cut, 흑백, 칼라, histogram, sharpen]
+  any_of: [순서, stretch, cut, 흑백, 칼라, histogram, sharpen, gamma, contrast, 보정, 화질개선]
+- all_of: [imageview, xdm]
+  any_of: [file, load, display, 로드, 파일, 도시, 표시]
+- all_of: [xdm, 파일]
+  any_of: [로드, 도시, 표시, imageview]
+- all_of: [화질개선]
+- all_of: [영상, 보정]
+- all_of: [imageview]
+  any_of: [화질개선, 보정, stretch, gamma, contrast, interpolation]
 - all_of: [raster]
   any_of: [band, subdataset, loadrawfile, geotiff]
 bundle_pages:
@@ -158,8 +200,8 @@ bundle_pages:
 
 <!-- GENERATED:RUNTIME_STATUS:START -->
 ## Runtime Ingest Status
-- Auto-generated from raw source ingest at `2026-04-24T01:05:26Z`.
-- Resolved required symbols: `16/16`
+- Auto-generated from raw source ingest at `2026-04-27T01:07:34Z`.
+- Resolved required symbols: `25/25`
 - Linked modules:
   - `NXDLio`
   - `NXDLrs`
@@ -182,6 +224,15 @@ required_symbols:
   - XDMComposite.SetCutMax
   - XDMComposite.SetStretchCoverage
   - XDMComposite.SetStretchType
+  - XDMComposite.GetBand
+  - XDMComposite.SetGammaValue
+  - XDMComposite.GetGammaValue
+  - XDMComposite.SetBrightness
+  - XDMComposite.SetContrast
+  - XDMComposite.SetSaturation
+  - XDMComposite.SetColorBalance
+  - XDMComposite.InterpolPixel
+  - XDMComposite.InterpolByCubic
   - XDMCompManager.AddXDMComposite
   - XDMCompManager.RemoveXDMCompositeAll
   - XDMCompManager.MoveComposite

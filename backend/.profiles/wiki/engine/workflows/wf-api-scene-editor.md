@@ -79,7 +79,7 @@ bundle_pages:
 
 <!-- GENERATED:RUNTIME_STATUS:START -->
 ## Runtime Ingest Status
-- Auto-generated from raw source ingest at `2026-04-24T01:05:26Z`.
+- Auto-generated from raw source ingest at `2026-04-27T01:07:34Z`.
 - Resolved required symbols: `12/12`
 - Linked modules:
   - `NXDLscene`

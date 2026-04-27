@@ -1,6 +1,6 @@
 ---
 title: VideoView API Workflow
-description: Open video, bind channels, capture frames, extract KLV, and explain embedded video-layer handling.
+description: Open video, bind opened video objects to views, capture frames, extract KLV, and explain embedded video-layer handling.
 aliases:
   - videoview api
   - videoview 사용법
@@ -62,14 +62,14 @@ tags:
 
 ## Primary Usage Buckets
 - `동영상 열기`: `XVideoIO.OpenFile`
-- `화면 표시`: `SetVideoChannel`, `ResetVideoChannel`, `RefreshScreen`, `RequestRender`
+- `화면 표시`: 기본 playback은 `SetVideoChannel(video, channelIndex)`, 이후 `RefreshScreen` 또는 `RequestRender`
 - `프레임 캡처`: `CaptureFrame`
 - `KLV`: `NXMpegTSAnalysis.GetKLVMetaData`
 - `ImageView 안의 비디오`: `NXImageLayerVideo.SetVideoChannel`, `ResetVideoChannel`, `SetInitialFrameSize`
 - `영상 융합`: `SetVideoChannelFuse`, `EnableVideoFusion`
 
 ## Practical Answer Shape
-- `파일 열기 + 표시`: `OpenFile` -> `SetVideoChannel` -> `RefreshScreen/RequestRender`
+- `파일 열기 + 표시`: 기본 재생 예제는 `XVideoIO videoIO = new XVideoIO();` -> `videoIO.OpenFile(filePath, driverName, out error)` -> 반드시 `videoView.SetVideoChannel(video, 0)` -> `RefreshScreen/RequestRender`; `SetVideoChannel(video)`처럼 channel index를 빼지 않고, 확인 안 된 `video.GetChannel(...)`을 끼워 넣지 않음
 - `채널 교체/해제`: `SetVideoChannel`과 `ResetVideoChannel`을 같은 흐름 안에서 설명
 - `프레임 캡처`: live view 캡처인지, embedded video layer인지 먼저 나눈 뒤 `CaptureFrame` 또는 layer-side API를 제시
 - `embedded video layer`: `NXImageLayerVideo` 계열은 view family가 아니라 video family 책임으로 설명
@@ -118,7 +118,7 @@ bundle_pages:
 
 <!-- GENERATED:RUNTIME_STATUS:START -->
 ## Runtime Ingest Status
-- Auto-generated from raw source ingest at `2026-04-24T01:05:26Z`.
+- Auto-generated from raw source ingest at `2026-04-27T01:07:34Z`.
 - Resolved required symbols: `13/13`
 - Linked modules:
   - `NXVideo`

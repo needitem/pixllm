@@ -117,6 +117,57 @@ function normalizeAnswerGrounding(item = {}) {
   };
 }
 
+function compactSymbol(value = '') {
+  return toStringValue(value).toLowerCase().replace(/[^a-z0-9_.]+/g, '');
+}
+
+function requiredSymbolRank(symbol = '', requiredSymbols = []) {
+  const compact = compactSymbol(symbol);
+  if (!compact) {
+    return 9999;
+  }
+  const index = (Array.isArray(requiredSymbols) ? requiredSymbols : [])
+    .map((item) => compactSymbol(item))
+    .findIndex((item) => item && (compact === item || compact.endsWith(`.${item}`)));
+  return index >= 0 ? index : 9999;
+}
+
+function prioritizeEvidencePack(pack = {}) {
+  if (!pack || typeof pack !== 'object' || Array.isArray(pack)) {
+    return null;
+  }
+  const requiredSymbols = Array.isArray(pack?.workflow?.required_symbols) ? pack.workflow.required_symbols : [];
+  const sortByRequiredSymbols = (items = []) => (Array.isArray(items) ? items : [])
+    .map((item, index) => ({ item, index }))
+    .sort((a, b) => (
+      requiredSymbolRank(a.item?.symbol || a.item?.title, requiredSymbols)
+      - requiredSymbolRank(b.item?.symbol || b.item?.title, requiredSymbols)
+    ) || (a.index - b.index))
+    .map((entry) => entry.item);
+
+  pack.method_declarations = sortByRequiredSymbols(pack.method_declarations);
+  if (pack.answer_grounding && typeof pack.answer_grounding === 'object' && !Array.isArray(pack.answer_grounding)) {
+    const facts = Array.isArray(pack.answer_grounding.facts) ? pack.answer_grounding.facts : [];
+    const seen = new Set(facts.map((item) => compactSymbol(item?.symbol)).filter(Boolean));
+    const augmentedFacts = [...facts];
+    for (const item of pack.method_declarations || []) {
+      const symbol = compactSymbol(item?.symbol);
+      if (!symbol || seen.has(symbol)) {
+        continue;
+      }
+      seen.add(symbol);
+      augmentedFacts.push({
+        symbol: toStringValue(item?.symbol),
+        declaration: toStringValue(item?.declaration),
+        source_refs: Array.isArray(item?.source_refs) ? item.source_refs : [],
+        source_snippets: Array.isArray(item?.source_snippets) ? item.source_snippets : [],
+      });
+    }
+    pack.answer_grounding.facts = sortByRequiredSymbols(augmentedFacts);
+  }
+  return pack;
+}
+
 function normalizeEvidencePack(pack = {}) {
   if (!pack || typeof pack !== 'object' || Array.isArray(pack)) {
     return null;
@@ -124,7 +175,7 @@ function normalizeEvidencePack(pack = {}) {
   const workflow = pack.workflow && typeof pack.workflow === 'object'
     ? normalizeEvidencePage(pack.workflow)
     : null;
-  return {
+  return prioritizeEvidencePack({
     version: Number(pack.version || 1),
     query: toStringValue(pack.query),
     workflow,
@@ -160,7 +211,105 @@ function normalizeEvidencePack(pack = {}) {
       ? pack.answer_rules.map((value) => toStringValue(value)).filter(Boolean)
       : [],
     answer_grounding: normalizeAnswerGrounding(pack.answer_grounding),
+  });
+}
+
+const GENERIC_QUERY_TERMS = new Set([
+  '파일',
+  '로드',
+  '화면',
+  '방법',
+  '사용',
+  '이용',
+  '도시',
+  '알려줘',
+  '에서',
+  '으로',
+  '하는',
+]);
+
+function queryTerms(value = '') {
+  const terms = Array.from(new Set(
+    String(value || '')
+      .toLowerCase()
+      .match(/[a-z][a-z0-9_]{1,}|[가-힣]{2,}/g) || [],
+  )).filter((term) => term.length >= 2 && term !== 'c' && !GENERIC_QUERY_TERMS.has(term));
+  return terms.map((term) => ({
+    term,
+    weight: /^[a-z][a-z0-9_]{2,}$/.test(term) ? 5 : 2,
+  }));
+}
+
+function workflowRelevanceScore(result = {}, terms = []) {
+  const haystack = [
+    result?.path,
+    result?.title,
+    result?.summary,
+    result?.excerpt,
+    result?.content,
+  ].map((value) => String(value || '').toLowerCase()).join('\n');
+  if (!haystack) {
+    return 0;
+  }
+  return (Array.isArray(terms) ? terms : [])
+    .reduce((score, item) => score + (item?.term && haystack.includes(item.term) ? Number(item.weight || 1) : 0), 0);
+}
+
+function workflowPath(result = {}) {
+  const pathValue = toStringValue(result?.path).replace(/\\/g, '/');
+  return pathValue.startsWith('workflows/') && pathValue.endsWith('.md') ? pathValue : '';
+}
+
+async function loadRelatedWorkflowEvidencePacks({
+  backend = {},
+  wikiId = '',
+  query = '',
+  results = [],
+  primaryPack = null,
+  maxPacks = 5,
+} = {}) {
+  const packs = [];
+  const seen = new Set();
+  const addPack = (pack) => {
+    const normalized = normalizeEvidencePack(pack);
+    const pathValue = toStringValue(normalized?.workflow?.path).toLowerCase();
+    if (!normalized || !pathValue || seen.has(pathValue)) {
+      return;
+    }
+    seen.add(pathValue);
+    packs.push(normalized);
   };
+  addPack(primaryPack);
+
+  const terms = queryTerms(query);
+  const candidates = (Array.isArray(results) ? results : [])
+    .map((result, index) => ({
+      path: workflowPath(result),
+      score: workflowRelevanceScore(result, terms),
+      index,
+    }))
+    .filter((item) => item.path && !seen.has(item.path.toLowerCase()))
+    .sort((a, b) => (b.score - a.score) || (a.index - b.index));
+
+  for (const candidate of candidates) {
+    if (packs.length >= Math.max(1, Number(maxPacks || 3))) {
+      break;
+    }
+    if (candidate.score <= 0 && packs.length > 0) {
+      continue;
+    }
+    try {
+      const page = await readBackendWikiPage({
+        baseUrl: backend.baseUrl,
+        wikiId,
+        path: candidate.path,
+      });
+      addPack(page?.evidence_pack);
+    } catch {
+      // Search must still be useful when one related workflow page is stale.
+    }
+  }
+  return packs;
 }
 
 function WikiSearchTool() {
@@ -235,13 +384,22 @@ function WikiSearchTool() {
         });
         appendResults(workflowResult?.results);
         if (mergedResults.length > 0) {
+          const evidencePack = normalizeEvidencePack(workflowResult?.evidence_pack);
+          const evidencePacks = await loadRelatedWorkflowEvidencePacks({
+            backend,
+            wikiId: toStringValue(workflowResult?.wiki_id) || toStringValue(input?.wiki_id) || backend.wikiId,
+            query,
+            results: mergedResults,
+            primaryPack: evidencePack,
+          });
           return {
             ok: true,
             wiki_id: toStringValue(workflowResult?.wiki_id) || toStringValue(input?.wiki_id) || backend.wikiId,
             query,
             total: mergedResults.length,
             results: mergedResults,
-            evidence_pack: normalizeEvidencePack(workflowResult?.evidence_pack),
+            evidence_pack: evidencePack,
+            evidence_packs: evidencePacks,
           };
         }
       }
@@ -255,13 +413,22 @@ function WikiSearchTool() {
         kind: requestedKind,
       });
       appendResults(fallbackResult?.results);
+      const evidencePack = normalizeEvidencePack(fallbackResult?.evidence_pack);
+      const evidencePacks = await loadRelatedWorkflowEvidencePacks({
+        backend,
+        wikiId: toStringValue(fallbackResult?.wiki_id) || toStringValue(input?.wiki_id) || backend.wikiId,
+        query,
+        results: mergedResults,
+        primaryPack: evidencePack,
+      });
       return {
         ok: true,
         wiki_id: toStringValue(fallbackResult?.wiki_id),
         query,
         total: mergedResults.length > 0 ? mergedResults.length : Number(fallbackResult?.total || 0),
         results: mergedResults,
-        evidence_pack: normalizeEvidencePack(fallbackResult?.evidence_pack),
+        evidence_pack: evidencePack,
+        evidence_packs: evidencePacks,
       };
     },
   });
@@ -288,10 +455,19 @@ function WikiReadTool() {
       if (!backend.baseUrl) {
         return wikiBackendUnavailable();
       }
+      const pagePath = toStringValue(input?.path);
+      if (/^source[\\/]/i.test(pagePath) || /\.(?:h|hpp|cpp|cxx|cc|cs)$/i.test(pagePath)) {
+        return {
+          ok: false,
+          error: 'wiki_read_requires_wiki_page_path',
+          message: 'wiki_read accepts backend wiki page paths from wiki_search results, not source_refs paths. Use the source_refs as citations or search for the matching workflow/page.',
+          path: pagePath,
+        };
+      }
       const page = await readBackendWikiPage({
         baseUrl: backend.baseUrl,
         wikiId: toStringValue(input?.wiki_id) || backend.wikiId,
-        path: toStringValue(input?.path),
+        path: pagePath,
       });
       return {
         ok: true,

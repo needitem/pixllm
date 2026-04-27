@@ -33,6 +33,7 @@ symbols:
   - XvcPolygon
   - XvcLayer
   - NXImageView
+  - NXImageLayerVectorDisplay
 tags:
   - engine
   - workflow
@@ -50,13 +51,14 @@ tags:
 - `파일 메타데이터`: bounding box, spatial reference, driver key, supported extension
 - `객체/속성`: `GetPropertyNameAt`, `GetPropertyValueAt`
 - `기하 생성`: `SetVertex`, `SetVertices`, `Add`
-- `overlay / hit test`: `HitTest`, view layer attach
+- `overlay / hit test`: `NXImageLayerVectorDisplay.SetDataSource/AddDataSource`, `NXImageView.AddImageLayer`, `HitTest`
 
 ## Practical Answer Shape
-- `벡터 파일 로드`: 먼저 `Initialize` -> `LoadFile` -> 필요한 경우 `GetFileInfo` 순서로 답합니다.
+- `벡터 파일 로드`: 먼저 `Initialize` -> `XSpatialReference srIn` 준비 -> `LoadFile(..., out error, ref srIn)` 순서로 답합니다. `pInSR` by-ref 인자에 `null`을 직접 넣지 않습니다.
 - `속성 확인`: object property name/value access와 geometry setup를 분리해서 설명합니다.
-- `overlay`: vector를 로드한 뒤 어느 view에 붙일지 다음 workflow를 연결해줍니다.
+- `overlay`: `XVectorIO.LoadFile`로 얻은 `XvcBase`를 `NXImageLayerVectorDisplay.SetDataSource`에 넣고 바로 `vectorLayer.SetUpdateNeeded()`를 호출한 뒤, `NXImageLayer imageLayer = vectorLayer as NXImageLayer;` 후 `NXImageView.AddImageLayer(ref imageLayer)`로 붙이는 순서로 답합니다. 업데이트 플래그는 view 메서드처럼 쓰지 않습니다.
 - `기하 생성`: point/line/polyline/polygon을 각각 다른 메서드군으로 설명합니다.
+- `ImageView overlay 예제`: 짧은 `LoadFile(shpPath, out error, ref srIn)` overload를 우선 사용합니다. property/thread 인자를 추가한 overload는 사용자가 그 옵션을 묻는 경우에만 설명합니다.
 
 
 ## Answering Guidance
@@ -84,8 +86,8 @@ bundle_pages:
 
 <!-- GENERATED:RUNTIME_STATUS:START -->
 ## Runtime Ingest Status
-- Auto-generated from raw source ingest at `2026-04-24T01:05:26Z`.
-- Resolved required symbols: `11/11`
+- Auto-generated from raw source ingest at `2026-04-27T01:07:34Z`.
+- Resolved required symbols: `14/14`
 - Linked modules:
   - `NXDLio`
   - `NXDLvc`
@@ -107,6 +109,9 @@ required_symbols:
   - XvcPolyline.Add
   - XvcPolygon.Add
   - XvcLayer.HitTest
+  - NXImageLayerVectorDisplay.SetDataSource
+  - NXImageLayerVectorDisplay.AddDataSource
+  - NXImageLayerVectorDisplay.SetUpdateNeeded
   - NXImageView.AddImageLayer
 verification_rules:
   - use_this_workflow_as_primary_path

@@ -1,7 +1,7 @@
 # LLM Wiki Index
 
 - Total pages: `68`
-- Last rebuilt: `2026-04-24T01:05:30.533009+00:00`
+- Last rebuilt: `2026-04-27T01:07:38.455693+00:00`
 
 ## Coordination
 
@@ -61,7 +61,7 @@
 - [Sensor Model API Workflow](workflows/wf-api-sensor-model.md) - Configure sensor parameters and project between image, world, and geographic coordinates.
 - [UspaceView API Workflow](workflows/wf-api-uspaceview.md) - Control UspaceView render layers, space regions, camera state, and space/world/screen conversions.
 - [Vector API Workflow](workflows/wf-api-vector.md) - Load vector files, inspect vector metadata, create geometry objects, and overlay them onto views.
-- [VideoView API Workflow](workflows/wf-api-videoview.md) - Open video, bind channels, capture frames, extract KLV, and explain embedded video-layer handling.
+- [VideoView API Workflow](workflows/wf-api-videoview.md) - Open video, bind opened video objects to views, capture frames, extract KLV, and explain embedded video-layer handling.
 
 ## Other
 

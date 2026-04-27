@@ -12,6 +12,9 @@ aliases:
   - 영상 좌표를 지상 좌표로 역투영
   - 지리 좌표를 영상 좌표로 변환
   - 영상 좌표를 지리 좌표로 변환
+  - 센서모델에서 이미지 좌표를 지상 좌표로 변환
+  - 이미지 좌표를 지상 좌표로 변환
+  - 이미지 좌표를 지리 좌표로 변환
   - 영상 중심점의 지도 좌표를 얻기
   - world to image projection
   - image to world projection
@@ -47,6 +50,7 @@ tags:
 - `영상 좌표 <-> 지상/지리 좌표`: 유클리드(`E`)와 지리(`G`) 경로를 구분해서 설명합니다.
 - `sensor 파라미터 설정`: local 기준과 earth 기준을 먼저 나눕니다.
 - `영상 중심점`: `GetMapCoordOfImageCenter`를 별도 질문 패턴으로 바로 연결합니다.
+- `이미지 좌표 -> 지상/지리 좌표`: `ImageToWorldE` 또는 `ImageToWorldG`를 직접 설명합니다. View의 screen/world 변환 API와 비교하지 말고, 사용자가 비교를 요청한 경우에만 차이를 설명합니다.
 
 
 ## Answering Guidance
@@ -54,6 +58,7 @@ tags:
 - Use the usage buckets and boundary notes to narrow the task to the smallest relevant slice.
 - Read the linked howto, concept, and source pages from the Knowledge Bundle before giving a procedural answer.
 - Use `Verified Facts` for exact method names and declarations; if this page is overview-only, say that and lean on the related pages for concrete steps.
+- Preserve the `XSensorModel` method names exactly. Do not substitute ImageView or Screen/World view APIs for sensor projection answers.
 
 ## Knowledge Bundle
 ```yaml
@@ -70,6 +75,9 @@ routing_hints:
   any_of: [projection, project, pixel]
 - all_of: [지상 좌표, 영상 좌표]
 - all_of: [지리 좌표, 영상 좌표]
+- all_of: [센서모델]
+- all_of: [이미지 좌표, 지상 좌표]
+- all_of: [이미지 좌표, 지리 좌표]
 bundle_pages:
 - path: pages/howtos/sensor-model-image-ground-projection.md
   relation: family_howto
@@ -83,7 +91,7 @@ bundle_pages:
 
 <!-- GENERATED:RUNTIME_STATUS:START -->
 ## Runtime Ingest Status
-- Auto-generated from raw source ingest at `2026-04-24T01:05:26Z`.
+- Auto-generated from raw source ingest at `2026-04-27T01:07:34Z`.
 - Resolved required symbols: `7/7`
 - Linked modules:
   - `NXDLsm`

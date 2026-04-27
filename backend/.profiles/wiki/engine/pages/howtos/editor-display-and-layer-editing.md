@@ -22,6 +22,39 @@ sources:
 - The user asks about displayed annotations or edit interactions.
 - The user asks how to capture the editor canvas, get a magnified image, or convert editor screen/world lengths.
 
+## Minimal C# Flow
+Use this shape when the user asks about `NEditor` copy/paste/delete or edit-object operations.
+`NEditor` is the answer surface for these questions; do not replace it with `NXImageLayerVectorEditor` unless the user explicitly names that class.
+Assume the `NEditor` control and the editable `NanLayer` are already available when the question is about edit commands rather than file loading.
+
+Source-backed NEditor signatures for this flow:
+- `public partial class NEditor : System.Windows.Controls.UserControl`
+- `public void SetEditLayer(NanLayer layer)`
+- `public void SelectAll()`
+- `public void SelectNone()`
+- `public void UpdateSelectedObjs()`
+- `public void Copy()`
+- `public void Paste()`
+- `public void Delete()`
+
+```csharp
+NEditor editor = existingEditor;
+NanLayer editLayer = existingLayer;
+
+editor.SetEditLayer(editLayer);
+
+// SelectAll is one confirmed way to make the target set explicit.
+// For mouse/UI selection flows, the current selected objects are used.
+editor.SelectAll();
+editor.UpdateSelectedObjs();
+
+editor.Copy();
+editor.Paste();
+editor.Delete();
+```
+
+For partial selection flows, keep `SelectAll()` out and call `Copy`, `Paste`, or `Delete` on the current editor selection.
+Do not invent helper getters such as `GetTargetLayer()` or availability checks such as `CanPaste()` for `NEditor`.
 
 ## Answering Guidance
 - Start from the owning workflow, then use this page to turn that family-level context into ordered task steps.

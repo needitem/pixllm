@@ -39,6 +39,7 @@ tags:
 - `Milmap 데이터가 있는지 확인`: `CheckMilmapData`와 `IsExistScale`를 먼저 설명합니다.
 - `특정 중심/축척으로 이동`: `SearchScale` -> `SetGeoToCenter` -> `Zoom` 흐름으로 답합니다.
 - `레이어 순서 변경`: `AddRenderLayer` 후 `ChangeLayerOrder` 또는 `GetLayerOrder`를 같이 제시합니다.
+- `레이어 추가/갱신`: 이미 준비된 `NXRenderLayer layer`를 `milmapView.AddRenderLayer(ref layer)`로 추가한 뒤 `RefreshScreen` 순서로 설명합니다. 확인 안 된 concrete layer 생성자/namespace와 원본 선언 조각은 쓰지 않습니다.
 
 
 ## Answering Guidance
@@ -46,6 +47,7 @@ tags:
 - Use the usage buckets and boundary notes to narrow the task to the smallest relevant slice.
 - Read the linked howto, concept, and source pages from the Knowledge Bundle before giving a procedural answer.
 - Use `Verified Facts` for exact method names and declarations; if this page is overview-only, say that and lean on the related pages for concrete steps.
+- Preserve exact SDK class names such as `NXMilmapView`. In C# answers, translate declaration syntax into call syntax and do not print `Type^%` fragments unless the user explicitly asks for source declarations.
 
 ## Knowledge Bundle
 ```yaml
@@ -69,7 +71,7 @@ bundle_pages:
 
 <!-- GENERATED:RUNTIME_STATUS:START -->
 ## Runtime Ingest Status
-- Auto-generated from raw source ingest at `2026-04-24T01:05:26Z`.
+- Auto-generated from raw source ingest at `2026-04-27T01:07:34Z`.
 - Resolved required symbols: `13/13`
 - Linked modules:
   - `NXMilmap`

@@ -1,0 +1,2 @@
+qwen-agent==0.0.34
+soundfile>=0.13.1

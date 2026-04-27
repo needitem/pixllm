@@ -21,11 +21,25 @@ sources:
 - The user asks about map-view video layers or view control.
 - The user asks how to check whether data exists at a given scale or how to capture the current MilmapView screen.
 
+## Minimal C# Flow
+Use this shape when the user already has a render layer prepared. Do not invent a concrete `NXRenderLayer` constructor or namespace if the layer type is not part of the evidence.
+
+```csharp
+// NXMilmapView milmapView is the target view.
+// NXRenderLayer layer is already prepared by the caller.
+bool added = milmapView.AddRenderLayer(ref layer);
+if (added)
+{
+    milmapView.RefreshScreen();
+}
+```
+
 
 ## Answering Guidance
 - Start from the owning workflow, then use this page to turn that family-level context into ordered task steps.
 - Prefer step-oriented answers that name the concrete API surface already verified by the workflow page.
 - If the task crosses families, say which dependency workflow should be read next instead of guessing from this page alone.
+- Translate the by-ref declaration to C# `ref`, but do not print source declaration fragments such as `^%`.
 
 ## Common Recipes
 - `축척 찾기와 이동`

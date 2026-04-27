@@ -21,6 +21,27 @@ sources:
 - The user asks DFS questions that later feed PlanetView or map views.
 - The user asks about export progress, cancel, or how `XDMCompManager` enters a provider group.
 
+## Minimal C# Flow
+`XPBIProviderGroup` registration and `XPBIProviderExporter` input setup are separate. Do not pass the group to `SetSource`.
+
+```csharp
+XPBIProviderGroup group = new XPBIProviderGroup();
+group.AddXDMCompManager("providerName", ref compManager);
+
+XPBIProviderExporter exporter = new XPBIProviderExporter();
+int minLevel = -1;
+int maxLevel = -1;
+double lllat = 0;
+double lllon = 0;
+double urlat = 0;
+double urlon = 0;
+
+if (!exporter.SetSource(ref compManager, ref minLevel, ref maxLevel, ref lllat, ref lllon, ref urlat, ref urlon))
+    return;
+
+exporter.Export2PBI(minLevel, maxLevel, lllat, lllon, urlat, urlon, true, saveFile, null);
+```
+
 
 ## Answering Guidance
 - Start from the owning workflow, then use this page to turn that family-level context into ordered task steps.
@@ -31,7 +52,7 @@ sources:
 - `provider group 준비`
   A typical provider-group setup uses `XPBIProviderGroup.AddPBIFile`, `AddXDMCompManager`, and `AddXNS` before export.
 - `PBI export 실행`
-  A common PBI export explanation uses `XPBIProviderExporter.SetSource` when needed, then `Export2PBI`, and polls `GetPercent` during long-running jobs.
+  A common PBI export explanation uses `XPBIProviderExporter.SetSource(ref compManager, ref minLevel, ref maxLevel, ref lllat, ref lllon, ref urlat, ref urlon)`, then `Export2PBI`, and polls `GetPercent` during long-running jobs.
 - `PBE export 실행`
   A common PBE export explanation uses `XPBEProviderExporter.SetSource`, `Export2PBE`, and `GetPercent` in the same control pattern.
 - `export 중단`

@@ -44,6 +44,7 @@ tags:
 - `UspaceView 좌표계`: `SetSR`와 `GetSR`를 먼저 제시하고 Coordinate family와 구분합니다.
 - `공간 -> world/screen`: bare conversion 질문이면 `SpaceToWorld` / `SpaceToScreen`을 우선 설명합니다.
 - `카메라/영역`: `SetSpaceRegion`과 `SetCameraState`를 같이 묶어 답합니다.
+- `렌더 레이어와 공간/화면 변환`: 정확한 클래스명 `NXUspaceView`를 답변과 코드에 보존하고, `AddRenderLayer` 후 `RefreshScreen`, 좌표 변환은 `SpaceToScreen` 또는 `SpaceToWorld`로 설명합니다.
 
 
 ## Answering Guidance
@@ -51,6 +52,7 @@ tags:
 - Use the usage buckets and boundary notes to narrow the task to the smallest relevant slice.
 - Read the linked howto, concept, and source pages from the Knowledge Bundle before giving a procedural answer.
 - Use `Verified Facts` for exact method names and declarations; if this page is overview-only, say that and lean on the related pages for concrete steps.
+- Preserve exact SDK class casing such as `NXUspaceView`. Do not shorten it to `UspaceView` in API answers.
 
 ## Knowledge Bundle
 ```yaml
@@ -73,7 +75,7 @@ bundle_pages:
 
 <!-- GENERATED:RUNTIME_STATUS:START -->
 ## Runtime Ingest Status
-- Auto-generated from raw source ingest at `2026-04-24T01:05:26Z`.
+- Auto-generated from raw source ingest at `2026-04-27T01:07:34Z`.
 - Resolved required symbols: `11/11`
 - Linked modules:
   - `NXUspace`

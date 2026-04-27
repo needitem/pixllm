@@ -60,6 +60,36 @@ tags:
 - `편집 화면 캡처`: `CaptureImage`와 `GetMagnifiedImage`를 구분해서 설명합니다. 전체 저장인지, 일부 확대 이미지인지 먼저 나눕니다.
 - `편집 화면 좌표 변환`: 점 좌표는 `ScreenToWorld` / `WorldToScreen`, 길이 변환은 `ConvPixelToWorldLength` / `ConvWorldToPixelLength`를 우선 제시합니다.
 - `편집 화면 순서 변경`: `MoveToFront*` / `MoveToRear*`는 객체 Z-order 이동, `Group/UnGroup`는 선택 집합 관리로 분리해서 답합니다.
+- `NEditor copy/paste/delete`: 사용자가 `NEditor`나 편집 화면을 묻는 경우 `SelectAll`, `SelectNone`, `SetEditLayer`, `UpdateSelectedObjs`, `Copy`, `Cut`, `Paste`, `Delete`, `Undo`, `Redo` 같은 NEditor workflow 메서드로 답합니다. 사용자가 `NXImageLayerVectorEditor`를 직접 지명하지 않았으면 그 클래스로 바꿔 답하지 않습니다.
+
+## Minimal C# Flow
+Use this shape when the user asks for `NEditor` copy/paste/delete. The control and editable layer are expected to be supplied by the host UI.
+
+Source-backed NEditor signatures for this flow:
+- `public partial class NEditor : System.Windows.Controls.UserControl`
+- `public void SetEditLayer(NanLayer layer)`
+- `public void SelectAll()`
+- `public void SelectNone()`
+- `public void UpdateSelectedObjs()`
+- `public void Copy()`
+- `public void Paste()`
+- `public void Delete()`
+
+```csharp
+NEditor editor = existingEditor;
+NanLayer editLayer = existingLayer;
+
+editor.SetEditLayer(editLayer);
+editor.SelectAll();
+editor.UpdateSelectedObjs();
+
+editor.Copy();
+editor.Paste();
+editor.Delete();
+```
+
+For current mouse/UI selection, omit `SelectAll()` and operate on the current selected objects.
+Do not invent `GetTargetLayer()` or `CanPaste()` for `NEditor`.
 
 
 ## Answering Guidance
@@ -67,6 +97,7 @@ tags:
 - Use the usage buckets and boundary notes to narrow the task to the smallest relevant slice.
 - Read the linked howto, concept, and source pages from the Knowledge Bundle before giving a procedural answer.
 - Use `Verified Facts` for exact method names and declarations; if this page is overview-only, say that and lean on the related pages for concrete steps.
+- This workflow is currently source-backed by curated API docs, even when runtime methods index has no direct declarations for `NEditor`; do not abandon the workflow solely because `method_declarations` is empty.
 
 ## Knowledge Bundle
 ```yaml
@@ -101,7 +132,7 @@ bundle_pages:
 
 <!-- GENERATED:RUNTIME_STATUS:START -->
 ## Runtime Ingest Status
-- Auto-generated from raw source ingest at `2026-04-24T01:05:26Z`.
+- Auto-generated from raw source ingest at `2026-04-27T01:07:34Z`.
 - Resolved required symbols: `0/0`
 - Missing required symbols: `0`
 <!-- GENERATED:RUNTIME_STATUS:END -->

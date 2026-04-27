@@ -22,8 +22,8 @@ def _resolve_method_records_for_symbols(
     symbols: Sequence[str],
     methods_index: Sequence[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
-    by_qualified: Dict[str, Dict[str, Any]] = {}
-    by_short_qualified: Dict[str, Dict[str, Any]] = {}
+    by_qualified: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    by_short_qualified: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
     by_member: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
 
     for record in methods_index or []:
@@ -32,11 +32,11 @@ def _resolve_method_records_for_symbols(
         member_name = str(record.get("member_name") or "").strip()
         qualified_type = str(record.get("qualified_type") or "").strip()
         if qualified_symbol:
-            by_qualified[_normalize_lookup_token(qualified_symbol)] = record
+            by_qualified[_normalize_lookup_token(qualified_symbol)].append(record)
         if type_name and member_name:
-            by_short_qualified[_normalize_lookup_token(f"{type_name}.{member_name}")] = record
+            by_short_qualified[_normalize_lookup_token(f"{type_name}.{member_name}")].append(record)
         if qualified_type and member_name:
-            by_short_qualified[_normalize_lookup_token(f"{qualified_type}.{member_name}")] = record
+            by_short_qualified[_normalize_lookup_token(f"{qualified_type}.{member_name}")].append(record)
         if member_name:
             by_member[_normalize_lookup_token(member_name)].append(record)
 
@@ -46,18 +46,21 @@ def _resolve_method_records_for_symbols(
         normalized_symbol = _normalize_lookup_token(symbol)
         if not normalized_symbol:
             continue
-        selected = by_qualified.get(normalized_symbol) or by_short_qualified.get(normalized_symbol)
-        if selected is None and "." not in str(symbol or ""):
+        selected_records = by_qualified.get(normalized_symbol) or by_short_qualified.get(normalized_symbol)
+        if selected_records is None and "." not in str(symbol or ""):
             member_matches = by_member.get(normalized_symbol, [])
             if len(member_matches) == 1:
-                selected = member_matches[0]
-        if not selected:
+                selected_records = [member_matches[0]]
+        if not selected_records:
             continue
-        key = str(selected.get("qualified_symbol") or "").strip().lower()
-        if not key or key in seen:
-            continue
-        seen.add(key)
-        output.append(selected)
+        for selected in selected_records:
+            qualified_key = str(selected.get("qualified_symbol") or "").strip()
+            declaration_key = str(selected.get("declaration") or "").strip()
+            key = f"{qualified_key}\n{declaration_key}".strip().lower()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            output.append(selected)
     return output
 
 

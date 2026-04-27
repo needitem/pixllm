@@ -47,6 +47,7 @@ tags:
 - `PBI group 등록/기본 dataset`: `NXPlanetEngine.AddPBIGroup`와 `SetPBIDefaultDataSet`을 구분해서 설명합니다.
 - `카메라 이동`: `SetCameraPosition`과 `SetCameraState`를 언제 쓰는지 먼저 나눕니다.
 - `캡처/블록 캡처`: 전체 화면 저장인지, 블록 캡처인지에 따라 `CaptureScreen` / `CaptureScreenByBlock`을 나눠 답합니다.
+- `레이어 추가/갱신`: 정확한 클래스명 `NXPlanetView`를 보존하고, `AddRenderLayer` 후 필요 시 `SetCameraPosition`/`SetCameraState`, `RefreshScreen` 순서로 설명합니다.
 
 
 ## Answering Guidance
@@ -54,6 +55,7 @@ tags:
 - Use the usage buckets and boundary notes to narrow the task to the smallest relevant slice.
 - Read the linked howto, concept, and source pages from the Knowledge Bundle before giving a procedural answer.
 - Use `Verified Facts` for exact method names and declarations; if this page is overview-only, say that and lean on the related pages for concrete steps.
+- Preserve exact SDK class names such as `NXPlanetView`. In C# answers, translate declaration syntax into call syntax and do not print `Type^%` fragments unless the user explicitly asks for source declarations.
 
 ## Knowledge Bundle
 ```yaml
@@ -77,7 +79,7 @@ bundle_pages:
 
 <!-- GENERATED:RUNTIME_STATUS:START -->
 ## Runtime Ingest Status
-- Auto-generated from raw source ingest at `2026-04-24T01:05:26Z`.
+- Auto-generated from raw source ingest at `2026-04-27T01:07:34Z`.
 - Resolved required symbols: `10/10`
 - Linked modules:
   - `NXPlanet`

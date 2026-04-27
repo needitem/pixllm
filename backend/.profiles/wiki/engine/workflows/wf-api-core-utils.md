@@ -32,8 +32,8 @@ tags:
 - `진행률 보고`: `SendMessagePercent`
 
 ## Practical Answer Shape
-- `라이선스 검증`: site info 기반 검증과 현재 라이선스 상태 조회를 분리해서 설명
-- `config path`: 설정 경로를 바꾼 뒤 초기화/후속 동작이 필요한지 같이 말해줍니다
+- `라이선스 검증`: `ValidateLicense`로 site info 기반 검증, `IsValidLicense`로 현재 라이선스 상태 조회를 분리해서 설명
+- `config path`: `SetConfigPath`로 설정 경로를 바꾼 뒤 초기화/후속 동작이 필요한지 같이 말해줍니다
 - `진행률`: 장시간 작업 중 percent reporting helper로 설명하고, DFS export progress와는 구분합니다
 
 
@@ -68,7 +68,7 @@ bundle_pages:
 
 <!-- GENERATED:RUNTIME_STATUS:START -->
 ## Runtime Ingest Status
-- Auto-generated from raw source ingest at `2026-04-24T01:05:26Z`.
+- Auto-generated from raw source ingest at `2026-04-27T01:07:34Z`.
 - Resolved required symbols: `4/4`
 - Linked modules:
   - `NXDL`

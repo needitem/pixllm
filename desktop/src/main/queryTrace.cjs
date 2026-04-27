@@ -27,6 +27,53 @@ function uniq(items) {
   return out;
 }
 
+function clipText(value = '', maxChars = 1000) {
+  const text = String(value || '');
+  const limit = Math.max(200, Number(maxChars || 0));
+  return text.length > limit ? text.slice(0, limit).trim() : text;
+}
+
+function markdownSectionByHeading(value = '', heading = '') {
+  const target = String(heading || '').trim().toLowerCase();
+  if (!target) return '';
+  const lines = String(value || '').split(/\r?\n/);
+  const start = lines.findIndex((line) => {
+    const match = line.match(/^##\s+(.+?)\s*$/);
+    return match && String(match[1] || '').trim().toLowerCase() === target;
+  });
+  if (start < 0) return '';
+  let end = lines.length;
+  for (let index = start + 1; index < lines.length; index += 1) {
+    if (/^##\s+/.test(lines[index])) {
+      end = index;
+      break;
+    }
+  }
+  return lines.slice(start, end).join('\n').trim();
+}
+
+function compactWorkflowContentForTrace(value = '', maxChars = 4200) {
+  const text = String(value || '').trim();
+  if (text.length <= maxChars) return text;
+
+  const prioritySections = [
+    'Primary Usage Buckets',
+    'Practical Answer Shape',
+    'Answering Guidance',
+  ]
+    .map((heading) => markdownSectionByHeading(text, heading))
+    .filter(Boolean);
+
+  if (prioritySections.length <= 0) {
+    return clipText(text, maxChars);
+  }
+
+  const withoutFrontmatter = text.replace(/^---[\s\S]*?---\s*/m, '').trim();
+  const overview = clipText(withoutFrontmatter, 320);
+  const selected = [overview, ...prioritySections].filter(Boolean).join('\n\n').trim();
+  return clipText(selected, maxChars);
+}
+
 function stepSucceeded(step) {
   return step?.observation?.ok !== false;
 }
@@ -205,7 +252,7 @@ function summarizeEvidencePackPayload(pack, maxChars = 16000) {
         output_shape: pack.workflow.output_shape || '',
         required_symbols: Array.isArray(pack.workflow.required_symbols) ? pack.workflow.required_symbols.slice(0, 32) : [],
         verification_rules: Array.isArray(pack.workflow.verification_rules) ? pack.workflow.verification_rules.slice(0, 16) : [],
-        content: String(pack.workflow.content || '').slice(0, Math.min(4200, maxChars)),
+        content: compactWorkflowContentForTrace(pack.workflow.content || '', Math.min(4200, maxChars)),
       }
     : null;
   return {
@@ -218,7 +265,7 @@ function summarizeEvidencePackPayload(pack, maxChars = 16000) {
           should: Array.isArray(pack.answer_grounding.should) ? pack.answer_grounding.should.slice(0, 6) : [],
           may: Array.isArray(pack.answer_grounding.may) ? pack.answer_grounding.may.slice(0, 6) : [],
           facts: Array.isArray(pack.answer_grounding.facts)
-            ? pack.answer_grounding.facts.slice(0, 12).map((item) => ({
+            ? pack.answer_grounding.facts.slice(0, 24).map((item) => ({
                 symbol: item?.symbol || '',
                 declaration: String(item?.declaration || '').slice(0, 800),
                 source_refs: Array.isArray(item?.source_refs)
@@ -228,11 +275,11 @@ function summarizeEvidencePackPayload(pack, maxChars = 16000) {
                     }))
                   : [],
                 source_snippets: Array.isArray(item?.source_snippets)
-                  ? item.source_snippets.slice(0, 2).map((snippet) => ({
+                  ? item.source_snippets.slice(0, 1).map((snippet) => ({
                       path: snippet?.path || '',
                       line_range: snippet?.line_range || '',
                       role: snippet?.role || '',
-                      content: String(snippet?.content || '').slice(0, Math.min(1000, maxChars)),
+                      content: String(snippet?.content || '').slice(0, Math.min(700, maxChars)),
                     }))
                   : [],
               }))
@@ -246,11 +293,11 @@ function summarizeEvidencePackPayload(pack, maxChars = 16000) {
           kind: item?.kind || '',
           relation: item?.relation || '',
           summary: String(item?.summary || '').slice(0, 260),
-          content: String(item?.content || '').slice(0, Math.min(1200, maxChars)),
+          content: compactWorkflowContentForTrace(item?.content || '', Math.min(3200, maxChars)),
         }))
       : [],
     method_declarations: Array.isArray(pack.method_declarations)
-      ? pack.method_declarations.slice(0, 14).map((item) => {
+      ? pack.method_declarations.slice(0, 24).map((item) => {
           const sourceRefs = Array.isArray(item?.source_refs)
             ? item.source_refs.slice(0, 4).map((sourceRef) => ({
                 path: sourceRef?.path || '',
@@ -258,11 +305,11 @@ function summarizeEvidencePackPayload(pack, maxChars = 16000) {
               }))
             : [];
           const sourceSnippets = Array.isArray(item?.source_snippets)
-            ? item.source_snippets.slice(0, 3).map((snippet) => ({
+            ? item.source_snippets.slice(0, 1).map((snippet) => ({
                 path: snippet?.path || '',
                 line_range: snippet?.line_range || '',
                 role: snippet?.role || '',
-                content: String(snippet?.content || '').slice(0, Math.min(1200, maxChars)),
+                content: String(snippet?.content || '').slice(0, Math.min(800, maxChars)),
               }))
             : [];
           return {
@@ -372,6 +419,9 @@ function summarizeObservation(toolName, observation, maxChars = 16000) {
         }))
         : [],
       evidence_pack: summarizeEvidencePackPayload(payload.evidence_pack, maxChars),
+      evidence_packs: Array.isArray(payload.evidence_packs)
+        ? payload.evidence_packs.slice(0, 4).map((pack) => summarizeEvidencePackPayload(pack, maxChars)).filter(Boolean)
+        : [],
       error: payload.error || '',
       message: payload.message || '',
     };

@@ -69,10 +69,9 @@ function toolUseKey(toolUse = {}) {
   return `${toStringValue(toolUse?.name)}:${stableSerialize(toolUse?.input || {})}`;
 }
 
-const WIKI_SEARCH_MODEL_CHAR_LIMIT = 7000;
+const WIKI_SEARCH_MODEL_CHAR_LIMIT = 18000;
 const WIKI_READ_MODEL_CHAR_LIMIT = 12000;
-const ANSWER_GROUNDING_FACT_LIMIT = 6;
-const ANSWER_GROUNDING_SNIPPET_FACT_LIMIT = 4;
+const ANSWER_GROUNDING_FACT_LIMIT = 24;
 
 function buildToolExecutionResult(toolUse, observation) {
   const summarized = summarizeObservation(toolUse?.name, observation, 12000);
@@ -96,6 +95,117 @@ function clipModelText(value = '', maxChars = 800) {
   return `${text.slice(0, Math.max(0, maxChars - 15))}\n...[truncated]`;
 }
 
+function compactWikiMarkdownForModel(value = '', maxChars = 1600) {
+  const text = String(value || '')
+    .replace(/^---[\s\S]*?---\s*/m, '')
+    .trim();
+  if (text.length <= maxChars) {
+    return text;
+  }
+
+  const sections = text
+    .split(/(?=^##\s+)/m)
+    .map((section) => section.trim())
+    .filter(Boolean);
+  if (sections.length <= 1) {
+    return clipModelText(text, maxChars);
+  }
+
+  const sectionBudget = Math.max(420, Math.floor((maxChars - 80) / sections.length));
+  const compacted = [];
+  let used = 0;
+  for (const section of sections) {
+    const remaining = maxChars - used - (compacted.length > 0 ? 2 : 0);
+    if (remaining <= 120) {
+      break;
+    }
+    const budget = Math.min(sectionBudget, remaining);
+    const heading = section.match(/^##[^\r\n]*/)?.[0] || '';
+    const codeBlock = section.match(/```[\s\S]*?```/)?.[0] || '';
+    const excerpt = codeBlock && codeBlock.length <= budget - heading.length - 2
+      ? `${heading}\n${codeBlock}`.trim()
+      : clipModelText(section, budget);
+    if (!excerpt) {
+      continue;
+    }
+    compacted.push(excerpt);
+    used += excerpt.length + 2;
+  }
+  return compacted.join('\n\n').trim() || clipModelText(text, maxChars);
+}
+
+function stripFencedCodeBlocks(value = '') {
+  return toStringValue(value)
+    .replace(/```[\s\S]*?```/g, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function markdownSectionByHeading(value = '', heading = '') {
+  const target = toStringValue(heading).toLowerCase();
+  if (!target) {
+    return '';
+  }
+  const lines = String(value || '').split(/\r?\n/);
+  const start = lines.findIndex((line) => {
+    const match = line.match(/^##\s+(.+?)\s*$/);
+    return match && toStringValue(match[1]).toLowerCase() === target;
+  });
+  if (start < 0) {
+    return '';
+  }
+  let end = lines.length;
+  for (let index = start + 1; index < lines.length; index += 1) {
+    if (/^##\s+/.test(lines[index])) {
+      end = index;
+      break;
+    }
+  }
+  return lines.slice(start + 1, end).join('\n').trim();
+}
+
+function summarizeWorkflowGuidanceForModel(content = '', maxChars = 1100) {
+  const sections = ['Primary Usage Buckets', 'Practical Answer Shape', 'Answering Guidance']
+    .map((heading) => {
+      const section = stripFencedCodeBlocks(markdownSectionByHeading(content, heading));
+      return section ? `## ${heading}\n${section}` : '';
+    })
+    .filter(Boolean);
+  if (sections.length <= 0) {
+    return '';
+  }
+  return compactWikiMarkdownForModel(sections.join('\n\n'), maxChars);
+}
+
+function summarizeBundleGuidanceForModel(bundlePages = [], maxChars = 2200) {
+  const sectionNames = [
+    'Primary Usage Buckets',
+    'Practical Answer Shape',
+    'Common Recipes',
+    'Answering Guidance',
+  ];
+  const sections = [];
+  for (const page of (Array.isArray(bundlePages) ? bundlePages : []).slice(0, 3)) {
+    const pathValue = toStringValue(page?.path);
+    const content = toStringValue(page?.content);
+    if (!pathValue || !content) {
+      continue;
+    }
+    for (const heading of sectionNames) {
+      const section = stripFencedCodeBlocks(markdownSectionByHeading(content, heading));
+      if (!section) {
+        continue;
+      }
+      sections.push(`source_page: ${pathValue}\n## ${heading}\n${section}`);
+      break;
+    }
+  }
+  if (sections.length <= 0) {
+    return '';
+  }
+  return compactWikiMarkdownForModel(sections.join('\n\n'), maxChars);
+}
+
 function summarizePathItems(items = [], formatter, limit = 12) {
   return (Array.isArray(items) ? items : [])
     .slice(0, limit)
@@ -103,7 +213,25 @@ function summarizePathItems(items = [], formatter, limit = 12) {
     .filter(Boolean);
 }
 
-function summarizeAnswerGroundingForModel(pack = {}) {
+function csharpInteropHints(declaration = '') {
+  const text = toStringValue(declaration);
+  const hints = [];
+  if (/\[OutAttribute\][^,\)]*(\^\s*%|%\s+\w+)/.test(text)) {
+    hints.push('C# call hint: [OutAttribute] by-ref parameters should be passed with out, not ref.');
+  }
+  if (!/\[OutAttribute\]/.test(text) && /\^\s*%|%\s+\w+/.test(text)) {
+    hints.push('C# call hint: non-out by-ref object parameters should be passed with ref.');
+  }
+  if (/eIOCreateXLDMode/.test(text)) {
+    hints.push('C# call hint: use an enum literal shown in evidence, or keep the value as a caller-supplied variable; do not invent enum members.');
+  }
+  return hints;
+}
+
+function summarizeAnswerGroundingForModel(pack = {}, {
+  includeRules = true,
+  includeSourceRefs = true,
+} = {}) {
   const grounding = pack?.answer_grounding && typeof pack.answer_grounding === 'object' && !Array.isArray(pack.answer_grounding)
     ? pack.answer_grounding
     : {};
@@ -111,13 +239,13 @@ function summarizeAnswerGroundingForModel(pack = {}) {
   const must = Array.isArray(grounding.must) ? grounding.must.map((item) => toStringValue(item)).filter(Boolean) : [];
   const should = Array.isArray(grounding.should) ? grounding.should.map((item) => toStringValue(item)).filter(Boolean) : [];
   const may = Array.isArray(grounding.may) ? grounding.may.map((item) => toStringValue(item)).filter(Boolean) : [];
-  if (must.length > 0) {
+  if (includeRules && must.length > 0) {
     lines.push(`must: ${must.slice(0, 6).join('; ')}`);
   }
-  if (should.length > 0) {
+  if (includeRules && should.length > 0) {
     lines.push(`should: ${should.slice(0, 6).join('; ')}`);
   }
-  if (may.length > 0) {
+  if (includeRules && may.length > 0) {
     lines.push(`may: ${may.slice(0, 6).join('; ')}`);
   }
   const facts = Array.isArray(grounding.facts) && grounding.facts.length > 0
@@ -125,15 +253,16 @@ function summarizeAnswerGroundingForModel(pack = {}) {
     : (Array.isArray(pack.method_declarations) ? pack.method_declarations : []);
   if (facts.length > 0) {
     lines.push('facts:');
-    for (const [index, item] of facts.slice(0, ANSWER_GROUNDING_FACT_LIMIT).entries()) {
+    for (const item of facts.slice(0, ANSWER_GROUNDING_FACT_LIMIT)) {
       const symbol = toStringValue(item?.symbol || item?.title || item?.path);
       const declaration = toStringValue(item?.declaration) || (Array.isArray(item?.declarations)
         ? item.declarations.map((value) => toStringValue(value)).filter(Boolean).join(' | ')
         : '');
       if (symbol || declaration) {
         lines.push(`- ${[symbol, declaration].filter(Boolean).join(' :: ')}`);
+        lines.push(...csharpInteropHints(declaration).map((hint) => `  ${hint}`));
       }
-      const sourceRefs = Array.isArray(item?.source_refs)
+      const sourceRefs = includeSourceRefs && Array.isArray(item?.source_refs)
         ? item.source_refs
           .slice(0, 3)
           .map((sourceRef) => `${toStringValue(sourceRef?.path)}:${toStringValue(sourceRef?.line_range)}`.replace(/:$/, ''))
@@ -142,30 +271,104 @@ function summarizeAnswerGroundingForModel(pack = {}) {
       if (sourceRefs.length > 0) {
         lines.push(`  source_refs: ${sourceRefs.join(', ')}`);
       }
-      if (index >= ANSWER_GROUNDING_SNIPPET_FACT_LIMIT) {
-        continue;
-      }
-      for (const snippet of (Array.isArray(item?.source_snippets) ? item.source_snippets : []).slice(0, 2)) {
-        const content = clipModelText(snippet?.content || '', 650);
-        if (!content) continue;
-        const role = toStringValue(snippet?.role);
-        const snippetPath = toStringValue(snippet?.path);
-        const snippetRange = toStringValue(snippet?.line_range);
-        lines.push(`  source_snippet${role ? `(${role})` : ''}: ${snippetPath}${snippetRange ? `:${snippetRange}` : ''}`);
-        lines.push(content);
-      }
     }
   }
   return lines.length > 1 ? lines : [];
 }
 
-function summarizeEvidencePackForModel(pack = {}) {
+function factSymbolSet(pack = {}) {
+  const facts = Array.isArray(pack?.answer_grounding?.facts)
+    ? pack.answer_grounding.facts
+    : [];
+  return new Set(
+    facts
+      .map((item) => toStringValue(item?.symbol).toLowerCase())
+      .filter(Boolean),
+  );
+}
+
+function summarizeMethodDeclarationsForModel(pack = {}, {
+  onlyMissingFacts = false,
+  includeSourceRefs = true,
+  includeSnippets = true,
+  limit = null,
+} = {}) {
+  const methodDeclarations = Array.isArray(pack.method_declarations) ? pack.method_declarations : [];
+  if (Number.isFinite(Number(limit)) && Number(limit) === 0) {
+    return [];
+  }
+  if (methodDeclarations.length <= 0) {
+    return [];
+  }
+  const knownFacts = factSymbolSet(pack);
+  const maxItems = Number.isFinite(Number(limit)) && Number(limit) > 0
+    ? Number(limit)
+    : (onlyMissingFacts ? 12 : 14);
+  const selected = methodDeclarations
+    .filter((item) => !onlyMissingFacts || !knownFacts.has(toStringValue(item?.symbol).toLowerCase()))
+    .slice(0, maxItems);
+  if (selected.length <= 0) {
+    return [];
+  }
+  const lines = [onlyMissingFacts ? 'additional_method_declarations:' : 'method_declarations:'];
+  const snippetLines = [];
+  for (const item of selected) {
+    const symbol = toStringValue(item?.symbol || item?.title || item?.path);
+    const declaration = toStringValue(item?.declaration) || (Array.isArray(item?.declarations) && item.declarations.length > 0
+      ? item.declarations.map((value) => toStringValue(value)).filter(Boolean).join(' | ')
+      : clipModelText(item?.content || '', 260).replace(/\s+/g, ' '));
+    if (symbol || declaration) {
+      lines.push(`- ${[symbol, declaration].filter(Boolean).join(' :: ')}`);
+      lines.push(...csharpInteropHints(declaration).map((hint) => `  ${hint}`));
+    }
+    const sourceRefs = includeSourceRefs && Array.isArray(item?.source_refs)
+      ? item.source_refs
+        .slice(0, 4)
+        .map((sourceRef) => `${toStringValue(sourceRef?.path)}:${toStringValue(sourceRef?.line_range)}`.replace(/:$/, ''))
+        .filter(Boolean)
+      : [];
+    if (sourceRefs.length > 0) {
+      lines.push(`  source_refs: ${sourceRefs.join(', ')}`);
+    }
+    if (!includeSnippets) {
+      continue;
+    }
+    for (const snippet of (Array.isArray(item?.source_snippets) ? item.source_snippets : []).slice(0, 1)) {
+      const snippetPath = toStringValue(snippet?.path);
+      const snippetRange = toStringValue(snippet?.line_range);
+      const role = toStringValue(snippet?.role);
+      const content = clipModelText(snippet?.content || '', 520);
+      if (!content) {
+        continue;
+      }
+      snippetLines.push(`source_snippet${role ? `(${role})` : ''}: ${snippetPath}${snippetRange ? `:${snippetRange}` : ''}`);
+      snippetLines.push(content);
+    }
+  }
+  if (snippetLines.length > 0) {
+    lines.push('method_source_snippets:');
+    lines.push(...snippetLines);
+  }
+  return lines;
+}
+
+function summarizeEvidencePackForModel(pack = {}, {
+  includeContent = true,
+  includeBundlePages = true,
+  includeRules = true,
+  includeSourceRefs = true,
+  includeSnippets = true,
+  includeSourceAnchors = true,
+  includeWorkflowGuidance = true,
+  includeAnswerGrounding = true,
+  methodLimit = null,
+} = {}) {
   if (!pack || typeof pack !== 'object' || Array.isArray(pack)) {
     return [];
   }
   const lines = ['evidence_pack:'];
-  lines.push(...summarizeAnswerGroundingForModel(pack));
   const workflow = pack.workflow && typeof pack.workflow === 'object' ? pack.workflow : null;
+  const bundlePages = Array.isArray(pack.bundle_pages) ? pack.bundle_pages : [];
   if (workflow) {
     const workflowHead = [
       toStringValue(workflow.path),
@@ -179,60 +382,31 @@ function summarizeEvidencePackForModel(pack = {}) {
       ? workflow.required_symbols.map((item) => toStringValue(item)).filter(Boolean)
       : [];
     if (requiredSymbols.length > 0) {
-      lines.push(`required_symbols: ${requiredSymbols.slice(0, 18).join(', ')}`);
+      lines.push(`required_symbols: ${requiredSymbols.slice(0, 32).join(', ')}`);
     }
     const verificationRules = Array.isArray(workflow.verification_rules)
       ? workflow.verification_rules.map((item) => toStringValue(item)).filter(Boolean)
       : [];
-    if (verificationRules.length > 0) {
+    if (includeRules && verificationRules.length > 0) {
       lines.push(`verification_rules: ${verificationRules.slice(0, 8).join('; ')}`);
     }
-  }
-
-  const methodDeclarations = Array.isArray(pack.method_declarations) ? pack.method_declarations : [];
-  const hasGroundingFacts = Array.isArray(pack?.answer_grounding?.facts) && pack.answer_grounding.facts.length > 0;
-  if (methodDeclarations.length > 0 && !hasGroundingFacts) {
-    lines.push('method_declarations:');
-    for (const item of methodDeclarations.slice(0, 6)) {
-      const symbol = toStringValue(item?.symbol || item?.title || item?.path);
-      const declaration = toStringValue(item?.declaration) || (Array.isArray(item?.declarations) && item.declarations.length > 0
-        ? item.declarations.map((value) => toStringValue(value)).filter(Boolean).join(' | ')
-        : clipModelText(item?.content || '', 260).replace(/\s+/g, ' '));
-      if (symbol || declaration) {
-        lines.push(`- ${[symbol, declaration].filter(Boolean).join(' :: ')}`);
-      }
-      const sourceRefs = Array.isArray(item?.source_refs)
-        ? item.source_refs
-          .slice(0, 4)
-          .map((sourceRef) => `${toStringValue(sourceRef?.path)}:${toStringValue(sourceRef?.line_range)}`.replace(/:$/, ''))
-          .filter(Boolean)
-        : [];
-      if (sourceRefs.length > 0) {
-        lines.push(`  source_refs: ${sourceRefs.join(', ')}`);
-      }
-      for (const snippet of (Array.isArray(item?.source_snippets) ? item.source_snippets : []).slice(0, 2)) {
-        const snippetPath = toStringValue(snippet?.path);
-        const snippetRange = toStringValue(snippet?.line_range);
-        const role = toStringValue(snippet?.role);
-        const content = clipModelText(snippet?.content || '', 650);
-        if (!content) {
-          continue;
-        }
-        lines.push(`  source_snippet${role ? `(${role})` : ''}: ${snippetPath}${snippetRange ? `:${snippetRange}` : ''}`);
-        lines.push(content);
-      }
+    const workflowGuidance = includeWorkflowGuidance
+      ? summarizeWorkflowGuidanceForModel(workflow.content, includeContent ? 1100 : 900)
+      : '';
+    if (workflowGuidance) {
+      lines.push('workflow_guidance:');
+      lines.push(workflowGuidance);
     }
   }
 
   const answerRules = Array.isArray(pack.answer_rules)
     ? pack.answer_rules.map((item) => toStringValue(item)).filter(Boolean)
     : [];
-  if (answerRules.length > 0) {
+  if (includeRules && answerRules.length > 0) {
     lines.push(`answer_rules: ${answerRules.slice(0, 8).join('; ')}`);
   }
 
-  const bundlePages = Array.isArray(pack.bundle_pages) ? pack.bundle_pages : [];
-  if (bundlePages.length > 0) {
+  if (includeBundlePages && bundlePages.length > 0) {
     lines.push('bundle_pages:');
     for (const item of bundlePages.slice(0, 4)) {
       const pathValue = toStringValue(item?.path);
@@ -241,15 +415,30 @@ function summarizeEvidencePackForModel(pack = {}) {
       const summary = clipModelText(item?.summary || '', 180).replace(/\s+/g, ' ');
       lines.push(`- ${pathValue}${title ? ` :: ${title}` : ''}${relation ? ` [${relation}]` : ''}${summary ? ` :: ${summary}` : ''}`);
     }
+    const bundleGuidance = summarizeBundleGuidanceForModel(bundlePages);
+    if (bundleGuidance) {
+      lines.push('bundle_guidance:');
+      lines.push(bundleGuidance);
+    }
   }
 
-  if (workflow?.content) {
-    lines.push('workflow_content:');
-    lines.push(clipModelText(workflow.content, 1600));
+  if (includeAnswerGrounding) {
+    lines.push(...summarizeAnswerGroundingForModel(pack, { includeRules, includeSourceRefs }));
   }
-  for (const item of bundlePages.slice(0, 3)) {
+  lines.push(...summarizeMethodDeclarationsForModel(pack, {
+    onlyMissingFacts: Array.isArray(pack?.answer_grounding?.facts) && pack.answer_grounding.facts.length > 0,
+    includeSourceRefs,
+    includeSnippets,
+    limit: methodLimit,
+  }));
+
+  if (includeContent && workflow?.content) {
+    lines.push('workflow_content:');
+    lines.push(compactWikiMarkdownForModel(workflow.content, 1400));
+  }
+  for (const item of includeContent ? bundlePages.slice(0, 3) : []) {
     const pathValue = toStringValue(item?.path);
-    const content = clipModelText(item?.content || '', 600);
+    const content = compactWikiMarkdownForModel(item?.content || '', 3200);
     if (!pathValue || !content) continue;
     lines.push(`bundle_content: ${pathValue}`);
     lines.push(content);
@@ -258,10 +447,54 @@ function summarizeEvidencePackForModel(pack = {}) {
   const sourceAnchors = Array.isArray(pack.source_anchors)
     ? pack.source_anchors.map((item) => toStringValue(item)).filter(Boolean)
     : [];
-  if (sourceAnchors.length > 0) {
+  if (includeSourceAnchors && sourceAnchors.length > 0) {
     lines.push(`source_anchors: ${sourceAnchors.slice(0, 16).join(', ')}`);
   }
   return lines;
+}
+
+function summarizeEvidencePacksForModel(packs = [], query = '') {
+  const normalizedPacks = orderEvidencePacksForModel(packs, query);
+  if (normalizedPacks.length <= 0) {
+    return [];
+  }
+  const selectedPacks = normalizedPacks.slice(0, 3);
+  const lines = ['evidence_packs:'];
+  lines.push('pack_overviews:');
+  for (const [index, pack] of selectedPacks.entries()) {
+    const workflowPath = toStringValue(pack?.workflow?.path);
+    const workflowTitle = toStringValue(pack?.workflow?.title);
+    lines.push(`pack_${index + 1}: ${workflowPath}${workflowTitle ? ` :: ${workflowTitle}` : ''}`);
+    lines.push(...summarizeEvidencePackForModel(pack, {
+      includeContent: false,
+      includeBundlePages: false,
+      includeRules: false,
+      includeSourceRefs: false,
+      includeSnippets: false,
+      includeSourceAnchors: false,
+      includeWorkflowGuidance: true,
+      includeAnswerGrounding: false,
+      methodLimit: index === 0 ? 18 : 0,
+    }).filter((line) => line !== 'evidence_pack:'));
+  }
+  lines.push('pack_details:');
+  for (const [index, pack] of selectedPacks.slice(0, 1).entries()) {
+    const workflowPath = toStringValue(pack?.workflow?.path);
+    const workflowTitle = toStringValue(pack?.workflow?.title);
+    lines.push(`pack_${index + 1}_details: ${workflowPath}${workflowTitle ? ` :: ${workflowTitle}` : ''}`);
+    lines.push(...summarizeEvidencePackForModel(pack, {
+      methodLimit: index === 0 ? 10 : 0,
+    }).filter((line) => line !== 'evidence_pack:'));
+  }
+  return lines;
+}
+
+function orderEvidencePacksForModel(packs = [], query = '') {
+  // WikiSearchTool already orders packs by backend search rank and generic workflow relevance.
+  // Keep this layer domain-agnostic: do not add SDK family-specific routing heuristics here.
+  void query;
+  return (Array.isArray(packs) ? packs : [])
+    .filter((pack) => pack && typeof pack === 'object' && !Array.isArray(pack));
 }
 
 function summarizeObservationForModel(toolName, observation = {}) {
@@ -326,7 +559,11 @@ function summarizeObservationForModel(toolName, observation = {}) {
 
   if (name === 'wiki_search') {
     lines.push('reference_origin: backend_wiki');
-    lines.push(...summarizeEvidencePackForModel(payload.evidence_pack));
+    if (Array.isArray(payload.evidence_packs) && payload.evidence_packs.length > 0) {
+      lines.push(...summarizeEvidencePacksForModel(payload.evidence_packs, payload.query));
+    } else {
+      lines.push(...summarizeEvidencePackForModel(payload.evidence_pack));
+    }
     const results = summarizePathItems(payload.results, (item) => {
       const pathValue = toStringValue(item?.path);
       const title = toStringValue(item?.title);

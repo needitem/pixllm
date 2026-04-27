@@ -38,7 +38,7 @@ tags:
 ## Primary Usage Buckets
 - `좌표 코드 변환`: `WGP2UTM`, `UTM2WGP`, `WGP2MGRS`, `MGRS2WGP`, `WGP2GEOREF`, `GEOREF2WGP`
 - `좌표 한 점 변환`: `CreateCoordinateTransform`, `TransformPt`
-- `좌표계 생성/내보내기`: `ImportFromEPSG`, `ImportFromWkt`, `ImportFromProj4`, `ExportToWkt`, `ExportToPrettyWkt`, `ExportToProj4`
+- `좌표계 생성/내보내기`: `importFromEPSG`, `importFromWkt`, `importFromProj4`, `exportToWkt`, `exportToPrettyWkt`, `exportToProj4`
 - `좌표계 판별`: `IsGeographic`, `IsProjected`, `IsUTM`, `GetUTMZone`, `GetAreaOfUse`, `IsSame`
 
 ## Related Sources
@@ -47,7 +47,7 @@ tags:
 ## Practical Answer Shape
 - `좌표 코드 변환`: `WGP/UTM/MGRS/GEOREF` 계열 변환 함수를 먼저 제시합니다.
 - `좌표 한 점 변환`: `CreateCoordinateTransform` 후 `TransformPt` 순서로 설명합니다.
-- `좌표계 생성/출력`: `ImportFromEPSG/Wkt/Proj4`와 `ExportTo*`를 짝으로 설명합니다.
+- `좌표계 생성/출력`: `importFromEPSG/Wkt/Proj4`와 `exportTo*`를 짝으로 설명합니다.
 - `좌표계 판별`: `IsGeographic/Projected/UTM`, `GetUTMZone` 같은 판별 메서드로 답합니다.
 
 
@@ -77,7 +77,7 @@ bundle_pages:
 
 <!-- GENERATED:RUNTIME_STATUS:START -->
 ## Runtime Ingest Status
-- Auto-generated from raw source ingest at `2026-04-24T01:05:26Z`.
+- Auto-generated from raw source ingest at `2026-04-27T01:07:34Z`.
 - Resolved required symbols: `17/17`
 - Linked modules:
   - `NXDLcc`
@@ -97,12 +97,12 @@ required_symbols:
   - Xcc.GEOREF2WGP
   - XCoordinateTransformation.CreateCoordinateTransform
   - XCoordinateTransformation.TransformPt
-  - XSpatialReference.ImportFromEPSG
-  - XSpatialReference.ImportFromWkt
-  - XSpatialReference.ImportFromProj4
-  - XSpatialReference.ExportToWkt
-  - XSpatialReference.ExportToPrettyWkt
-  - XSpatialReference.ExportToProj4
+  - XSpatialReference.importFromEPSG
+  - XSpatialReference.importFromWkt
+  - XSpatialReference.importFromProj4
+  - XSpatialReference.exportToWkt
+  - XSpatialReference.exportToPrettyWkt
+  - XSpatialReference.exportToProj4
   - XSpatialReference.GetUTMZone
   - XSpatialReference.IsUTM
 verification_rules:

@@ -22,6 +22,42 @@ sources:
 - The user asks about camera movement, PBI groups, or planet-scene display.
 - The user asks about screen capture, sun-follow, or render-layer ordering in PlanetView.
 
+## Minimal C# Flow
+Use this shape when the user asks how to add a render layer to `NXPlanetView` and refresh the view. The layer and optional camera target are supplied by the caller; do not use ellipsis placeholders for them.
+
+```csharp
+bool AddPlanetRenderLayer(NXPlanetView planetView, NXRenderLayer renderLayer)
+{
+    if (planetView == null || renderLayer == null)
+        return false;
+
+    NXRenderLayer layer = renderLayer;
+    bool added = planetView.AddRenderLayer(ref layer);
+    if (added)
+        planetView.RefreshScreen();
+
+    return added;
+}
+
+bool MovePlanetCameraToTarget(
+    NXPlanetView planetView,
+    XGeoPoint target,
+    double distance,
+    XAngle azimuth,
+    XAngle elevation)
+{
+    if (planetView == null || target == null || azimuth == null || elevation == null)
+        return false;
+
+    bool moved = planetView.LookTarget(target, distance, azimuth, elevation);
+    if (moved)
+        planetView.RefreshScreen();
+
+    return moved;
+}
+```
+
+Use `AddRenderLayer(ref layer)` for layer attach and `RefreshScreen()` for immediate redraw. Use `LookTarget` or `SetCameraPosition` only when the user asks for camera movement or provides the camera target/state.
 
 ## Answering Guidance
 - Start from the owning workflow, then use this page to turn that family-level context into ordered task steps.
