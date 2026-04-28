@@ -1,19 +1,10 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { app, BrowserWindow, ipcMain } = require('electron');
-const {
-  apiApproveRun,
-  apiCancelRun,
-  apiHealth,
-  apiRejectRun,
-  apiResumeRun,
-  apiRun,
-  apiRuns,
-} = require('./server.cjs');
+const { apiHealth } = require('./server.cjs');
 const {
   startLocalAgentStream,
   cancelLocalAgentStream,
-  answerLocalAgentQuestion,
   resetLocalAgentEngine,
 } = require('./queryEngineService.cjs');
 const { loadBuildInfo } = require('./build_info.cjs');
@@ -100,23 +91,9 @@ function createWindow() {
   return win;
 }
 
-function createRunsWindow(parentWindow) {
-  const win = createShellWindow({
-    width: 1240,
-    height: 920,
-    minWidth: 920,
-    minHeight: 680,
-    title: 'PIXLLM Runs',
-    parent: parentWindow
-  });
-  loadRenderer(win, { view: 'runs' });
-  return win;
-}
-
 app.whenReady().then(() => {
   const win = createWindow();
   const agentStreamControllers = new Map();
-  let runsWindow = null;
   const buildInfo = loadBuildInfo();
 
   ipcMain.handle('app:get-info', async () => ({
@@ -129,19 +106,6 @@ app.whenReady().then(() => {
     platform: process.platform,
     dataRoot: desktopDataRoot()
   }));
-  ipcMain.handle('app:open-runs-window', async () => {
-    if (runsWindow && !runsWindow.isDestroyed()) {
-      runsWindow.show();
-      runsWindow.focus();
-      return { ok: true };
-    }
-    runsWindow = createRunsWindow(win);
-    runsWindow.on('closed', () => {
-      runsWindow = null;
-    });
-    return { ok: true };
-  });
-
   ipcMain.handle('settings:load', async () => loadSettings());
   ipcMain.handle('settings:save', async (_, patch) => saveSettings(patch));
   ipcMain.handle('sessions:list', async (_, workspacePath) => listSessions(workspacePath));
@@ -155,32 +119,11 @@ app.whenReady().then(() => {
   ipcMain.handle('sessions:save', async (_, session) => saveSession(session));
 
   ipcMain.handle('api:health', async (_, baseUrl) => apiHealth(baseUrl));
-  ipcMain.handle('api:runs', async (_, baseUrl) => apiRuns(baseUrl));
-  ipcMain.handle('api:run', async (_, baseUrl, runId) => apiRun(baseUrl, runId));
-  ipcMain.handle('api:cancel-run', async (_, baseUrl, runId, reason) => apiCancelRun(baseUrl, runId, reason));
-  ipcMain.handle(
-    'api:resume-run',
-    async (_, baseUrl, runId, fromTaskKey, fromStepKey) =>
-      apiResumeRun(baseUrl, runId, fromTaskKey, fromStepKey)
-  );
-  ipcMain.handle(
-    'api:approve-run',
-    async (_, baseUrl, runId, approvalId, note) =>
-      apiApproveRun(baseUrl, runId, approvalId, note)
-  );
-  ipcMain.handle(
-    'api:reject-run',
-    async (_, baseUrl, runId, approvalId, note) =>
-      apiRejectRun(baseUrl, runId, approvalId, note)
-  );
   ipcMain.handle(
     'agent:chat-stream-start',
     async (event, payload) => startLocalAgentStream(event.sender, agentStreamControllers, payload)
   );
   ipcMain.handle('agent:chat-stream-cancel', async (_, requestId) => cancelLocalAgentStream(agentStreamControllers, requestId));
-  ipcMain.handle('agent:question-answer', async (_, requestId, questionId, answer) =>
-    answerLocalAgentQuestion(requestId, questionId, answer)
-  );
 
   ipcMain.handle('workspace:choose', async () => {
     const result = await selectWorkspace(win);

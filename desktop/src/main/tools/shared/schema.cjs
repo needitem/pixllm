@@ -2,9 +2,9 @@ function toStringValue(value) {
   return String(value || '').trim();
 }
 
-function toPositiveInt(value, fallback) {
+function toPositiveInt(value, defaultValue) {
   const parsed = Number(value || 0);
-  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : defaultValue;
 }
 
 function objectSchema(properties, required = []) {

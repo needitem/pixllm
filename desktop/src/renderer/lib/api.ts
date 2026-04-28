@@ -1,72 +1,11 @@
-import { invokeDesktop, normalizeDesktopItems, subscribeDesktopEvent } from './bridge';
+import { invokeDesktop, subscribeDesktopEvent } from './bridge';
 
 export type HealthResponse = {
   status?: string;
   components?: Record<string, unknown>;
 };
 
-export type RunStep = {
-  step_id: string;
-  step_key: string;
-  title: string;
-  kind: string;
-  status: string;
-  owner_agent?: string;
-  input?: unknown;
-  output_preview?: string;
-  metadata?: Record<string, unknown>;
-};
-
-export type RunTask = {
-  task_id: string;
-  task_key: string;
-  title: string;
-  status: string;
-  owner_agent?: string;
-  steps?: RunStep[];
-};
-
-export type RunArtifact = {
-  artifact_id: string;
-  type: string;
-  title: string;
-  owner_agent?: string;
-  task_key?: string;
-  content?: unknown;
-};
-
-export type RunApproval = {
-  approval_id: string;
-  type: string;
-  title: string;
-  reason: string;
-  status: string;
-  owner_agent?: string;
-};
-
-export type ExecutionRun = {
-  run_id: string;
-  status: string;
-  user_message?: string;
-  response_type?: string;
-  owner_agent?: string;
-  created_at?: string;
-  tasks?: RunTask[];
-  artifacts?: RunArtifact[];
-  approvals?: RunApproval[];
-  metadata?: Record<string, unknown>;
-};
-
-export type WikiInfo = {
-  id?: string;
-  name?: string;
-  description?: string;
-  root_path?: string;
-  page_count?: number;
-  updated_at?: string;
-};
-
-export type WikiSearchResult = {
+export type SourceSearchResult = {
   path: string;
   title?: string;
   kind?: string;
@@ -77,15 +16,12 @@ export type WikiSearchResult = {
   score?: number;
 };
 
-export type WikiContextResponse = {
-  wiki?: WikiInfo | null;
-  pages?: WikiSearchResult[];
-  coordination_pages?: WikiSearchResult[];
-  coordination_status?: WikiCoordinationStatus | null;
+export type SourceOverviewResponse = {
+  pages?: SourceSearchResult[];
 };
 
-export type WikiPage = {
-  wiki_id?: string;
+export type SourcePage = {
+  source_id?: string;
   path: string;
   title?: string;
   kind?: string;
@@ -95,39 +31,16 @@ export type WikiPage = {
   version?: number;
 };
 
-export type WikiCoordinationStatus = {
-  wiki_id?: string;
-  required_paths?: string[];
-  optional_paths?: string[];
-  required_present_paths?: string[];
-  optional_present_paths?: string[];
-  present_paths?: string[];
-  missing_paths?: string[];
-  missing_paths_before?: string[];
-  created_paths?: string[];
-  auto_bootstrapped?: boolean;
-  has_coordination_spine?: boolean;
-};
-
 export type StreamStatusPayload = {
   phase?: string;
   message?: string;
-  response_type?: string;
   tool?: string;
   source_count?: number;
-  run_id?: string;
 };
 
 export type StreamDonePayload = {
   answer?: string;
-  run_id?: string;
   query_time_ms?: number;
-  classified_intent?: string;
-  intent_source?: string;
-  intent_id?: string;
-  intent_confidence?: number;
-  response_type?: string;
-  planned_response_type?: string;
   answer_truncated?: boolean;
   reasoning_summary?: Record<string, unknown>;
   reasoning_trace?: Array<Record<string, unknown>>;
@@ -227,44 +140,8 @@ export type StreamTerminalPayload = {
   [key: string]: unknown;
 };
 
-export type StreamUserQuestionPayload = {
-  questionId?: string;
-  title?: string;
-  prompt?: string;
-  placeholder?: string;
-  defaultValue?: string;
-  allowEmpty?: boolean;
-};
-
-export type StreamBriefPayload = {
-  title?: string;
-  message?: string;
-  level?: string;
-};
-
 export const fetchHealth = (baseUrl: string) =>
   invokeDesktop<HealthResponse>('apiHealth', baseUrl);
-export async function fetchRuns(baseUrl: string): Promise<ExecutionRun[]> {
-  return normalizeDesktopItems<ExecutionRun>(await invokeDesktop<unknown>('apiRuns', baseUrl));
-}
-export const fetchRun = (baseUrl: string, runId: string) =>
-  invokeDesktop<ExecutionRun>('apiRun', baseUrl, runId);
-export const cancelRun = (baseUrl: string, runId: string, reason = 'desktop_user') =>
-  invokeDesktop<ExecutionRun>('apiCancelRun', baseUrl, runId, reason);
-
-export async function resumeRun(
-  baseUrl: string,
-  runId: string,
-  fromTaskKey = '',
-  fromStepKey = ''
-) {
-  return invokeDesktop<ExecutionRun>('apiResumeRun', baseUrl, runId, fromTaskKey, fromStepKey);
-}
-
-export const approveRun = (baseUrl: string, runId: string, approvalId: string, note = '') =>
-  invokeDesktop<RunApproval>('apiApproveRun', baseUrl, runId, approvalId, note);
-export const rejectRun = (baseUrl: string, runId: string, approvalId: string, note = '') =>
-  invokeDesktop<RunApproval>('apiRejectRun', baseUrl, runId, approvalId, note);
 
 function toStringValue(value: unknown): string {
   return String(value || '').trim();
@@ -315,23 +192,41 @@ async function backendRequest<T>(baseUrl: string, requestPath: string, method = 
   return (record.data ?? {}) as T;
 }
 
-export const fetchWikiContext = (baseUrl: string, wikiId: string) =>
-  backendRequest<WikiContextResponse>(baseUrl, '/v1/wiki/context', 'POST', { wiki_id: toStringValue(wikiId) || 'engine' });
+export async function fetchSourceOverview(baseUrl: string): Promise<SourceOverviewResponse> {
+  const response = await backendRequest<{
+    modules?: Array<{
+      module?: string;
+      file_count?: number;
+      source_paths?: string[];
+    }>;
+  }>(baseUrl, '/v1/source/context', 'POST', {});
+  const modules = Array.isArray(response.modules) ? response.modules : [];
+  return {
+    pages: modules.map((item) => ({
+      path: Array.isArray(item.source_paths) && item.source_paths[0]
+        ? String(item.source_paths[0])
+        : String(item.module || ''),
+      title: String(item.module || ''),
+      kind: 'source_module',
+      summary: `${Number(item.file_count || 0)} files`,
+      excerpt: '',
+      score: Number(item.file_count || 0),
+    })).filter((item) => item.path),
+  };
+}
 
-export const searchWiki = (
+export const searchSource = (
   baseUrl: string,
-  wikiId: string,
   query: string,
   limit = 12,
   includeContent = false,
   kind = '',
 ) =>
-  backendRequest<{ wiki_id?: string; total?: number; results?: WikiSearchResult[] }>(
+  backendRequest<{ source_id?: string; total?: number; results?: SourceSearchResult[] }>(
     baseUrl,
-    '/v1/wiki/search',
+    '/v1/source/search',
     'POST',
     {
-      wiki_id: toStringValue(wikiId) || 'engine',
       query: toStringValue(query),
       limit,
       include_content: includeContent,
@@ -339,9 +234,8 @@ export const searchWiki = (
     },
   );
 
-export const readWikiPage = (baseUrl: string, wikiId: string, path: string) =>
-  backendRequest<WikiPage>(baseUrl, '/v1/wiki/page/read', 'POST', {
-    wiki_id: toStringValue(wikiId) || 'engine',
+export const readSourcePage = (baseUrl: string, path: string) =>
+  backendRequest<SourcePage>(baseUrl, '/v1/source/read', 'POST', {
     path: toStringValue(path),
   });
 
@@ -353,7 +247,6 @@ export async function streamLocalAgentChat(
     baseUrl: string;
     serverBaseUrl?: string;
     llmBaseUrl?: string;
-    wikiId?: string;
     engineQuestionOverride?: boolean;
     selectedFilePath?: string;
     sessionId?: string;
@@ -371,11 +264,6 @@ export async function streamLocalAgentChat(
     onToolBatchEnd?: (payload?: StreamToolBatchPayload) => void;
     onTransition?: (payload?: StreamTransitionPayload) => void;
     onTerminal?: (payload?: StreamTerminalPayload) => void;
-    onUserQuestion?: (
-      payload?: StreamUserQuestionPayload,
-      respond?: (answer: string) => Promise<{ ok: boolean; requestId: string; questionId: string }>
-    ) => void | Promise<void>;
-    onBrief?: (payload?: StreamBriefPayload) => void;
     onStatus?: (payload?: StreamStatusPayload) => void;
     onDone?: (payload?: StreamDonePayload) => void;
     onCancelled?: (payload?: StreamCancelledPayload) => void;
@@ -447,31 +335,6 @@ export async function streamLocalAgentChat(
 
       if (event.event === 'terminal' && handlers.onTerminal) {
         handlers.onTerminal((event.payload || undefined) as StreamTerminalPayload | undefined);
-        return;
-      }
-
-      if (event.event === 'user_question' && handlers.onUserQuestion) {
-        const payload = (event.payload || undefined) as StreamUserQuestionPayload | undefined;
-        handlers.onUserQuestion(payload, async (answer) => {
-          if (!activeRequestId) {
-            return {
-              ok: false,
-              requestId: '',
-              questionId: String(payload?.questionId || ''),
-            };
-          }
-          return invokeDesktop<{ ok: boolean; requestId: string; questionId: string }>(
-            'answerAgentQuestion',
-            activeRequestId,
-            String(payload?.questionId || ''),
-            String(answer || '')
-          );
-        });
-        return;
-      }
-
-      if (event.event === 'brief' && handlers.onBrief) {
-        handlers.onBrief((event.payload || undefined) as StreamBriefPayload | undefined);
         return;
       }
 

@@ -211,8 +211,8 @@ function buildOutlineItemsFromContent(content, symbol = '', limit = 40) {
     .slice(0, Math.max(1, Math.min(Number(limit || 40), 80)));
 }
 
-function buildSymbolNeighborhoodItems(items, lineHint = 0, limit = 12) {
-  const hint = Math.max(0, Number(lineHint || 0));
+function buildSymbolNeighborhoodItems(items, anchorLine = 0, limit = 12) {
+  const line = Math.max(0, Number(anchorLine || 0));
   const safeLimit = Math.max(1, Math.min(Number(limit || 12), 40));
   const kindPriority = {
     function: 0,
@@ -224,28 +224,28 @@ function buildSymbolNeighborhoodItems(items, lineHint = 0, limit = 12) {
   return (Array.isArray(items) ? items : [])
     .map((item) => ({
       ...item,
-      distance: hint > 0 ? Math.abs(Number(item.line || 0) - hint) : Number(item.line || 0),
-      beforeHint: hint > 0 && Number(item.line || 0) <= hint,
+      distance: line > 0 ? Math.abs(Number(item.line || 0) - line) : Number(item.line || 0),
+      beforeAnchor: line > 0 && Number(item.line || 0) <= line,
       kindRank: Number(kindPriority[String(item?.kind || '').trim().toLowerCase()] ?? 4),
     }))
     .sort((a, b) => {
-      if (hint > 0) {
-        if (a.beforeHint !== b.beforeHint) return a.beforeHint ? -1 : 1;
+      if (line > 0) {
+        if (a.beforeAnchor !== b.beforeAnchor) return a.beforeAnchor ? -1 : 1;
         if (a.distance !== b.distance) return a.distance - b.distance;
       }
       if (a.kindRank !== b.kindRank) return a.kindRank - b.kindRank;
       return Number(a.line || 0) - Number(b.line || 0) || String(a.name || '').localeCompare(String(b.name || ''));
     })
     .slice(0, safeLimit)
-    .map(({ distance, beforeHint, kindRank, ...item }) => item);
+    .map(({ distance, beforeAnchor, kindRank, ...item }) => item);
 }
 
-function chooseDefinitionCandidate(candidates, lineHint = 0) {
-  const hint = Math.max(0, Number(lineHint || 0));
+function chooseDefinitionCandidate(candidates, anchorLine = 0) {
+  const line = Math.max(0, Number(anchorLine || 0));
   return [...(Array.isArray(candidates) ? candidates : [])]
     .sort((a, b) => {
-      if (hint > 0) {
-        const delta = Math.abs(Number(a.line || 0) - hint) - Math.abs(Number(b.line || 0) - hint);
+      if (line > 0) {
+        const delta = Math.abs(Number(a.line || 0) - line) - Math.abs(Number(b.line || 0) - line);
         if (delta !== 0) return delta;
       }
       return Number(b.score || 0) - Number(a.score || 0) || Number(a.line || 0) - Number(b.line || 0);
@@ -510,21 +510,21 @@ function createWorkspaceSymbolApis({ grepWorkspace, safeResolve, isAllowedWorkbe
     if (!outline.ok) {
       return outline;
     }
-    const lineHint = Math.max(0, Number(options.lineHint || options.line_hint || 0));
+    const line = Math.max(0, Number(options.line || 0));
     return {
       ok: true,
       path: outline.path,
       symbol: outline.symbol,
       backend: outline.backend,
-      lineHint,
-      items: buildSymbolNeighborhoodItems(outline.items, lineHint, options.limit || 12),
+      line,
+      items: buildSymbolNeighborhoodItems(outline.items, line, options.limit || 12),
     };
   }
 
   async function readSymbolSpanInWorkspace(workspacePath, relativePath = '', symbol = '', options = {}) {
     const normalizedSymbol = String(symbol || '').trim();
     let resolvedPath = String(relativePath || '').trim();
-    const lineHint = Math.max(0, Number(options.lineHint || options.startLine || options.start_line || 0));
+    const line = Math.max(0, Number(options.line || options.startLine || options.start_line || 0));
     const maxChars = Math.max(200, Math.min(Number(options.maxChars || options.max_chars || 12000), 100000));
 
     if (!normalizedSymbol) {
@@ -546,7 +546,7 @@ function createWorkspaceSymbolApis({ grepWorkspace, safeResolve, isAllowedWorkbe
       const content = await fs.promises.readFile(fullPath, 'utf-8');
       const lines = content.split(/\r?\n/);
       const candidates = collectDefinitionCandidates(lines, normalizedSymbol);
-      const chosen = chooseDefinitionCandidate(candidates, lineHint);
+      const chosen = chooseDefinitionCandidate(candidates, line);
       if (!chosen) {
         return { ok: false, path: resolvedPath, symbol: normalizedSymbol, content: '', error: 'symbol_definition_not_found' };
       }

@@ -1,51 +1,33 @@
 <script lang="ts">
   import { onDestroy, onMount, tick } from 'svelte';
   import {
-    approveRun,
-    cancelRun,
     fetchHealth,
-    fetchRun,
-    fetchRuns,
-    fetchWikiContext,
-    readWikiPage,
-    rejectRun,
-    resumeRun,
-    searchWiki,
+    fetchSourceOverview,
+    readSourcePage,
+    searchSource,
     type StreamAssistantMessagePayload,
     streamLocalAgentChat,
     type StreamCancelledPayload,
-    type ExecutionRun,
     type StreamModelPayload,
     type StreamRequestStartPayload,
     type StreamSessionRestoredPayload,
     type StreamTerminalPayload,
     type StreamToolBatchPayload,
-    type StreamBriefPayload,
     type StreamTransitionPayload,
     type StreamToolUsePayload,
     type StreamToolResultPayload,
-    type StreamUserQuestionPayload,
-    type RunApproval,
-    type RunArtifact,
-    type RunStep,
-    type RunTask,
     type StreamDonePayload,
     type StreamStatusPayload,
-    type WikiCoordinationStatus,
-    type WikiPage,
-    type WikiSearchResult
+    type SourcePage,
+    type SourceSearchResult
   } from './lib/api';
   import { desktop } from './lib/bridge';
   import { deserializeConversation, serializeConversation } from './lib/conversation';
   import {
-    diffViewsFromUnknown,
-    extractEditSummaries,
-    type DiffFileView,
     type DiffLineView
   } from './lib/diff';
   import {
     buildExecutionInspectorItems,
-    buildRunSnapshot,
     defaultExecutionItemId,
     executionDetailList,
     executionDetailMessage,
@@ -72,7 +54,6 @@
     formatDateTime,
     getPathTail,
     getWorkspaceName,
-    resolveWikiId,
     summarizeWorkspaceState,
     toneClass,
     truncateText
@@ -105,7 +86,6 @@
     llmBaseUrl: '',
     workspacePath: '',
     selectedModel: 'Qwen/Qwen3.6-27B',
-    wikiId: 'engine',
     engineQuestionDefault: true,
     recentWorkspaces: []
   };
@@ -116,14 +96,6 @@
 
   let healthStatus = 'unknown';
   let healthMessage = '';
-
-  let runs: ExecutionRun[] = [];
-  let selectedRunId = '';
-  let selectedRun: ExecutionRun | null = null;
-  let runTasks: RunTask[] = [];
-  let runArtifacts: RunArtifact[] = [];
-  let runApprovals: RunApproval[] = [];
-  let runEditSummaries: DiffFileView[] = [];
 
   let workspaceStatus = '';
   let workspaceDiff = '';
@@ -137,21 +109,18 @@
   let localToolSummary = '';
   let localPrimaryFilePath = '';
   let localPrimaryFileContent = '';
-  let wikiQuery = '';
-  let wikiResults: WikiSearchResult[] = [];
-  let wikiSelectedPath = '';
-  let wikiPageTitle = '';
-  let wikiPageKind = '';
-  let wikiPageContent = '';
-  let wikiPageSummary = '';
-  let wikiPageUpdatedAt = '';
-  let wikiBusy = false;
-  let wikiStatusMessage = '';
-  let wikiErrorMessage = '';
-  let wikiCoordinationStatus: WikiCoordinationStatus | null = null;
-  let resolvedWikiId = 'engine';
-  let wikiLoadKey = '';
-  let lastWikiLoadKey = '';
+  let sourceQuery = '';
+  let sourceResults: SourceSearchResult[] = [];
+  let sourceSelectedPath = '';
+  let sourcePageTitle = '';
+  let sourcePageKind = '';
+  let sourcePageContent = '';
+  let sourcePageSummary = '';
+  let sourcePageUpdatedAt = '';
+  let sourceBusy = false;
+  let sourceErrorMessage = '';
+  let sourceLoadKey = '';
+  let lastSourceLoadKey = '';
 
   let chatInput = '';
   let engineQuestionChecked = DEFAULT_SETTINGS.engineQuestionDefault;
@@ -159,8 +128,7 @@
   let activeStreamUnsubscribe: null | (() => void) = null;
   let busy = false;
   let showConnectionEditor = false;
-  let detailTab: 'summary' | 'approvals' | 'tasks' | 'artifacts' = 'summary';
-  let viewMode: 'main' | 'runs' | 'wiki' = 'main';
+  let viewMode: 'main' | 'source' = 'main';
   let conversation: ConversationMessage[] = [];
   let conversationScroller: HTMLDivElement | null = null;
   let sessions: SessionListItem[] = [];
@@ -177,18 +145,6 @@
   const executionItemsCache = new Map<string, { key: string; items: ExecutionInspectorItem[] }>();
   const visibleExecutionItemsCache = new Map<string, { key: string; items: ExecutionInspectorItem[] }>();
 
-  $: selectedRun = runs.find((run) => run.run_id === selectedRunId) ?? null;
-  $: if (selectedRunId) {
-    void loadRunDetail(selectedRunId);
-  }
-  $: runEditSummaries = selectedRun
-    ? extractEditSummaries({
-        ...selectedRun,
-        tasks: runTasks,
-        artifacts: runArtifacts,
-        approvals: runApprovals,
-      })
-    : [];
   $: workspaceName = getWorkspaceName(settings.workspacePath);
   $: workspaceOptions = buildWorkspaceOptions(settings.workspacePath, settings.recentWorkspaces);
   $: selectedSession = sessions.find((session) => session.id === selectedSessionId) || null;
@@ -204,13 +160,6 @@
     workspaceDirtyCount,
     workspaceDiffCount
   );
-  $: resolvedWikiId = resolveWikiId(settings.wikiId);
-  $: pendingApprovalCount = runApprovals.filter(
-    (approval) => String(approval.status || '').toLowerCase() === 'pending'
-  ).length;
-  $: activeTaskCount = runTasks.filter((task) =>
-    /running|queued|pending|progress|waiting/i.test(String(task.status || ''))
-  ).length;
   $: hasConversation = conversation.length > 0;
   $: assistantStateLabel = busy
     ? 'Response in progress'
@@ -250,126 +199,101 @@
       conversationScroller?.scrollTo({ top: conversationScroller.scrollHeight, behavior: 'auto' });
     });
   }
-  $: wikiLoadKey = viewMode === 'wiki'
-    ? `${String(settings.serverBaseUrl || '').trim()}|${resolvedWikiId}`
+  $: sourceLoadKey = viewMode === 'source'
+    ? String(settings.serverBaseUrl || '').trim()
     : '';
   $: if (!settings.workspacePath) {
     engineQuestionChecked = true;
   }
-  $: if (wikiLoadKey && wikiLoadKey !== lastWikiLoadKey) {
-    lastWikiLoadKey = wikiLoadKey;
-    void refreshWikiContext();
+  $: if (sourceLoadKey && sourceLoadKey !== lastSourceLoadKey) {
+    lastSourceLoadKey = sourceLoadKey;
+    void refreshSourceOverview();
   }
 
-  function applyWikiPage(page: WikiPage | null | undefined) {
-    wikiSelectedPath = String(page?.path || '').trim();
-    wikiPageTitle = String(page?.title || '').trim();
-    wikiPageKind = String(page?.kind || '').trim();
-    wikiPageContent = String(page?.content || '');
-    wikiPageSummary = String(page?.summary || '').trim();
-    wikiPageUpdatedAt = String(page?.updated_at || '').trim();
+  function applySourcePage(page: SourcePage | null | undefined) {
+    sourceSelectedPath = String(page?.path || '').trim();
+    sourcePageTitle = String(page?.title || '').trim();
+    sourcePageKind = String(page?.kind || '').trim();
+    sourcePageContent = String(page?.content || '');
+    sourcePageSummary = String(page?.summary || '').trim();
+    sourcePageUpdatedAt = String(page?.updated_at || '').trim();
   }
 
-  function clearWikiEditor(defaultPath = '') {
-    wikiSelectedPath = defaultPath;
-    wikiPageTitle = '';
-    wikiPageKind = '';
-    wikiPageContent = '';
-    wikiPageSummary = '';
-    wikiPageUpdatedAt = '';
+  function clearSourceEditor(defaultPath = '') {
+    sourceSelectedPath = defaultPath;
+    sourcePageTitle = '';
+    sourcePageKind = '';
+    sourcePageContent = '';
+    sourcePageSummary = '';
+    sourcePageUpdatedAt = '';
   }
 
-  function mergeWikiResults(primary: WikiSearchResult[] = [], secondary: WikiSearchResult[] = []) {
-    const seen = new Set<string>();
-    const output: WikiSearchResult[] = [];
-    for (const item of [...primary, ...secondary]) {
-      const pathValue = String(item?.path || '').trim();
-      if (!pathValue || seen.has(pathValue)) continue;
-      seen.add(pathValue);
-      output.push(item);
-    }
-    return output;
-  }
-
-  async function openWikiPage(pathValue: string, options?: { preserveStatus?: boolean }) {
+  async function openSourcePage(pathValue: string) {
     const targetPath = String(pathValue || '').trim();
     if (!targetPath || !settings.serverBaseUrl.trim()) return;
-    wikiBusy = true;
-    wikiErrorMessage = '';
-    if (!options?.preserveStatus) {
-      wikiStatusMessage = '';
-    }
+    sourceBusy = true;
+    sourceErrorMessage = '';
     try {
-      const page = await readWikiPage(settings.serverBaseUrl, resolvedWikiId, targetPath);
-      applyWikiPage(page);
+      const page = await readSourcePage(settings.serverBaseUrl, targetPath);
+      applySourcePage(page);
     } catch (error) {
-      wikiErrorMessage = error instanceof Error ? error.message : String(error);
+      sourceErrorMessage = error instanceof Error ? error.message : String(error);
     } finally {
-      wikiBusy = false;
+      sourceBusy = false;
     }
   }
 
-  async function refreshWikiContext(selectPath = wikiSelectedPath) {
+  async function refreshSourceOverview(selectPath = sourceSelectedPath) {
     if (!settings.serverBaseUrl.trim()) return;
-    wikiBusy = true;
-    wikiErrorMessage = '';
-    wikiStatusMessage = '';
+    sourceBusy = true;
+    sourceErrorMessage = '';
     try {
-      const result = await fetchWikiContext(settings.serverBaseUrl, resolvedWikiId);
-      wikiCoordinationStatus = result.coordination_status || null;
-      const createdPaths = Array.isArray(result.coordination_status?.created_paths)
-        ? result.coordination_status.created_paths.filter((item) => String(item || '').trim().length > 0)
-        : [];
-      if (createdPaths.length > 0) {
-        wikiStatusMessage = `Initialized wiki coordination files: ${createdPaths.join(', ')}`;
-      }
-      wikiResults = mergeWikiResults(result.coordination_pages || [], result.pages || []).slice(0, 48);
-      const nextPath = selectPath || wikiResults[0]?.path || '';
+      const result = await fetchSourceOverview(settings.serverBaseUrl);
+      sourceResults = Array.isArray(result.pages) ? result.pages.slice(0, 48) : [];
+      const nextPath = selectPath || sourceResults[0]?.path || '';
       if (nextPath) {
-        await openWikiPage(nextPath, { preserveStatus: true });
+        await openSourcePage(nextPath);
       } else {
-        clearWikiEditor();
+        clearSourceEditor();
       }
     } catch (error) {
-      wikiErrorMessage = error instanceof Error ? error.message : String(error);
+      sourceErrorMessage = error instanceof Error ? error.message : String(error);
     } finally {
-      wikiBusy = false;
+      sourceBusy = false;
     }
   }
 
-  async function runWikiSearch() {
+  async function runSourceSearch() {
     if (!settings.serverBaseUrl.trim()) return;
-    const query = wikiQuery.trim();
+    const query = sourceQuery.trim();
     if (!query) {
-      await refreshWikiContext(wikiSelectedPath);
+      await refreshSourceOverview(sourceSelectedPath);
       return;
     }
-    wikiBusy = true;
-    wikiErrorMessage = '';
-    wikiStatusMessage = '';
+    sourceBusy = true;
+    sourceErrorMessage = '';
     try {
-      const result = await searchWiki(
+      const result = await searchSource(
         settings.serverBaseUrl,
-        resolvedWikiId,
         query,
         24,
         false
       );
-      wikiResults = Array.isArray(result.results) ? result.results : [];
-      if (wikiResults[0]?.path) {
-        await openWikiPage(wikiResults[0].path, { preserveStatus: true });
+      sourceResults = Array.isArray(result.results) ? result.results : [];
+      if (sourceResults[0]?.path) {
+        await openSourcePage(sourceResults[0].path);
       }
     } catch (error) {
-      wikiErrorMessage = error instanceof Error ? error.message : String(error);
+      sourceErrorMessage = error instanceof Error ? error.message : String(error);
     } finally {
-      wikiBusy = false;
+      sourceBusy = false;
     }
   }
 
-  function handleWikiSearchKeydown(event: KeyboardEvent) {
+  function handleSourceSearchKeydown(event: KeyboardEvent) {
     if (event.key === 'Enter') {
       event.preventDefault();
-      void runWikiSearch();
+      void runSourceSearch();
     }
   }
 
@@ -490,7 +414,6 @@
   }
 
   function executionCacheKey(message: ConversationMessage): string {
-    const runSnapshot = message.runSnapshot;
     return [
       message.id,
       message.state || '',
@@ -498,11 +421,7 @@
       message.localTrace?.length ?? 0,
       message.localTranscript?.length ?? 0,
       message.localSummary || '',
-      message.localError || '',
-      runSnapshot?.tasks.length ?? 0,
-      runSnapshot?.approvals.length ?? 0,
-      runSnapshot?.artifacts.length ?? 0,
-      runSnapshot?.editSummaries?.length ?? 0
+      message.localError || ''
     ].join('|');
   }
 
@@ -630,38 +549,13 @@
     expandedExecutionMessageIds = [];
     lastAutoExpandedExecutionMessageId = '';
     conversation = deserializeConversation(session.messages || [], createMessageId);
-    void hydrateConversationRunSnapshots(conversation);
     closeSidebar();
   }
 
-  async function hydrateConversationRunSnapshots(messages: ConversationMessage[]) {
-    const baseUrl = settings.serverBaseUrl.trim();
-    if (!baseUrl || messages.length === 0) return;
-    const messagesByRunId = new Map<string, string[]>();
-    for (const message of [...messages].reverse()) {
-      if (message.role !== 'assistant' || !message.runId) continue;
-      if (!messagesByRunId.has(message.runId)) {
-        messagesByRunId.set(message.runId, []);
-      }
-      messagesByRunId.get(message.runId)?.push(message.id);
-      if (messagesByRunId.size >= 8) break;
-    }
-    for (const [runId, messageIds] of messagesByRunId.entries()) {
-      try {
-        const detail = await fetchRun(baseUrl, runId);
-        for (const messageId of messageIds) {
-          updateRunSnapshotMessage(messageId, detail);
-        }
-      } catch {
-        // Preserve the locally cached snapshot when the server copy is unavailable.
-      }
-    }
-  }
-
-  async function persistCurrentSession(options?: { titleHint?: string }) {
+  async function persistCurrentSession(options?: { titleSeed?: string }) {
     if (!settings.workspacePath) return;
     let sessionId = selectedSessionId;
-    let title = selectedSession?.title || options?.titleHint || 'New Session';
+    let title = selectedSession?.title || options?.titleSeed || 'New Session';
     let createdAt = selectedSession?.createdAt || '';
     if (!sessionId) {
       const created = await desktop.createSession(settings.workspacePath, title);
@@ -672,7 +566,7 @@
     }
     if ((!title || title === 'New Session') && conversation.length > 0) {
       const firstUser = conversation.find((message) => message.role === 'user');
-      title = truncateText(firstUser?.content || options?.titleHint || 'New Session', 48);
+      title = truncateText(firstUser?.content || options?.titleSeed || 'New Session', 48);
     }
     await desktop.saveSession({
       id: sessionId,
@@ -736,7 +630,6 @@
       const serverBaseUrl = settingsForm.serverBaseUrl.trim();
       const llmBaseUrl = settingsForm.llmBaseUrl.trim();
       const selectedModel = settingsForm.selectedModel.trim();
-      const wikiId = settingsForm.wikiId.trim();
       if (!serverBaseUrl || !selectedModel) {
         settingsSaveError = 'Server API URL and chat model are required.';
         return;
@@ -746,12 +639,11 @@
         serverBaseUrl,
         llmBaseUrl,
         selectedModel,
-        wikiId,
         engineQuestionDefault: Boolean(settingsForm.engineQuestionDefault)
       });
       applyLoadedSettings(next);
       settingsSaveMessage = 'Settings saved.';
-      await Promise.all([refreshHealth(), refreshRuns()]);
+      await refreshHealth();
     } catch (error) {
       settingsSaveError = error instanceof Error ? error.message : String(error);
     }
@@ -766,46 +658,6 @@
       healthStatus = 'error';
       healthMessage = error instanceof Error ? error.message : String(error);
     }
-  }
-
-  async function refreshRuns() {
-    try {
-      runs = await fetchRuns(settings.serverBaseUrl);
-      if (!selectedRunId && runs.length > 0) {
-        selectedRunId = runs[0].run_id;
-      } else if (selectedRunId && !runs.some((run) => run.run_id === selectedRunId) && runs.length > 0) {
-        selectedRunId = runs[0].run_id;
-      }
-    } catch (error) {
-      runs = [];
-      healthMessage = error instanceof Error ? error.message : String(error);
-    }
-  }
-
-  async function loadRunDetail(runId: string) {
-    if (!runId) {
-      runTasks = [];
-      runArtifacts = [];
-      runApprovals = [];
-      return;
-    }
-    try {
-      const detail = await fetchRun(settings.serverBaseUrl, runId);
-      runTasks = Array.isArray(detail.tasks) ? detail.tasks : [];
-      runArtifacts = Array.isArray(detail.artifacts) ? detail.artifacts : [];
-      runApprovals = Array.isArray(detail.approvals) ? detail.approvals : [];
-      runs = runs.map((run) => (run.run_id === detail.run_id ? { ...run, ...detail } : run));
-    } catch (error) {
-      healthMessage = error instanceof Error ? error.message : String(error);
-    }
-  }
-
-  function updateRunSnapshotMessage(messageId: string, detail: ExecutionRun) {
-    updateConversationMessage(messageId, (message) => ({
-      ...message,
-      runId: detail.run_id || message.runId,
-      runSnapshot: buildRunSnapshot(detail)
-    }));
   }
 
   async function refreshWorkspace() {
@@ -911,7 +763,7 @@
         ]
       }
     ];
-    await persistCurrentSession({ titleHint: prompt });
+    await persistCurrentSession({ titleSeed: prompt });
 
     try {
       const historyMessages = conversation
@@ -930,7 +782,6 @@
           baseUrl: settings.llmBaseUrl || settings.serverBaseUrl,
           serverBaseUrl: settings.serverBaseUrl,
           llmBaseUrl: settings.llmBaseUrl,
-          wikiId: settings.wikiId,
           selectedFilePath,
           sessionId: selectedSessionId || '',
           historyMessages
@@ -985,7 +836,7 @@
                     && Number(entry?.turn || 0) === turn,
                 ),
               }));
-              void persistCurrentSession({ titleHint: prompt });
+              void persistCurrentSession({ titleSeed: prompt });
             }
             appendStatusEvent(assistantMessageId, {
               message:
@@ -1061,31 +912,6 @@
               detail: payload
             });
           },
-          onUserQuestion: async (
-            payload?: StreamUserQuestionPayload,
-            respond?: (answer: string) => Promise<{ ok: boolean; requestId: string; questionId: string }>
-          ) => {
-            const promptText = String(payload?.prompt || '').trim() || 'Agent needs more input.';
-            const titleText = String(payload?.title || '').trim() || 'Question';
-            appendStatusEvent(assistantMessageId, {
-              message: `${titleText}: waiting for your input`,
-              phase: 'user_question'
-            });
-            const answer = window.prompt(promptText, String(payload?.defaultValue || ''));
-            await respond?.(answer == null ? '' : answer);
-            appendStatusEvent(assistantMessageId, {
-              message: `${titleText}: response submitted`,
-              phase: 'user_question'
-            });
-          },
-          onBrief: (payload?: StreamBriefPayload) => {
-            const messageText = String(payload?.message || '').trim();
-            if (!messageText) return;
-            appendStatusEvent(assistantMessageId, {
-              message: messageText,
-              phase: 'brief'
-            });
-          },
           onStatus: (payload?: StreamStatusPayload) => {
             const statusMessage = payload?.message || payload?.phase || 'Streaming...';
             updateConversationMessage(assistantMessageId, (message) => ({
@@ -1098,7 +924,7 @@
               phase: payload?.phase,
               tool: payload?.tool
             });
-            void persistCurrentSession({ titleHint: prompt });
+            void persistCurrentSession({ titleSeed: prompt });
           },
           onDone: async (payload?: StreamDonePayload) => {
             localToolTrace = normalizeLocalTracePayload(payload?.local_trace);
@@ -1136,7 +962,7 @@
             }));
             clearActiveStreamHooks();
             busy = false;
-            await persistCurrentSession({ titleHint: prompt });
+            await persistCurrentSession({ titleSeed: prompt });
           },
           onCancelled: (payload?: StreamCancelledPayload) => {
             const cancelledMessage = payload?.message || 'Cancelled';
@@ -1153,7 +979,7 @@
             appendStatusEvent(assistantMessageId, { message: cancelledMessage });
             clearActiveStreamHooks();
             busy = false;
-            void persistCurrentSession({ titleHint: prompt });
+            void persistCurrentSession({ titleSeed: prompt });
           },
           onError: (payload) => {
             const errorPayload =
@@ -1182,7 +1008,7 @@
             appendStatusEvent(assistantMessageId, { message });
             clearActiveStreamHooks();
             busy = false;
-            void persistCurrentSession({ titleHint: prompt });
+            void persistCurrentSession({ titleSeed: prompt });
           }
         }
       );
@@ -1199,7 +1025,7 @@
       appendStatusEvent(assistantMessageId, { message: messageText });
       clearActiveStreamHooks();
       busy = false;
-      await persistCurrentSession({ titleHint: prompt });
+      await persistCurrentSession({ titleSeed: prompt });
     }
   }
 
@@ -1239,60 +1065,17 @@
     }
   }
 
-  async function refreshRunAfter(action: () => Promise<unknown>, runId: string, refreshList = false) {
-    await action();
-    await loadRunDetail(runId);
-    if (refreshList) {
-      await refreshRuns();
-    }
-  }
-
-  async function requestCancel(run: ExecutionRun) {
-    await refreshRunAfter(
-      () => cancelRun(settings.serverBaseUrl, run.run_id),
-      run.run_id,
-      true
-    );
-  }
-
-  async function requestResume(run: ExecutionRun) {
-    await refreshRunAfter(
-      () => resumeRun(settings.serverBaseUrl, run.run_id),
-      run.run_id,
-      true
-    );
-  }
-
-  async function requestApprove(approval: RunApproval) {
-    if (!selectedRun) return;
-    await refreshRunAfter(
-      () => approveRun(settings.serverBaseUrl, selectedRun.run_id, approval.approval_id),
-      selectedRun.run_id
-    );
-  }
-
-  async function requestReject(approval: RunApproval) {
-    if (!selectedRun) return;
-    await refreshRunAfter(
-      () => rejectRun(settings.serverBaseUrl, selectedRun.run_id, approval.approval_id),
-      selectedRun.run_id
-    );
-  }
-
   onMount(async () => {
     if (typeof window !== 'undefined') {
       const search = new URLSearchParams(window.location.search);
-      viewMode = search.get('view') === 'runs'
-        ? 'runs'
-        : search.get('view') === 'wiki'
-          ? 'wiki'
+      viewMode = search.get('view') === 'source'
+          ? 'source'
           : 'main';
     }
     const loadedSettings = await desktop.loadSettings();
     applyLoadedSettings(loadedSettings);
     await Promise.all([
       refreshHealth(),
-      refreshRuns(),
       viewMode === 'main' ? refreshWorkspace() : Promise.resolve()
     ]);
     if (viewMode === 'main' && loadedSettings.workspacePath) {
@@ -1314,292 +1097,6 @@
 
 <svelte:window bind:innerWidth={windowWidth} />
 
-{#if viewMode === 'runs'}
-  <div class="runs-shell">
-    <section class="card runs-list-card">
-      <div class="section-row">
-        <div>
-          <div class="section-title">Recent Runs</div>
-          <div class="muted small">Select a run to inspect tasks, approvals, and artifacts.</div>
-        </div>
-        <button class="secondary" on:click={refreshRuns}>Refresh</button>
-      </div>
-
-      <div class="summary-strip">
-        <div class="stat-card">
-          <span>Total Runs</span>
-          <strong>{runs.length}</strong>
-        </div>
-        <div class="stat-card">
-          <span>Pending Approvals</span>
-          <strong>{pendingApprovalCount}</strong>
-        </div>
-        <div class="stat-card">
-          <span>Active Tasks</span>
-          <strong>{activeTaskCount}</strong>
-        </div>
-      </div>
-
-      {#if runs.length > 0}
-        <div class="run-list">
-          {#each runs as run}
-            <button
-              class={`run-card ${selectedRunId === run.run_id ? 'selected' : ''}`}
-              on:click={() => (selectedRunId = run.run_id)}
-            >
-              <div class="section-row">
-                <div class="run-id">{run.run_id}</div>
-                <div class={`pill ${toneClass(run.status)}`}>{run.status || 'unknown'}</div>
-              </div>
-              <div class="snippet">{truncateText(run.user_message)}</div>
-              <div class="meta-row">
-                <span>{run.response_type || 'general'}</span>
-                <span>{run.owner_agent || 'n/a'}</span>
-              </div>
-            </button>
-          {/each}
-        </div>
-      {:else}
-        <div class="empty-state">No execution runs yet.</div>
-      {/if}
-    </section>
-
-    <section class="card runs-detail-card">
-      <div class="section-row">
-        <div>
-          <div class="section-title">Execution Detail</div>
-          <div class="muted small">Review the selected run and take action when needed.</div>
-        </div>
-        {#if selectedRun}
-          <button class="secondary" on:click={() => loadRunDetail(selectedRun.run_id)}>Reload</button>
-        {/if}
-      </div>
-
-      {#if selectedRun}
-        <div class="detail-grid">
-          <div class="stat-card detail-stat">
-            <span>Status</span>
-            <strong>{selectedRun.status || 'unknown'}</strong>
-          </div>
-          <div class="stat-card detail-stat">
-            <span>Type</span>
-            <strong>{selectedRun.response_type || 'unknown'}</strong>
-          </div>
-          <div class="stat-card detail-stat">
-            <span>Tasks</span>
-            <strong>{runTasks.length}</strong>
-          </div>
-          <div class="stat-card detail-stat">
-            <span>Artifacts</span>
-            <strong>{runArtifacts.length}</strong>
-          </div>
-        </div>
-
-        <div class="actions compact-actions">
-          <button class="primary" on:click={() => (chatInput = selectedRun.user_message || '')}>Reuse prompt</button>
-          <button class="secondary" on:click={() => requestResume(selectedRun)}>Resume</button>
-          <button class="secondary danger-outline" on:click={() => requestCancel(selectedRun)}>
-            Cancel
-          </button>
-        </div>
-
-        <div class="segmented detail-tabs">
-          <button class:active={detailTab === 'summary'} on:click={() => (detailTab = 'summary')}>
-            Summary
-          </button>
-          <button class:active={detailTab === 'approvals'} on:click={() => (detailTab = 'approvals')}>
-            Approvals
-          </button>
-          <button class:active={detailTab === 'tasks'} on:click={() => (detailTab = 'tasks')}>
-            Tasks
-          </button>
-          <button class:active={detailTab === 'artifacts'} on:click={() => (detailTab = 'artifacts')}>
-            Artifacts
-          </button>
-        </div>
-
-        {#if detailTab === 'summary'}
-          <div class="tab-panel">
-            <div class="output-block">
-              <div class="section-row">
-                <span>Question</span>
-                <span class="muted small">{selectedRun.owner_agent || 'n/a'}</span>
-              </div>
-              <pre>{selectedRun.user_message || 'No prompt recorded.'}</pre>
-            </div>
-            <div class="summary-strip">
-              <div class="stat-card">
-                <span>Approvals</span>
-                <strong>{runApprovals.length}</strong>
-              </div>
-              <div class="stat-card">
-                <span>Task Steps</span>
-                <strong>{runTasks.reduce((count, task) => count + (task.steps?.length || 0), 0)}</strong>
-              </div>
-            </div>
-            {#if runEditSummaries.length > 0}
-              <div class="diff-stack">
-                {#each runEditSummaries as diffView}
-                  <section class="diff-card">
-                    <div class="diff-card-head">
-                      <div>
-                        <div class="diff-file">{diffView.file}</div>
-                        <div class="muted small">{diffView.hunks.length} hunk(s)</div>
-                      </div>
-                      <div class="diff-stats">
-                        <span class="diff-count removed">-{diffView.removed}</span>
-                        <span class="diff-count added">+{diffView.added}</span>
-                        {#if diffView.truncated}
-                          <span class="pill neutral">truncated</span>
-                        {/if}
-                      </div>
-                    </div>
-                    <div class="diff-scroll">
-                      {#each diffView.hunks as hunk}
-                        <div class="diff-hunk">
-                          <div class="diff-hunk-header">{hunk.header}</div>
-                          <div class="diff-grid">
-                            {#each hunk.lines as line}
-                              <div class={`diff-row ${line.type}`}>
-                                <span class="diff-line-no old">{diffLineNumber(line.oldNumber)}</span>
-                                <span class="diff-line-no new">{diffLineNumber(line.newNumber)}</span>
-                                <span class={`diff-line-marker ${line.type}`}>{diffMarker(line.type)}</span>
-                                <span class="diff-line-text">{line.text || ' '}</span>
-                              </div>
-                            {/each}
-                          </div>
-                        </div>
-                      {/each}
-                    </div>
-                  </section>
-                {/each}
-              </div>
-            {/if}
-          </div>
-        {:else if detailTab === 'approvals'}
-          {#if runApprovals.length > 0}
-            <div class="detail-list">
-              {#each runApprovals as approval}
-                <div class="detail-card">
-                  <div class="row">
-                    <strong>{approval.title}</strong>
-                    <div class={`pill ${toneClass(approval.status)}`}>{approval.status}</div>
-                  </div>
-                  <div>{approval.reason}</div>
-                  {#if String(approval.status || '').toLowerCase() === 'pending'}
-                    <div class="actions compact-actions">
-                      <button class="primary" on:click={() => requestApprove(approval)}>Approve</button>
-                      <button class="secondary danger-outline" on:click={() => requestReject(approval)}>
-                        Reject
-                      </button>
-                    </div>
-                  {/if}
-                </div>
-              {/each}
-            </div>
-          {:else}
-            <div class="empty-state">No pending approvals for this run.</div>
-          {/if}
-        {:else if detailTab === 'tasks'}
-          {#if runTasks.length > 0}
-            <div class="detail-list">
-              {#each runTasks as task}
-                <details class="detail-card disclosure-card" open={runTasks.length <= 2}>
-                  <summary class="detail-summary">
-                    <div class="row">
-                      <strong>{task.title || task.task_key}</strong>
-                      <div class={`pill ${toneClass(task.status)}`}>{task.status}</div>
-                    </div>
-                    <div class="muted small">
-                      {task.owner_agent || 'n/a'} · {(task.steps?.length || 0)} steps
-                    </div>
-                  </summary>
-                  <div class="detail-body">
-                    <div class="muted small">Owner: {task.owner_agent || 'n/a'}</div>
-                    {#if task.steps && task.steps.length > 0}
-                      <div class="step-list">
-                        {#each task.steps as step}
-                          <div class="step-item">
-                            <span>{step.title || step.step_key}</span>
-                            <span class="muted small">{step.status}</span>
-                          </div>
-                        {/each}
-                      </div>
-                    {/if}
-                  </div>
-                </details>
-              {/each}
-            </div>
-          {:else}
-            <div class="empty-state">No task details recorded for this run.</div>
-          {/if}
-        {:else}
-          {#if runArtifacts.length > 0}
-              <div class="detail-list">
-                {#each runArtifacts as artifact}
-                  {@const artifactDiffs = diffViewsFromUnknown(artifact.content)}
-                  <details class="detail-card disclosure-card">
-                    <summary class="detail-summary">
-                      <div class="row">
-                        <strong>{artifact.title}</strong>
-                      <span class="muted small">{artifact.type}</span>
-                    </div>
-                      <div class="muted small">Owner: {artifact.owner_agent || 'n/a'}</div>
-                    </summary>
-                    <div class="detail-body">
-                      {#if artifactDiffs.length > 0}
-                        <div class="diff-stack">
-                          {#each artifactDiffs as diffView}
-                            <section class="diff-card">
-                              <div class="diff-card-head">
-                                <div>
-                                  <div class="diff-file">{diffView.file}</div>
-                                  <div class="muted small">{diffView.hunks.length} hunk(s)</div>
-                                </div>
-                                <div class="diff-stats">
-                                  <span class="diff-count removed">-{diffView.removed}</span>
-                                  <span class="diff-count added">+{diffView.added}</span>
-                                  {#if diffView.truncated}
-                                    <span class="pill neutral">truncated</span>
-                                  {/if}
-                                </div>
-                              </div>
-                              <div class="diff-scroll">
-                                {#each diffView.hunks as hunk}
-                                  <div class="diff-hunk">
-                                    <div class="diff-hunk-header">{hunk.header}</div>
-                                    <div class="diff-grid">
-                                      {#each hunk.lines as line}
-                                        <div class={`diff-row ${line.type}`}>
-                                          <span class="diff-line-no old">{diffLineNumber(line.oldNumber)}</span>
-                                          <span class="diff-line-no new">{diffLineNumber(line.newNumber)}</span>
-                                          <span class={`diff-line-marker ${line.type}`}>{diffMarker(line.type)}</span>
-                                          <span class="diff-line-text">{line.text || ' '}</span>
-                                        </div>
-                                      {/each}
-                                    </div>
-                                  </div>
-                                {/each}
-                              </div>
-                            </section>
-                          {/each}
-                        </div>
-                      {/if}
-                      <pre>{typeof artifact.content === 'string' ? artifact.content : JSON.stringify(artifact.content, null, 2)}</pre>
-                    </div>
-                  </details>
-                {/each}
-            </div>
-          {:else}
-            <div class="empty-state">No artifacts are attached to this run.</div>
-          {/if}
-        {/if}
-      {:else}
-        <div class="empty-state">Select a run from the list to inspect it here.</div>
-      {/if}
-    </section>
-  </div>
-{:else}
   <div class={`workbench ${sidebarOpen ? 'sidebar-open' : 'sidebar-closed'} ${isCompactLayout ? 'compact-layout' : ''}`}>
     {#if isCompactLayout && sidebarOpen}
       <button class="sidebar-backdrop" aria-label="Close workspace panel" on:click={closeSidebar}></button>
@@ -1714,14 +1211,13 @@
                 <button class:active={viewMode === 'main'} on:click={() => (viewMode = 'main')}>
                   Workspace
                 </button>
-                <button class:active={viewMode === 'wiki'} on:click={() => (viewMode = 'wiki')}>
-                  LLM Wiki
+                <button class:active={viewMode === 'source'} on:click={() => (viewMode = 'source')}>
+                  Source Reference
                 </button>
               </div>
               <button class="secondary" on:click={toggleSidebar}>
                 {sidebarOpen ? 'Hide sidebar' : 'Show sidebar'}
               </button>
-              <button class="secondary" on:click={() => desktop.openRunsWindow()}>Runs</button>
               <button class="secondary" on:click={() => (showConnectionEditor = !showConnectionEditor)}>
                 {showConnectionEditor ? 'Close connection' : 'Connection'}
               </button>
@@ -1748,10 +1244,6 @@
                 <span>Chat Model</span>
                 <input bind:value={settingsForm.selectedModel} placeholder="Qwen/Qwen3.6-27B" />
               </label>
-              <label class="field">
-                <span>LLM Wiki ID</span>
-                <input bind:value={settingsForm.wikiId} placeholder="project-wiki" />
-              </label>
             </div>
             <div class="actions compact-actions">
               <button class="primary" on:click={saveConnectionSettings}>Save settings</button>
@@ -1770,71 +1262,56 @@
           </div>
         {/if}
 
-          {#if viewMode === 'wiki'}
-            <section class="panel wiki-workspace-panel wiki-tab-panel">
+          {#if viewMode === 'source'}
+            <section class="panel source-workspace-panel source-tab-panel">
               <div class="panel-head">
                 <div>
-                  <div class="section-title">LLM Wiki</div>
-                  <div class="muted small">Browse the persistent wiki for backend knowledge and usage guidance.</div>
+                  <div class="section-title">Source Reference</div>
+                  <div class="muted small">Browse raw backend source declarations and snippets used for reference answers.</div>
                 </div>
                 <div class="panel-head-meta">
-                  <span class="pill neutral">{resolvedWikiId}</span>
-                  <button class="secondary" on:click={() => refreshWikiContext()} disabled={wikiBusy}>
+                  <span class="pill neutral">raw source</span>
+                  <button class="secondary" on:click={() => refreshSourceOverview()} disabled={sourceBusy}>
                     Refresh
                   </button>
                 </div>
               </div>
 
-              <div class="wiki-toolbar">
-                <label class="field wiki-search-field">
+              <div class="source-toolbar">
+                <label class="field source-search-field">
                   <span>Search</span>
                   <input
-                    bind:value={wikiQuery}
-                    placeholder="Search page title, path, or content"
-                    on:keydown={handleWikiSearchKeydown}
+                    bind:value={sourceQuery}
+                    placeholder="Search symbol, file path, or source content"
+                    on:keydown={handleSourceSearchKeydown}
                   />
                 </label>
-                <button class="secondary" on:click={runWikiSearch} disabled={wikiBusy}>
-                  {wikiBusy ? 'Loading…' : 'Search'}
+                <button class="secondary" on:click={runSourceSearch} disabled={sourceBusy}>
+                  {sourceBusy ? 'Loading…' : 'Search'}
                 </button>
-                <button class="secondary" on:click={() => { wikiQuery = ''; void refreshWikiContext(wikiSelectedPath); }} disabled={wikiBusy}>
+                <button class="secondary" on:click={() => { sourceQuery = ''; void refreshSourceOverview(sourceSelectedPath); }} disabled={sourceBusy}>
                   Browse
                 </button>
               </div>
 
-              {#if wikiErrorMessage}
-                <div class="error-box">{wikiErrorMessage}</div>
+              {#if sourceErrorMessage}
+                <div class="error-box">{sourceErrorMessage}</div>
               {/if}
-              {#if wikiStatusMessage}
-                <div class="status-copy">{wikiStatusMessage}</div>
-              {/if}
-              {#if wikiCoordinationStatus}
-                <div class="wiki-health-row">
-                  <span class={`pill ${wikiCoordinationStatus.has_coordination_spine ? 'success' : 'danger'}`}>
-                    {wikiCoordinationStatus.has_coordination_spine ? 'Wiki spine ready' : 'Wiki spine incomplete'}
-                  </span>
-                  <span class="muted small">
-                    {`${Array.isArray(wikiCoordinationStatus.required_present_paths) ? wikiCoordinationStatus.required_present_paths.length : 0}/${
-                      Array.isArray(wikiCoordinationStatus.required_paths) ? wikiCoordinationStatus.required_paths.length : 0
-                    } core pages available`}
-                  </span>
-                </div>
-              {/if}
-              <div class="wiki-workspace-grid">
-                <div class="wiki-results-pane">
-                  <div class="section-title">Pages</div>
-                  {#if wikiResults.length > 0}
-                    <div class="wiki-result-list">
-                      {#each wikiResults as page}
+              <div class="source-workspace-grid">
+                <div class="source-results-pane">
+                  <div class="section-title">Source Results</div>
+                  {#if sourceResults.length > 0}
+                    <div class="source-result-list">
+                      {#each sourceResults as page}
                         <button
-                          class={`wiki-result-item ${wikiSelectedPath === page.path ? 'selected' : ''}`}
-                          on:click={() => openWikiPage(page.path)}
+                          class={`source-result-item ${sourceSelectedPath === page.path ? 'selected' : ''}`}
+                          on:click={() => openSourcePage(page.path)}
                           title={page.path}
                         >
-                          <div class="wiki-result-title">{page.title || getPathTail(page.path, 2)}</div>
-                          <div class="wiki-result-path">{page.path}</div>
-                          <div class="wiki-result-meta">
-                            <span class="pill neutral">{page.kind || 'page'}</span>
+                          <div class="source-result-title">{page.title || getPathTail(page.path, 2)}</div>
+                          <div class="source-result-path">{page.path}</div>
+                          <div class="source-result-meta">
+                            <span class="pill neutral">{page.kind || 'source'}</span>
                             {#if page.updated_at}
                               <span class="muted small">{formatDateTime(page.updated_at)}</span>
                             {/if}
@@ -1843,40 +1320,40 @@
                       {/each}
                     </div>
                   {:else}
-                    <div class="empty-state compact-empty">No wiki pages available.</div>
+                    <div class="empty-state compact-empty">No source reference entries available.</div>
                   {/if}
                 </div>
 
-                <div class="wiki-editor-pane">
-                  <div class="wiki-meta-grid">
+                <div class="source-editor-pane">
+                  <div class="source-meta-grid">
                     <label class="field">
                       <span>Path</span>
-                      <input bind:value={wikiSelectedPath} placeholder="pages/topic/example.md" readonly />
+                      <input bind:value={sourceSelectedPath} placeholder="Source/path/to/file.h" readonly />
                     </label>
                     <label class="field">
                       <span>Title</span>
-                      <input bind:value={wikiPageTitle} placeholder="Page title" readonly />
+                      <input bind:value={sourcePageTitle} placeholder="Page title" readonly />
                     </label>
                     <label class="field">
                       <span>Kind</span>
-                      <input bind:value={wikiPageKind} placeholder="topic" readonly />
+                      <input bind:value={sourcePageKind} placeholder="topic" readonly />
                     </label>
-                    <div class="wiki-meta-readout">
+                    <div class="source-meta-readout">
                       <span>Updated</span>
-                      <strong>{wikiPageUpdatedAt ? formatDateTime(wikiPageUpdatedAt) : 'Not loaded'}</strong>
+                      <strong>{sourcePageUpdatedAt ? formatDateTime(sourcePageUpdatedAt) : 'Not loaded'}</strong>
                     </div>
                   </div>
 
-                  {#if wikiPageSummary}
-                    <div class="wiki-summary">{wikiPageSummary}</div>
+                  {#if sourcePageSummary}
+                    <div class="source-summary">{sourcePageSummary}</div>
                   {/if}
 
-                  <label class="field wiki-editor-field">
+                  <label class="field source-editor-field">
                     <span>Content</span>
                     <textarea
-                      bind:value={wikiPageContent}
+                      bind:value={sourcePageContent}
                       rows="18"
-                      placeholder="Wiki page content"
+                      placeholder="Source content"
                       readonly
                     ></textarea>
                   </label>
@@ -1906,9 +1383,6 @@
                       <div class="message-head">
                         <div class="message-head-main">
                           <span class="message-role">{message.role === 'user' ? 'You' : 'Codex'}</span>
-                          {#if message.runId}
-                            <span class="message-badge">run {message.runId}</span>
-                          {/if}
                           {#if message.state && message.role === 'assistant'}
                             <span class={`message-badge ${message.state}`}>{message.state}</span>
                           {/if}
@@ -1929,9 +1403,6 @@
                               <span class="muted small">{summarizeExecutionMessage(message)}</span>
                             </div>
                             <div class="execution-toggle-side">
-                              {#if message.runId}
-                                <span class="pill neutral">run {message.runId}</span>
-                              {/if}
                               <span class="execution-count">{getVisibleExecutionItems(message).length}</span>
                               <span class={`execution-chevron ${isExecutionMessageExpanded(message.id) ? 'open' : ''}`}></span>
                             </div>
@@ -2109,9 +1580,9 @@
               <div class="muted small">
                 {settings.workspacePath
                   ? engineQuestionChecked
-                    ? '체크됨: 위키/엔진 워크플로우 기준으로 찾습니다.'
+                    ? '체크됨: 백엔드 원본 소스 기준으로 찾습니다.'
                     : '해제됨: 현재 워크스페이스 로컬 코드 기준으로 봅니다.'
-                  : '워크스페이스가 없어서 엔진 기준 위키 검색만 사용합니다.'}
+                  : '워크스페이스가 없어서 백엔드 원본 소스 검색만 사용합니다.'}
               </div>
             </div>
             <button
@@ -2137,11 +1608,8 @@
       </div>
     </main>
   </div>
-{/if}
-
 <style>
-  .workbench,
-  .runs-shell {
+  .workbench {
     min-width: 0;
     min-height: 100dvh;
     height: 100dvh;
@@ -2161,15 +1629,6 @@
 
   .workbench.sidebar-closed {
     grid-template-columns: 0 minmax(0, 1fr);
-  }
-
-  .runs-shell {
-    display: grid;
-    grid-template-columns: minmax(300px, 380px) minmax(0, 1fr);
-    gap: 18px;
-    padding: 24px;
-    box-sizing: border-box;
-    overflow: hidden;
   }
 
   .left-pane,
@@ -2239,8 +1698,6 @@
   }
 
   .workspace-panel,
-  .runs-list-card,
-  .runs-detail-card,
   .hero {
     align-content: start;
   }
@@ -2313,7 +1770,6 @@
   }
 
   .workspace-item,
-  .run-card,
   .session-item {
     display: grid;
     gap: 0;
@@ -2364,7 +1820,6 @@
   }
 
   .workspace-item.selected,
-  .run-card.selected,
   .session-item.selected {
     border-color: rgba(35, 199, 161, 0.36);
     background:
@@ -2397,9 +1852,7 @@
     gap: 10px;
   }
 
-  .connection-grid,
-  .detail-grid,
-  .summary-strip {
+  .connection-grid {
     display: grid;
     gap: 14px;
     min-height: 0;
@@ -2409,18 +1862,8 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .detail-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .summary-strip {
-    grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
-  }
-
   .section-row,
-  .row,
-  .actions,
-  .meta-row {
+  .actions {
     display: flex;
     align-items: center;
     gap: 10px;
@@ -2429,11 +1872,6 @@
   }
 
   .section-row {
-    justify-content: space-between;
-  }
-
-  .row,
-  .meta-row {
     justify-content: space-between;
   }
 
@@ -2462,11 +1900,6 @@
     border: 1px solid rgba(148, 163, 184, 0.12);
   }
 
-  .detail-tabs {
-    width: 100%;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-  }
-
   .view-tabs {
     flex: 0 0 auto;
   }
@@ -2493,8 +1926,7 @@
     align-content: start;
   }
 
-  .field,
-  .output-block {
+  .field {
     display: grid;
     gap: 10px;
   }
@@ -3202,10 +2634,7 @@
   button,
   input,
   textarea,
-  pre,
-  .path-box,
-  .detail-card,
-  .stat-card {
+  pre {
     font: inherit;
     color: inherit;
   }
@@ -3258,12 +2687,7 @@
   textarea,
   input,
   pre,
-  .path-box,
-  .output-block,
-  .stat-card,
-  .detail-card,
-  .workspace-item,
-  .run-card {
+  .workspace-item {
     border-radius: 18px;
     border: 1px solid rgba(148, 163, 184, 0.14);
     background: rgba(6, 11, 18, 0.72);
@@ -3271,8 +2695,7 @@
 
   textarea,
   input,
-  pre,
-  .path-box {
+  pre {
     padding: 14px 16px;
   }
 
@@ -3310,40 +2733,6 @@
     overflow: auto;
   }
 
-  .output-block,
-  .detail-card,
-  .stat-card {
-    padding: 16px;
-  }
-
-  .path-box {
-    color: rgba(233, 242, 253, 0.84);
-    overflow-wrap: anywhere;
-  }
-
-  .stat-card {
-    display: grid;
-    gap: 6px;
-  }
-
-  .stat-card span {
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-    color: rgba(188, 201, 216, 0.62);
-  }
-
-  .stat-card strong {
-    color: #f4f8ff;
-    overflow-wrap: anywhere;
-    line-height: 1.2;
-  }
-
-  .detail-stat strong {
-    font-size: 16px;
-  }
-
   .pill {
     display: inline-flex;
     align-items: center;
@@ -3376,92 +2765,6 @@
   .pill.neutral {
     background: rgba(148, 163, 184, 0.12);
     color: rgba(233, 242, 253, 0.78);
-  }
-
-  .run-list,
-  .detail-list,
-  .step-list {
-    display: grid;
-    gap: 10px;
-    min-width: 0;
-    min-height: 0;
-  }
-
-  .run-list {
-    max-height: none;
-    overflow: auto;
-    padding-right: 2px;
-  }
-
-  .detail-list {
-    max-height: none;
-    overflow: auto;
-    padding-right: 2px;
-  }
-
-  .run-id {
-    font-family: 'Cascadia Code', 'Fira Code', Consolas, monospace;
-    font-size: 12px;
-    color: rgba(214, 225, 238, 0.78);
-    overflow-wrap: anywhere;
-  }
-
-  .snippet,
-  .meta-row {
-    color: rgba(214, 225, 238, 0.78);
-  }
-
-  .snippet {
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    line-clamp: 2;
-    -webkit-box-orient: vertical;
-    overflow: hidden;
-  }
-
-  .meta-row {
-    font-size: 12px;
-    color: rgba(188, 201, 216, 0.58);
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-  }
-
-  .step-item {
-    display: flex;
-    justify-content: space-between;
-    gap: 10px;
-    flex-wrap: wrap;
-    padding: 10px 12px;
-    border-radius: 14px;
-    background: rgba(255, 255, 255, 0.03);
-  }
-
-  .disclosure-card {
-    padding: 0;
-    overflow: hidden;
-  }
-
-  .detail-summary {
-    display: grid;
-    gap: 8px;
-    padding: 16px;
-    list-style: none;
-    cursor: pointer;
-  }
-
-  .detail-summary::-webkit-details-marker {
-    display: none;
-  }
-
-  .detail-body {
-    display: grid;
-    gap: 12px;
-    padding: 0 16px 16px;
-    border-top: 1px solid rgba(148, 163, 184, 0.12);
-  }
-
-  .disclosure-card[open] .detail-summary {
-    background: rgba(255, 255, 255, 0.03);
   }
 
   .status-dot {
@@ -3776,80 +3079,37 @@
     align-content: start;
   }
 
-  .wiki-workspace-panel {
+  .source-workspace-panel {
     display: flex;
     flex-direction: column;
     gap: 14px;
     min-height: 0;
   }
 
-  .wiki-tab-panel {
+  .source-tab-panel {
     min-height: clamp(560px, 68vh, 860px);
   }
 
-  .wiki-toolbar {
+  .source-toolbar {
     display: flex;
     gap: 10px;
     align-items: end;
   }
 
-  .wiki-health-row {
-    display: flex;
-    gap: 10px;
-    align-items: center;
-    flex-wrap: wrap;
-  }
-
-  .wiki-lint-box {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    border: 1px solid rgba(148, 163, 184, 0.14);
-    border-radius: 18px;
-    background: rgba(8, 14, 24, 0.52);
-    padding: 12px 14px;
-  }
-
-  .wiki-finding-list {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    max-height: 220px;
-    overflow: auto;
-  }
-
-  .wiki-finding-item {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    border-radius: 14px;
-    border: 1px solid rgba(148, 163, 184, 0.12);
-    background: rgba(10, 18, 30, 0.84);
-    padding: 10px 12px;
-    line-height: 1.45;
-  }
-
-  .wiki-finding-head {
-    display: flex;
-    gap: 8px;
-    align-items: center;
-    flex-wrap: wrap;
-  }
-
-  .wiki-search-field {
+  .source-search-field {
     flex: 1 1 auto;
     min-width: 0;
   }
 
-  .wiki-workspace-grid {
+  .source-workspace-grid {
     display: grid;
     grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
     gap: 14px;
     min-height: 0;
   }
 
-  .wiki-results-pane,
-  .wiki-editor-pane {
+  .source-results-pane,
+  .source-editor-pane {
     min-width: 0;
     min-height: 0;
     border: 1px solid rgba(148, 163, 184, 0.14);
@@ -3858,13 +3118,13 @@
     padding: 14px;
   }
 
-  .wiki-results-pane {
+  .source-results-pane {
     display: flex;
     flex-direction: column;
     gap: 12px;
   }
 
-  .wiki-result-list {
+  .source-result-list {
     display: flex;
     flex-direction: column;
     gap: 8px;
@@ -3872,7 +3132,7 @@
     overflow: auto;
   }
 
-  .wiki-result-item {
+  .source-result-item {
     width: 100%;
     text-align: left;
     display: flex;
@@ -3885,12 +3145,12 @@
     line-height: 1.4;
   }
 
-  .wiki-result-item.selected {
+  .source-result-item.selected {
     border-color: rgba(35, 199, 161, 0.55);
     box-shadow: 0 0 0 1px rgba(35, 199, 161, 0.24);
   }
 
-  .wiki-result-title {
+  .source-result-title {
     font-size: 0.97rem;
     font-weight: 600;
     line-height: 1.35;
@@ -3898,7 +3158,7 @@
     overflow-wrap: anywhere;
   }
 
-  .wiki-result-path {
+  .source-result-path {
     font-size: 0.79rem;
     line-height: 1.45;
     color: rgba(148, 163, 184, 0.92);
@@ -3906,7 +3166,7 @@
     word-break: break-word;
   }
 
-  .wiki-result-meta {
+  .source-result-meta {
     display: flex;
     justify-content: space-between;
     gap: 8px;
@@ -3914,24 +3174,24 @@
     flex-wrap: wrap;
   }
 
-  .wiki-result-meta .muted.small {
+  .source-result-meta .muted.small {
     line-height: 1.35;
   }
 
-  .wiki-editor-pane {
+  .source-editor-pane {
     display: flex;
     flex-direction: column;
     gap: 12px;
   }
 
-  .wiki-meta-grid {
+  .source-meta-grid {
     display: grid;
     grid-template-columns: minmax(0, 1.8fr) minmax(0, 1.2fr) minmax(140px, 0.8fr) minmax(150px, 0.9fr);
     gap: 10px;
     align-items: end;
   }
 
-  .wiki-meta-readout {
+  .source-meta-readout {
     display: flex;
     flex-direction: column;
     gap: 6px;
@@ -3942,19 +3202,19 @@
     min-height: 44px;
   }
 
-  .wiki-meta-readout span {
+  .source-meta-readout span {
     font-size: 0.72rem;
     text-transform: uppercase;
     letter-spacing: 0.08em;
     color: rgba(148, 163, 184, 0.85);
   }
 
-  .wiki-meta-readout strong {
+  .source-meta-readout strong {
     font-size: 0.88rem;
     color: #f8fafc;
   }
 
-  .wiki-summary {
+  .source-summary {
     padding: 10px 12px;
     border-radius: 14px;
     background: rgba(17, 119, 199, 0.12);
@@ -3962,11 +3222,11 @@
     font-size: 0.88rem;
   }
 
-  .wiki-editor-field {
+  .source-editor-field {
     min-height: 0;
   }
 
-  .wiki-editor-field textarea {
+  .source-editor-field textarea {
     min-height: 420px;
     resize: vertical;
     font-family: "Cascadia Code", "JetBrains Mono", monospace;
@@ -4021,8 +3281,7 @@
     }
 
     .left-pane,
-    .main-pane,
-    .runs-shell {
+    .main-pane {
       padding: 16px;
     }
 
@@ -4060,18 +3319,8 @@
   }
 
   @media (max-width: 1240px) {
-    .runs-shell {
+    .connection-grid {
       grid-template-columns: 1fr;
-      overflow: auto;
-    }
-
-    .connection-grid,
-    .detail-grid {
-      grid-template-columns: 1fr;
-    }
-
-    .detail-tabs {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
     }
   }
 
@@ -4103,8 +3352,7 @@
 
   @media (max-width: 720px) {
     .left-pane,
-    .main-pane,
-    .runs-shell {
+    .main-pane {
       padding: 12px;
     }
 
@@ -4113,13 +3361,8 @@
       border-radius: 20px;
     }
 
-    .compact-actions,
-    .summary-strip {
+    .compact-actions {
       grid-template-columns: 1fr;
-    }
-
-    .detail-tabs {
-      grid-template-columns: 1fr 1fr;
     }
 
     .composer-actions,
@@ -4138,11 +3381,11 @@
       min-height: 0;
     }
 
-    .wiki-workspace-grid {
+    .source-workspace-grid {
       grid-template-columns: 1fr;
     }
 
-    .wiki-meta-grid {
+    .source-meta-grid {
       grid-template-columns: 1fr 1fr;
     }
 
@@ -4158,7 +3401,7 @@
       padding: 20px;
     }
 
-    .wiki-toolbar {
+    .source-toolbar {
       flex-direction: column;
       align-items: stretch;
     }
@@ -4198,7 +3441,7 @@
       align-items: stretch;
     }
 
-    .wiki-meta-grid {
+    .source-meta-grid {
       grid-template-columns: 1fr;
     }
   }

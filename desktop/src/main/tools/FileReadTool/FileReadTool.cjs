@@ -8,7 +8,6 @@ const {
   integerSchema,
   booleanSchema,
 } = require('../shared/schema.cjs');
-const { inferWorkspaceTargetPath } = require('../shared/targetPathHints.cjs');
 
 function resolveLimits(options = {}) {
   if (options && typeof options === 'object' && options.limits && typeof options.limits === 'object') {
@@ -21,7 +20,6 @@ function FileReadTool(options = {}) {
   const limits = resolveLimits(options);
   return defineLocalTool({
     name: 'read_file',
-    aliases: ['open_file', 'cat', 'read'],
     kind: 'read',
     workspaceRelativePaths: ['path'],
     inputSchema: objectSchema({
@@ -44,20 +42,11 @@ function FileReadTool(options = {}) {
         message: stringSchema('Human-readable status'),
       },
     },
-    searchHint: 'read file content',
-    laneAffinity: ['read', 'flow', 'compare', 'review', 'failure', 'change'],
     isReadOnly: () => true,
     isConcurrencySafe: () => true,
     getObservationEvidenceKinds: () => ['inspection'],
     userFacingName: () => 'Read file',
     getToolUseSummary: (input) => `Read ${toStringValue(input?.path)}`,
-    async backfillObservableInput(input, context) {
-      if (typeof input.path !== 'string' || !toStringValue(input.path)) {
-        input.path = inferWorkspaceTargetPath(context || {}, {
-          preferredExtensions: ['.cs', '.xaml', '.xaml.cs', '.csproj', '.sln'],
-        });
-      }
-    },
     async description() {
       return 'Read a workspace file';
     },

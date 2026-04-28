@@ -14,7 +14,6 @@ export function deserializeConversation(
       item.state === 'streaming' || item.state === 'error' || item.state === 'cancelled' || item.state === 'done'
         ? item.state
         : 'done',
-    runId: typeof item.runId === 'string' ? item.runId : undefined,
     statusEvents: Array.isArray(item.statusEvents)
       ? item.statusEvents.map((event) => ({
           id: String(event?.id || createMessageId()),
@@ -58,27 +57,7 @@ export function deserializeConversation(
     localOverlay:
       item.localOverlay && typeof item.localOverlay === 'object' && !Array.isArray(item.localOverlay)
         ? (item.localOverlay as Record<string, unknown>)
-        : undefined,
-    runSnapshot: item.runSnapshot && typeof item.runSnapshot === 'object'
-      ? {
-          runId: String((item.runSnapshot as any).runId || ''),
-          status: typeof (item.runSnapshot as any).status === 'string' ? (item.runSnapshot as any).status : undefined,
-          responseType:
-            typeof (item.runSnapshot as any).responseType === 'string'
-              ? (item.runSnapshot as any).responseType
-              : undefined,
-          tasks: Array.isArray((item.runSnapshot as any).tasks) ? (item.runSnapshot as any).tasks : [],
-          approvals: Array.isArray((item.runSnapshot as any).approvals) ? (item.runSnapshot as any).approvals : [],
-          artifacts: Array.isArray((item.runSnapshot as any).artifacts) ? (item.runSnapshot as any).artifacts : [],
-          metadata:
-            (item.runSnapshot as any).metadata && typeof (item.runSnapshot as any).metadata === 'object'
-              ? (item.runSnapshot as any).metadata
-              : undefined,
-          editSummaries: Array.isArray((item.runSnapshot as any).editSummaries)
-            ? (item.runSnapshot as any).editSummaries
-            : []
-        }
-      : undefined
+        : undefined
   }));
 }
 

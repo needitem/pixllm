@@ -18,10 +18,6 @@ const { FileReadTool } = require('./tools/FileReadTool/FileReadTool.cjs');
 const { FileEditTool } = require('./tools/FileEditTool/FileEditTool.cjs');
 const { LspTool } = require('./tools/LspTool/LspTool.cjs');
 const {
-  WikiReadTool,
-  WikiSearchTool,
-} = require('./tools/WikiTools/WikiTools.cjs');
-const {
   toPositiveInt,
   toStringValue,
   objectSchema,
@@ -56,13 +52,6 @@ function wildcardToRegExp(pattern) {
   return new RegExp(`^${escaped}$`, 'i');
 }
 
-function getWikiBaseTools() {
-  return [
-    WikiSearchTool(),
-    WikiReadTool(),
-  ];
-}
-
 function getLocalBaseTools(limits = {}) {
   const resolved = { ...DEFAULT_LIMITS, ...(limits || {}) };
   return [
@@ -72,8 +61,6 @@ function getLocalBaseTools(limits = {}) {
       inputSchema: objectSchema({
         limit: integerSchema('Maximum number of files to list', { minimum: 1 }),
       }),
-      searchHint: 'list files in the current workspace',
-      laneAffinity: ['read', 'flow', 'review'],
       isReadOnly: () => true,
       isConcurrencySafe: () => true,
       getObservationEvidenceKinds: () => ['discovery'],
@@ -88,14 +75,11 @@ function getLocalBaseTools(limits = {}) {
     }),
     defineLocalTool({
       name: 'glob',
-      aliases: ['glob_files', 'search_files', 'find_files'],
       kind: 'list',
       inputSchema: objectSchema({
         pattern: stringSchema('Wildcard path pattern such as src/**/*.ts'),
         limit: integerSchema('Maximum number of files to return', { minimum: 1 }),
       }, ['pattern']),
-      searchHint: 'match files by wildcard path pattern',
-      laneAffinity: ['read', 'review'],
       isReadOnly: () => true,
       isConcurrencySafe: () => true,
       getObservationEvidenceKinds: () => ['discovery'],
@@ -122,14 +106,11 @@ function getLocalBaseTools(limits = {}) {
     }),
     defineLocalTool({
       name: 'grep',
-      aliases: ['search', 'rgrep'],
       kind: 'search',
       inputSchema: objectSchema({
         query: stringSchema('Search string or simple regex-like pattern'),
         limit: integerSchema('Maximum number of search hits to return', { minimum: 1 }),
       }, ['query']),
-      searchHint: 'search workspace text',
-      laneAffinity: ['read', 'flow', 'review'],
       isReadOnly: () => true,
       isConcurrencySafe: () => true,
       getObservationEvidenceKinds: () => ['discovery'],
@@ -152,8 +133,6 @@ function getLocalBaseTools(limits = {}) {
         limit: integerSchema('Maximum number of matches to return', { minimum: 1 }),
         pathFilter: stringSchema('Optional path substring to restrict matches'),
       }, ['symbol']),
-      searchHint: 'find symbol definitions',
-      laneAffinity: ['read', 'flow', 'review'],
       isReadOnly: () => true,
       isConcurrencySafe: () => true,
       getObservationEvidenceKinds: () => ['discovery'],
@@ -175,8 +154,6 @@ function getLocalBaseTools(limits = {}) {
         limit: integerSchema('Maximum number of matches to return', { minimum: 1 }),
         pathFilter: stringSchema('Optional path substring to restrict matches'),
       }, ['symbol']),
-      searchHint: 'trace callers of a symbol',
-      laneAffinity: ['flow', 'review'],
       isReadOnly: () => true,
       isConcurrencySafe: () => true,
       getObservationEvidenceKinds: () => ['discovery'],
@@ -198,8 +175,6 @@ function getLocalBaseTools(limits = {}) {
         limit: integerSchema('Maximum number of matches to return', { minimum: 1 }),
         pathFilter: stringSchema('Optional path substring to restrict matches'),
       }, ['symbol']),
-      searchHint: 'trace symbol references',
-      laneAffinity: ['flow', 'review'],
       isReadOnly: () => true,
       isConcurrencySafe: () => true,
       getObservationEvidenceKinds: () => ['discovery'],
@@ -220,12 +195,10 @@ function getLocalBaseTools(limits = {}) {
       inputSchema: objectSchema({
         path: stringSchema('Workspace-relative file path'),
         symbol: stringSchema('Symbol name to read'),
-        lineHint: integerSchema('Optional 1-based line hint near the symbol', { minimum: 1 }),
+        line: integerSchema('Optional 1-based line number near the symbol', { minimum: 1 }),
         maxChars: integerSchema('Maximum number of characters to return', { minimum: 1 }),
         pathFilter: stringSchema('Optional path substring to restrict symbol resolution'),
       }, ['path', 'symbol']),
-      searchHint: 'read symbol body',
-      laneAffinity: ['read', 'flow', 'review'],
       isReadOnly: () => true,
       isConcurrencySafe: () => true,
       getObservationEvidenceKinds: () => ['inspection'],
@@ -238,7 +211,7 @@ function getLocalBaseTools(limits = {}) {
           toStringValue(input.path),
           toStringValue(input.symbol || input.query),
           {
-            lineHint: toPositiveInt(input.lineHint || input.line_hint, 0),
+            line: toPositiveInt(input.line, 0),
             maxChars: toPositiveInt(input.maxChars, resolved.maxSpanChars),
             pathFilter: toStringValue(input.pathFilter || input.path_filter),
           },
@@ -255,8 +228,6 @@ function getLocalBaseTools(limits = {}) {
         limit: integerSchema('Maximum number of outline items to return', { minimum: 1 }),
         pathFilter: stringSchema('Optional path substring to restrict matches'),
       }, ['path']),
-      searchHint: 'list declarations in a file',
-      laneAffinity: ['read', 'flow', 'review'],
       isReadOnly: () => true,
       isConcurrencySafe: () => true,
       getObservationEvidenceKinds: () => ['inspection'],
@@ -277,13 +248,11 @@ function getLocalBaseTools(limits = {}) {
       workspaceRelativePaths: ['path'],
       inputSchema: objectSchema({
         path: stringSchema('Workspace-relative file path'),
-        lineHint: integerSchema('1-based line number near the symbol', { minimum: 1 }),
-        symbol: stringSchema('Optional symbol name hint'),
+        line: integerSchema('1-based line number near the symbol', { minimum: 1 }),
+        symbol: stringSchema('Optional symbol name'),
         limit: integerSchema('Maximum number of nearby declarations to return', { minimum: 1 }),
         pathFilter: stringSchema('Optional path substring to restrict matches'),
-      }, ['path', 'lineHint']),
-      searchHint: 'read the enclosing symbol around a line',
-      laneAffinity: ['read', 'flow', 'review'],
+      }, ['path', 'line']),
       isReadOnly: () => true,
       isConcurrencySafe: () => true,
       getObservationEvidenceKinds: () => ['inspection'],
@@ -293,7 +262,7 @@ function getLocalBaseTools(limits = {}) {
       async call(input, context) {
         return symbolNeighborhoodInWorkspace(context.workspacePath, toStringValue(input.path), {
           symbol: toStringValue(input.symbol),
-          lineHint: toPositiveInt(input.lineHint || input.line_hint, 0),
+          line: toPositiveInt(input.line, 0),
           limit: toPositiveInt(input.limit, resolved.maxNeighborhoodLimit),
           pathFilter: toStringValue(input.pathFilter || input.path_filter),
         });
@@ -309,8 +278,6 @@ function createToolCollectionFromTools({
   tools = [],
   workspacePath = '',
   sessionId = '',
-  runtimeBridge = {},
-  getBackendConfig = null,
   allowedToolNames = null,
 } = {}) {
   const normalizedWorkspacePath = toStringValue(workspacePath);
@@ -324,8 +291,6 @@ function createToolCollectionFromTools({
   const context = {
     workspacePath: normalizedWorkspacePath,
     sessionId: normalizedSessionId,
-    runtimeBridge: runtimeBridge && typeof runtimeBridge === 'object' ? runtimeBridge : {},
-    getBackendConfig: typeof getBackendConfig === 'function' ? getBackendConfig : null,
     tools: activeTools,
   };
 
@@ -406,42 +371,20 @@ function createToolCollectionFromTools({
   };
 }
 
-function createWikiToolCollection({
-  workspacePath = '',
-  sessionId = '',
-  runtimeBridge = {},
-  getBackendConfig = null,
-  allowedToolNames = null,
-} = {}) {
-  return createToolCollectionFromTools({
-    tools: getWikiBaseTools(),
-    workspacePath,
-    sessionId,
-    runtimeBridge,
-    getBackendConfig,
-    allowedToolNames,
-  });
-}
-
 function createLocalToolCollection({
   workspacePath = '',
   sessionId = '',
   limits = {},
-  runtimeBridge = {},
-  getBackendConfig = null,
   allowedToolNames = null,
 } = {}) {
   return createToolCollectionFromTools({
     tools: getLocalBaseTools(limits),
     workspacePath,
     sessionId,
-    runtimeBridge,
-    getBackendConfig,
     allowedToolNames,
   });
 }
 
 module.exports = {
-  createWikiToolCollection,
   createLocalToolCollection,
 };

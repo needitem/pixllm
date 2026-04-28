@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 from . import config
 from .deps import close_state, init_state
 from .envelopes import ApiError, err
-from .routers import health, runs, wiki
+from .routers import health, source
 
 
 def _build_exception_response(exc: Exception) -> JSONResponse:
@@ -72,5 +72,4 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 
 app.include_router(health.router, prefix=config.API_PREFIX, tags=["health"])
-app.include_router(wiki.router, prefix=config.API_PREFIX, tags=["wiki"])
-app.include_router(runs.router, prefix=config.API_PREFIX, tags=["runs"])
+app.include_router(source.router, prefix=config.API_PREFIX, tags=["source"])

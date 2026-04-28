@@ -36,13 +36,11 @@ function LspTool(options = {}) {
       path: stringSchema('Workspace-relative file path'),
       symbol: stringSchema('Symbol name'),
       query: stringSchema('Search query'),
-      lineHint: integerSchema('Optional 1-based line hint', { minimum: 1 }),
+      line: integerSchema('Optional 1-based line number', { minimum: 1 }),
       limit: integerSchema('Maximum number of items to return', { minimum: 1 }),
       pathFilter: stringSchema('Optional path substring filter'),
       maxChars: integerSchema('Maximum characters to return for symbol reads', { minimum: 1 }),
     }, ['action']),
-    searchHint: 'perform symbol or reference lookups with a single LSP-style tool',
-    laneAffinity: ['read', 'flow', 'review'],
     isReadOnly: () => true,
     isConcurrencySafe: () => true,
     getObservationEvidenceKinds: (_observation, input) => {
@@ -94,7 +92,7 @@ function LspTool(options = {}) {
           toStringValue(input.path),
           toStringValue(input.symbol || input.query),
           {
-            lineHint: toPositiveInt(input.lineHint || input.line_hint, 0),
+            line: toPositiveInt(input.line, 0),
             maxChars: toPositiveInt(input.maxChars, Number(limits.maxSpanChars || 16000)),
             pathFilter: toStringValue(input.pathFilter || input.path_filter),
           },

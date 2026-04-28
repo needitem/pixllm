@@ -8,29 +8,10 @@ const {
   booleanSchema,
 } = require('../shared/schema.cjs');
 const { requireFreshWorkspaceRead } = require('../shared/fileFreshness.cjs');
-const { inferWorkspaceTargetPath } = require('../shared/targetPathHints.cjs');
-
-function normalizeReplacementInput(input = {}, context = {}) {
-  if (typeof input.path !== 'string' || !toStringValue(input.path)) {
-    input.path = inferWorkspaceTargetPath(context || {}, {
-      preferredExtensions: ['.cs', '.xaml', '.xaml.cs', '.csproj', '.sln'],
-    });
-  }
-  if (typeof input.old_string !== 'string' && typeof input.search === 'string') {
-    input.old_string = input.search;
-  }
-  if (typeof input.new_string !== 'string' && typeof input.replace === 'string') {
-    input.new_string = input.replace;
-  }
-  if (typeof input.replace_all !== 'boolean' && typeof input.replaceAll === 'boolean') {
-    input.replace_all = input.replaceAll;
-  }
-}
 
 function FileEditTool() {
   return defineLocalTool({
     name: 'edit',
-    aliases: ['replace_in_file'],
     kind: 'write',
     workspaceRelativePaths: ['path'],
     inputSchema: objectSchema({
@@ -57,16 +38,11 @@ function FileEditTool() {
         message: stringSchema('Human-readable status'),
       },
     },
-    searchHint: 'replace exact text inside a workspace file',
-    laneAffinity: ['change', 'review'],
     isReadOnly: () => false,
     isConcurrencySafe: () => false,
     isDestructive: () => true,
     userFacingName: () => 'Edit file',
     getToolUseSummary: (input) => `Edit ${toStringValue(input?.path)}`,
-    async backfillObservableInput(input, context) {
-      normalizeReplacementInput(input, context);
-    },
     async checkPermissions(input, context) {
       return requireFreshWorkspaceRead({
         workspacePath: context?.workspacePath,
@@ -76,13 +52,13 @@ function FileEditTool() {
       });
     },
     async description() {
-      return 'Replace exact text in a workspace file. Use old_string/new_string or search/replace.';
+      return 'Replace exact text in a workspace file.';
     },
     async call(input, context) {
       const pathValue = toStringValue(input.path);
       const search = typeof input.old_string === 'string' ? input.old_string : '';
       const replace = typeof input.new_string === 'string' ? input.new_string : '';
-      const replaceAll = Boolean(input.replace_all || input.replaceAll);
+      const replaceEvery = Boolean(input.replace_all);
       if (!pathValue || !search) {
         return { ok: false, path: pathValue, error: 'missing_path_or_search' };
       }
@@ -97,14 +73,14 @@ function FileEditTool() {
       if (occurrences <= 0) {
         return { ok: false, path: pathValue, error: 'search_not_found', occurrences: 0 };
       }
-      const nextContent = replaceAll
+      const nextContent = replaceEvery
         ? content.split(search).join(replace)
         : content.replace(search, replace);
       const writeResult = await writeWorkspaceFile(context.workspacePath, pathValue, nextContent);
       return {
         ...writeResult,
         occurrences,
-        replace_all: replaceAll,
+        replace_all: replaceEvery,
       };
     },
   });

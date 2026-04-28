@@ -38,13 +38,7 @@ function clipText(value = '', maxChars = 3500) {
 }
 
 function toolResultCharLimit(toolName = '') {
-  const normalized = toStringValue(toolName);
-  if (normalized === 'wiki_search') {
-    return process.env.PIXLLM_QWEN_AGENT_WIKI_SEARCH_RESULT_CHARS || 10000;
-  }
-  if (normalized === 'wiki_read') {
-    return process.env.PIXLLM_QWEN_AGENT_WIKI_READ_RESULT_CHARS || 9000;
-  }
+  void toolName;
   return process.env.PIXLLM_QWEN_AGENT_TOOL_RESULT_CHARS || 3500;
 }
 
@@ -407,8 +401,8 @@ async function runQwenAgentBridge({
       model_server: toStringValue(llmBaseUrl),
       api_key: process.env.PIXLLM_QWEN_AGENT_API_KEY || 'EMPTY',
       max_tokens: Number(maxTokens || 4096),
-      temperature: activeToolNames.includes('wiki_search') ? 0 : 0.2,
-      top_k: activeToolNames.includes('wiki_search') ? 1 : 20,
+      temperature: 0.2,
+      top_k: 20,
       enable_thinking: Boolean(enableThinking),
     },
     system: toStringValue(systemPrompt),

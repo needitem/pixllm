@@ -24,9 +24,6 @@ function normalizeUsage(value = {}) {
     tool_calls: Number(payload.tool_calls || 0),
     resumed_sessions: Number(payload.resumed_sessions || 0),
     streamed_chars: Number(payload.streamed_chars || 0),
-    background_tasks_started: Number(payload.background_tasks_started || 0),
-    stop_hooks: Number(payload.stop_hooks || 0),
-    user_questions: Number(payload.user_questions || 0),
   };
 }
 
@@ -83,7 +80,6 @@ function initialState({ historyMessages = [] } = {}) {
     trace: [],
     transcript: [],
     transitions: [],
-    pendingToolUseSummary: '',
     fileCache: {},
     lastTransition: null,
     terminalReason: '',

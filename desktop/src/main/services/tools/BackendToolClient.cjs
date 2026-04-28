@@ -21,22 +21,10 @@ function buildRequestTarget(baseUrl = '', requestPath = '') {
   return `${normalizedBaseUrl}${normalizedPath}`;
 }
 
-function clampInt(value, low, high, fallback) {
+function clampInt(value, low, high, defaultValue) {
   const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return fallback;
+  if (!Number.isFinite(parsed)) return defaultValue;
   return Math.max(low, Math.min(high, Math.floor(parsed)));
-}
-
-function normalizeWikiId(value = '') {
-  const raw = toStringValue(value).toLowerCase();
-  if (!raw) return '';
-  return raw.replace(/[^a-z0-9._-]+/g, '-').replace(/^[._-]+|[._-]+$/g, '').slice(0, 80);
-}
-
-function resolveWikiId(wikiId = '') {
-  const explicit = normalizeWikiId(wikiId);
-  if (explicit) return explicit;
-  return 'engine';
 }
 
 async function backendRequest({
@@ -77,60 +65,32 @@ async function backendRequest({
   return payload.data && typeof payload.data === 'object' ? payload.data : {};
 }
 
-async function searchBackendWiki({
+async function answerBackendSource({
   baseUrl = '',
-  wikiId = '',
-  query = '',
-  limit = 12,
-  includeContent = false,
-  kind = '',
+  prompt = '',
+  llmBaseUrl = '',
+  model = '',
+  sessionId = '',
+  maxTokens = 4096,
+  maxLlmCalls = 12,
+  enableThinking = false,
 } = {}) {
   return backendRequest({
     baseUrl,
-    requestPath: '/v1/wiki/search',
+    requestPath: '/v1/source/answer',
     method: 'POST',
     body: {
-      wiki_id: resolveWikiId(wikiId),
-      query: toStringValue(query),
-      limit: clampInt(limit, 1, 50, 12),
-      include_content: Boolean(includeContent),
-      kind: toStringValue(kind),
-    },
-  });
-}
-
-async function getBackendWikiContext({
-  baseUrl = '',
-  wikiId = '',
-} = {}) {
-  return backendRequest({
-    baseUrl,
-    requestPath: '/v1/wiki/context',
-    method: 'POST',
-    body: {
-      wiki_id: resolveWikiId(wikiId),
-    },
-  });
-}
-
-async function readBackendWikiPage({
-  baseUrl = '',
-  wikiId = '',
-  path = '',
-} = {}) {
-  return backendRequest({
-    baseUrl,
-    requestPath: '/v1/wiki/page/read',
-    method: 'POST',
-    body: {
-      wiki_id: resolveWikiId(wikiId),
-      path: toStringValue(path),
+      prompt: toStringValue(prompt),
+      llm_base_url: toStringValue(llmBaseUrl),
+      model: toStringValue(model),
+      session_id: toStringValue(sessionId),
+      max_tokens: clampInt(maxTokens, 256, 16384, 4096),
+      max_llm_calls: clampInt(maxLlmCalls, 1, 40, 12),
+      enable_thinking: Boolean(enableThinking),
     },
   });
 }
 
 module.exports = {
-  getBackendWikiContext,
-  readBackendWikiPage,
-  searchBackendWiki,
+  answerBackendSource,
 };

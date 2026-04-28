@@ -1,6 +1,5 @@
-import type { RunApproval, RunArtifact, RunStep, RunTask } from './api';
-import { diffViewsFromUnknown, extractEditSummaries, type DiffFileView } from './diff';
-import { toneClass, truncateText } from './ui';
+import { diffViewsFromUnknown, type DiffFileView } from './diff';
+import { toneClass } from './ui';
 
 export type LocalToolTraceEntry = {
   round: number;
@@ -17,7 +16,6 @@ export type ConversationMessage = {
   timestamp: Date;
   status?: string;
   state?: 'streaming' | 'done' | 'error' | 'cancelled';
-  runId?: string;
   statusEvents?: Array<{
     id: string;
     key?: string;
@@ -32,16 +30,6 @@ export type ConversationMessage = {
   localTrace?: LocalToolTraceEntry[];
   localSummary?: string;
   localError?: string;
-  runSnapshot?: {
-    runId: string;
-    status?: string;
-    responseType?: string;
-    tasks: RunTask[];
-    approvals: RunApproval[];
-    artifacts: RunArtifact[];
-    metadata?: Record<string, unknown>;
-    editSummaries: DiffFileView[];
-  };
   reasoningSummary?: Record<string, unknown>;
   reasoningTrace?: Array<Record<string, unknown>>;
   reasoningNarrative?: string[];
@@ -59,17 +47,6 @@ export type ExecutionInspectorItem = {
   detail: unknown;
   diffs?: DiffFileView[];
   note?: string;
-};
-
-export type ConversationRunSnapshot = {
-  runId: string;
-  status?: string;
-  responseType?: string;
-  tasks: RunTask[];
-  approvals: RunApproval[];
-  artifacts: RunArtifact[];
-  metadata?: Record<string, unknown>;
-  editSummaries: DiffFileView[];
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -112,8 +89,6 @@ function transcriptItemTitle(kind: string): string | null {
   switch (String(kind || '').trim()) {
     case 'model_error':
       return 'Model error';
-    case 'model_retry':
-      return 'Model retry';
     case 'model_reasoning':
     case 'model_reasoning_summary':
       return 'Reasoning report';
@@ -141,10 +116,7 @@ function transcriptItemDetailTitle(kind: string): string {
 function transcriptItemTone(kind: string): string {
   switch (String(kind || '').trim()) {
     case 'model_error':
-    case 'prompt_token_fallback':
       return 'danger';
-    case 'model_retry':
-      return 'accent';
     default:
       return 'neutral';
   }
@@ -259,17 +231,6 @@ export function compactInputSummary(value: unknown): string {
   return entries.join(' ');
 }
 
-export function describeRunStep(step: RunStep) {
-  const toolName =
-    typeof step?.metadata?.tool === 'string'
-      ? step.metadata.tool
-      : step?.kind === 'tool'
-        ? step.title.replace(/^Tool:\s*/i, '')
-        : step?.title || step?.step_key || 'step';
-  const inputText = compactInputSummary(step?.input);
-  return inputText ? `${toolName} ${inputText}` : toolName;
-}
-
 export function hasExecutionData(message: ConversationMessage | null | undefined): boolean {
   if (!message || message.role !== 'assistant') return false;
   return Boolean(
@@ -277,8 +238,7 @@ export function hasExecutionData(message: ConversationMessage | null | undefined
       (message.localTrace?.length ?? 0) > 0 ||
       (message.localTranscript?.length ?? 0) > 0 ||
       message.localSummary ||
-      message.localError ||
-      message.runSnapshot
+      message.localError
   );
 }
 
@@ -293,14 +253,6 @@ export function getActiveExecutionMessage(messages: ConversationMessage[]): Conv
   return null;
 }
 
-function serverToolStepCount(message: ConversationMessage): number {
-  if (!message.runSnapshot) return 0;
-  return message.runSnapshot.tasks.reduce((count, task) => {
-    const steps = Array.isArray(task.steps) ? task.steps : [];
-    return count + steps.filter((step) => step.kind === 'tool').length;
-  }, 0);
-}
-
 export function summarizeExecutionMessage(message: ConversationMessage): string {
   if (!hasExecutionData(message)) return 'No execution trace recorded';
   const parts = [];
@@ -309,9 +261,6 @@ export function summarizeExecutionMessage(message: ConversationMessage): string 
   }
   if ((message.localTrace?.length ?? 0) > 0) {
     parts.push(`${message.localTrace?.length ?? 0} local tools`);
-  }
-  if (serverToolStepCount(message) > 0) {
-    parts.push(`${serverToolStepCount(message)} server tools`);
   }
   return parts.join(' / ') || 'No execution trace recorded';
 }
@@ -434,37 +383,6 @@ export function buildExecutionInspectorItems(message: ConversationMessage): Exec
     });
   }
 
-  if (message.runSnapshot) {
-    for (const task of message.runSnapshot.tasks) {
-      for (const step of (task.steps ?? []).filter((entry) => entry.kind === 'tool')) {
-        const detail = {
-          task_key: task.task_key,
-          task_title: task.title,
-          task_status: task.status,
-          step_key: step.step_key,
-          step_title: step.title,
-          step_status: step.status,
-          input: step.input,
-          output_preview: step.output_preview || '',
-          metadata: step.metadata || {}
-        };
-        items.push({
-          id: `${message.id}-server-step-${task.task_id}-${step.step_id}`,
-          title: describeRunStep(step),
-          subtitle: step.output_preview
-            ? truncateText(step.output_preview, 72)
-            : step.status || task.title,
-          badge: step.status || 'server',
-          tone: toneClass(step.status),
-          detailTitle: task.title || 'Server tool step',
-          detail,
-          diffs: diffViewsFromUnknown(detail),
-          note: step.output_preview || ''
-        });
-      }
-    }
-  }
-
   return items;
 }
 
@@ -482,25 +400,4 @@ export function normalizeLocalTracePayload(rawTrace: unknown): LocalToolTraceEnt
         observation: (step as Record<string, unknown>)?.observation ?? null
       }))
     : [];
-}
-
-export function buildRunSnapshot(detail: {
-  run_id: string;
-  status?: string;
-  response_type?: string;
-  tasks?: RunTask[];
-  approvals?: RunApproval[];
-  artifacts?: RunArtifact[];
-  metadata?: Record<string, unknown>;
-}): ConversationRunSnapshot {
-  return {
-    runId: detail.run_id,
-    status: detail.status,
-    responseType: detail.response_type,
-    tasks: Array.isArray(detail.tasks) ? detail.tasks : [],
-    approvals: Array.isArray(detail.approvals) ? detail.approvals : [],
-    artifacts: Array.isArray(detail.artifacts) ? detail.artifacts : [],
-    metadata: detail.metadata && typeof detail.metadata === 'object' ? detail.metadata : undefined,
-    editSummaries: extractEditSummaries(detail as any),
-  };
 }

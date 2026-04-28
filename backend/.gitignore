@@ -28,7 +28,8 @@ env/
 Thumbs.db
 
 # 로컬 원본 데이터
-.profiles/wiki/raw_source/
+.profiles/raw_source/
+.profiles/source/
 
 # pytest
 .pytest_cache/

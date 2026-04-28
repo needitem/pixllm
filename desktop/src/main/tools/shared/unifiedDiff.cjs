@@ -46,7 +46,7 @@ function formatRange(start, count) {
   return count === 1 ? String(start) : `${start},${count}`;
 }
 
-function buildFallbackOps(beforeLines, afterLines) {
+function buildLinearDiffOps(beforeLines, afterLines) {
   return [
     ...beforeLines.map((text) => ({ type: 'remove', text })),
     ...afterLines.map((text) => ({ type: 'add', text })),
@@ -103,7 +103,7 @@ function buildMiddleOps(beforeLines, afterLines) {
     beforeLines.length + afterLines.length > MAX_INPUT_LINES ||
     cellCount > MAX_DP_CELLS
   ) {
-    return buildFallbackOps(beforeLines, afterLines);
+    return buildLinearDiffOps(beforeLines, afterLines);
   }
   return buildLcsOps(beforeLines, afterLines);
 }

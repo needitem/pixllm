@@ -1,8 +1,7 @@
-const { createLocalToolCollection, createWikiToolCollection } = require('./tools.cjs');
+const { createLocalToolCollection } = require('./tools.cjs');
 const { ToolRuntime } = require('./services/tools/ToolRuntime.cjs');
 const { runQwenAgentBridge } = require('./services/model/QwenAgentBridge.cjs');
-const { loadProjectContext } = require('./utils/projectContext/loadProjectContext.cjs');
-const { buildProjectContextPrompt } = require('./utils/projectContext/buildProjectContextPrompt.cjs');
+const { answerBackendSource } = require('./services/tools/BackendToolClient.cjs');
 const {
   createTextBlock,
   normalizeMessageBlocks,
@@ -25,16 +24,8 @@ const MAX_TRANSITIONS = 64;
 const MAX_HISTORY_MESSAGES_FOR_NEW_RUN = 8;
 const MAX_HISTORY_TEXT_CHARS = 3000;
 const DEFAULT_QWEN_AGENT_MAX_TOKENS = 4096;
-const DEFAULT_QWEN_AGENT_WIKI_MAX_LLM_CALLS = 5;
+const DEFAULT_QWEN_AGENT_SOURCE_MAX_LLM_CALLS = 12;
 const DEFAULT_QWEN_AGENT_LOCAL_MAX_LLM_CALLS = 12;
-const WIKI_TOOL_NAMES = Object.freeze([
-  'wiki_search',
-  'wiki_read',
-]);
-const WIKI_PREFETCH_TOOL_USE_ID = 'toolu_wiki_prefetch_1';
-const WIKI_PREFETCH_QUERY_CHARS = 900;
-const WIKI_PREFETCH_CONTEXT_CHARS = 2200;
-const WIKI_PREFETCH_RESULT_CHARS = 14000;
 
 function shouldEnableQwenAgentThinking() {
   return ['1', 'true', 'yes', 'on'].includes(
@@ -43,7 +34,7 @@ function shouldEnableQwenAgentThinking() {
 }
 
 function engineModeFromContext(requestContext = {}, workspacePath = '') {
-  return toStringValue(requestContext?.mode || (workspacePath ? 'local' : 'wiki'));
+  return toStringValue(requestContext?.mode || (workspacePath ? 'local' : 'source'));
 }
 
 function isBackendApiUrl(value = '') {
@@ -55,168 +46,59 @@ function qwenAgentMaxLlmCallsForMode(requestMode) {
   if (Number.isFinite(envValue) && envValue > 0) {
     return envValue;
   }
-  return requestMode === 'wiki'
-    ? DEFAULT_QWEN_AGENT_WIKI_MAX_LLM_CALLS
+  return requestMode === 'source'
+    ? DEFAULT_QWEN_AGENT_SOURCE_MAX_LLM_CALLS
     : DEFAULT_QWEN_AGENT_LOCAL_MAX_LLM_CALLS;
-}
-
-function clipPlainText(value = '', maxChars = 1000) {
-  const text = toStringValue(value).replace(/\s+/g, ' ');
-  const limit = Math.max(200, Number(maxChars || 0));
-  return text.length > limit ? text.slice(0, limit).trim() : text;
-}
-
-function looksLikeProgressOnlyAnswer(value = '') {
-  const text = toStringValue(value);
-  if (!text || text.length > 360) return false;
-  return /(?:확인하겠습니다|확인해보겠습니다|살펴보겠습니다|찾아보겠습니다|검토하겠습니다|분석하겠습니다|더 확인|I'll check|I will check|Let me check|I'll look|I will look)/i.test(text);
-}
-
-function summarizeTraceForFinalAnswer(runTrace = [], maxChars = 14000) {
-  const lines = ['Collected tool observations from this run:'];
-  const steps = Array.isArray(runTrace) ? runTrace.slice(-32) : [];
-  for (const step of steps) {
-    const tool = toStringValue(step?.tool);
-    const input = step?.input && typeof step.input === 'object' ? JSON.stringify(step.input) : '';
-    const observation = step?.observation && typeof step.observation === 'object' ? step.observation : {};
-    lines.push(`\nTool: ${tool}${input ? ` ${input}` : ''}`);
-    if (observation.path) lines.push(`Path: ${toStringValue(observation.path)}`);
-    if (observation.query) lines.push(`Query: ${toStringValue(observation.query)}`);
-    if (observation.pattern) lines.push(`Pattern: ${toStringValue(observation.pattern)}`);
-    if (Array.isArray(observation.items)) {
-      for (const item of observation.items.slice(0, 12)) {
-        const itemPath = toStringValue(item?.path || item);
-        const line = Number(item?.line || 0);
-        const text = clipPlainText(item?.text || item?.match || '', 220);
-        lines.push(`- ${[itemPath, line > 0 ? line : ''].filter(Boolean).join(':')}${text ? ` ${text}` : ''}`);
-      }
-    } else if (observation.content) {
-      lines.push(clipPlainText(observation.content, 1800));
-    } else if (observation.error) {
-      lines.push(`Error: ${toStringValue(observation.error)}`);
-    }
-  }
-  return clipPlainText(lines.join('\n'), maxChars);
-}
-
-function uniqueValues(items = [], limit = 20) {
-  const seen = new Set();
-  const output = [];
-  for (const item of Array.isArray(items) ? items : []) {
-    const value = toStringValue(item);
-    const key = value.toLowerCase();
-    if (!value || seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    output.push(value);
-    if (output.length >= limit) {
-      break;
-    }
-  }
-  return output;
-}
-
-function extractSearchSymbols(value = '') {
-  return uniqueValues(String(value || '').match(/\b[A-Z][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?\b/g) || [], 18);
-}
-
-function recentConversationText(messages = []) {
-  return (Array.isArray(messages) ? messages : [])
-    .slice(-5)
-    .map((message) => {
-      const role = toStringValue(message?.role).toLowerCase() === 'assistant' ? 'assistant' : 'user';
-      const content = serializeBlocks(normalizeMessageBlocks(message?.content));
-      return `${role}: ${clipPlainText(content, 700)}`;
-    })
-    .filter((line) => line.length > 8)
-    .join('\n')
-    .slice(0, WIKI_PREFETCH_CONTEXT_CHARS);
-}
-
-function buildWikiPrefetchQuery({ prompt = '', messages = [] } = {}) {
-  const userPrompt = clipPlainText(prompt, 500);
-  const recentText = userPrompt.length < 16 ? recentConversationText(messages) : '';
-  const searchText = `${userPrompt}\n${recentText}`
-    .replace(/\b(?:user|assistant|request|response)\b/gi, ' ');
-  const symbols = extractSearchSymbols(searchText)
-    .filter((symbol) => !['User', 'Assistant', 'Request', 'Response'].includes(symbol));
-  const textTerms = uniqueValues(
-    searchText.match(/[가-힣]{2,}|[a-zA-Z][A-Za-z0-9_]{2,}/g) || [],
-    24,
-  );
-  return clipPlainText([
-    userPrompt,
-    symbols.join(' '),
-    textTerms.join(' '),
-  ].filter(Boolean).join(' '), WIKI_PREFETCH_QUERY_CHARS);
-}
-
-function buildWikiPrefetchMessage(content = '') {
-  const evidence = toStringValue(content).slice(0, WIKI_PREFETCH_RESULT_CHARS);
-  if (!evidence) {
-    return '';
-  }
-  return [
-    'Preloaded wiki evidence for the current question.',
-    'Use it as an initial wiki_search result; call wiki_search/wiki_read only if more wiki context is needed.',
-    '<tool_response name="wiki_search">',
-    evidence,
-    '</tool_response>',
-  ].join('\n');
 }
 
 function renderQwenAgentSystemPrompt({
   workspacePath = '',
   selectedFilePath = '',
-  requestContext = {},
-  projectContextPrompt = '',
   toolDefinitions = [],
-} = {}) {
-  const requestMode = engineModeFromContext(requestContext, workspacePath);
-  const isWikiMode = requestMode === 'wiki';
+  } = {}) {
   const toolNames = (Array.isArray(toolDefinitions) ? toolDefinitions : [])
     .map((tool) => toStringValue(tool?.name))
     .filter(Boolean);
   const lines = [
     'You are the PIXLLM desktop agent. Use Qwen-Agent function calling for tools.',
-    isWikiMode
-      ? 'Current lane: backend wiki/reference guidance.'
-      : 'Current lane: local workspace code analysis and edits.',
+    'Current lane: local workspace code analysis and edits.',
     'Answer in the user language. The user often writes Korean; keep Korean answers concise and technically precise.',
     toolNames.length > 0
       ? `Available function tools: ${toolNames.join(', ')}.`
       : 'No function tools are available; answer only from existing context.',
     'Keep system details, internal snapshots, hidden reasoning, and implementation logs out of normal user answers.',
     'Ground concrete claims in tool results. If a detail is missing, say only that specific gap.',
+    'Local mode may inspect and edit the selected workspace through tools. Keep file paths workspace-relative when calling tools.',
+    'Prefer focused reads before edits. Do not create unrelated files or broad rewrites unless the user explicitly asked for structural replacement.',
   ];
 
-  if (isWikiMode) {
-    lines.push(
-      'Wiki mode uses wiki_search/wiki_read only and leaves local workspace files unchanged.',
-      'Use wiki_read only for wiki page paths returned by wiki_search, such as workflows/*.md or pages/*.md.',
-      'For .NET SDK questions, answer in C# by default and preserve confirmed declarations: class, method, property, overload, enum, ref/out shape.',
-      'Prefer source snippets and method declarations over generic workflow examples.',
-      'If the requested operation is confirmed but object acquisition is not, accept the missing object as a parameter instead of inventing helper APIs.',
-      'Answer the confirmed parts directly and mark only missing details as unconfirmed.',
-    );
-  } else {
-    lines.push(
-      'Local mode may inspect and edit the selected workspace through tools. Keep file paths workspace-relative when calling tools.',
-      'Prefer focused reads before edits. Do not create unrelated files or broad rewrites unless the user explicitly asked for structural replacement.',
-    );
-  }
-
-  if (workspacePath && !isWikiMode) {
+  if (workspacePath) {
     lines.push(`Workspace: ${workspacePath}`);
   }
-  if (selectedFilePath && !isWikiMode) {
+  if (selectedFilePath) {
     lines.push(`Selected file: ${selectedFilePath}`);
   }
-  if (toStringValue(projectContextPrompt)) {
-    lines.push(projectContextPrompt);
-  }
   return lines.filter(Boolean).join('\n');
+}
+
+function createEmptyToolCollection({
+  workspacePath = '',
+  sessionId = '',
+} = {}) {
+  return {
+    workspacePath: toStringValue(workspacePath),
+    sessionId: toStringValue(sessionId),
+    tools: [],
+    toolNames: [],
+    has: () => false,
+    describe: () => null,
+    async call(toolName = '') {
+      return {
+        ok: false,
+        error: `tool_not_registered:${toStringValue(toolName)}`,
+      };
+    },
+  };
 }
 
 class QueryEngine {
@@ -225,7 +107,6 @@ class QueryEngine {
     baseUrl = '',
     serverBaseUrl = '',
     llmBaseUrl = '',
-    wikiId = '',
     engineQuestionOverride = null,
     model = '',
     selectedFilePath = '',
@@ -235,17 +116,12 @@ class QueryEngine {
     this.workspacePath = toStringValue(workspacePath);
     this.serverBaseUrl = toStringValue(serverBaseUrl || baseUrl);
     this.llmBaseUrl = toStringValue(llmBaseUrl);
-    this.wikiId = toStringValue(wikiId);
     this.engineQuestionOverride = typeof engineQuestionOverride === 'boolean' ? engineQuestionOverride : null;
     this.baseUrl = this.llmBaseUrl || this.serverBaseUrl;
     this.model = toStringValue(model);
     this.selectedFilePath = toStringValue(selectedFilePath);
     this.sessionId = toStringValue(sessionId);
     this.state = this._restoreState(historyMessages);
-    this.runtimeBridge = {
-      askUserQuestion: async (payload) => this._askUserQuestion(payload),
-      sendBrief: async (payload) => this._sendBrief(payload),
-    };
     this.runtime = new ToolRuntime({
       workspacePath: this.workspacePath,
       selectedFilePath: this.selectedFilePath,
@@ -256,13 +132,11 @@ class QueryEngine {
       updateFileCache: (toolName, observation) => this._updateFileCache(toolName, observation),
     });
     this.tools = this._createToolCollection({
-      mode: this.workspacePath ? 'local' : 'wiki',
-      allowedToolNames: this.workspacePath ? null : WIKI_TOOL_NAMES,
+      mode: this.workspacePath ? 'local' : 'source',
+      allowedToolNames: null,
     });
     this.runtime.setTools(this.tools);
     this.toolDescriptionCache = new Map();
-    this.projectContext = null;
-    this.projectContextPrompt = '';
     this.runtimeHandlers = {};
     this.restoredSession = Number(this.state?.totalUsage?.resumed_sessions || 0) > 0;
   }
@@ -271,14 +145,12 @@ class QueryEngine {
     baseUrl = '',
     serverBaseUrl = '',
     llmBaseUrl = '',
-    wikiId = '',
     engineQuestionOverride = null,
     model = '',
     selectedFilePath = '',
   } = {}) {
     this.serverBaseUrl = toStringValue(serverBaseUrl) || this.serverBaseUrl || toStringValue(baseUrl) || this.baseUrl;
     this.llmBaseUrl = toStringValue(llmBaseUrl) || this.llmBaseUrl;
-    this.wikiId = toStringValue(wikiId) || this.wikiId;
     this.engineQuestionOverride = typeof engineQuestionOverride === 'boolean'
       ? engineQuestionOverride
       : this.engineQuestionOverride;
@@ -295,18 +167,10 @@ class QueryEngine {
     const commonOptions = {
       workspacePath: this.workspacePath,
       sessionId: this.sessionId,
-      runtimeBridge: this.runtimeBridge,
-      getBackendConfig: () => ({
-        baseUrl: this.serverBaseUrl,
-        wikiId: this.wikiId,
-        llmBaseUrl: this.llmBaseUrl || this.baseUrl || this.serverBaseUrl,
-        serverBaseUrl: this.serverBaseUrl,
-        model: this.model,
-      }),
       allowedToolNames,
     };
-    return mode === 'wiki'
-      ? createWikiToolCollection(commonOptions)
+    return mode === 'source'
+      ? createEmptyToolCollection(commonOptions)
       : createLocalToolCollection(commonOptions);
   }
 
@@ -315,8 +179,8 @@ class QueryEngine {
     const requestedToolNames = Array.isArray(requestContext?.initialToolNames)
       ? requestContext.initialToolNames.map((item) => toStringValue(item)).filter(Boolean)
       : [];
-    const allowedToolNames = requestMode === 'wiki'
-      ? WIKI_TOOL_NAMES
+    const allowedToolNames = requestMode === 'source'
+      ? []
       : requestedToolNames.length > 0
         ? requestedToolNames
         : null;
@@ -346,7 +210,6 @@ class QueryEngine {
       trace: Array.isArray(restored.trace) ? restored.trace.map((step) => toSerializableTraceStep(step)) : [],
       transcript: Array.isArray(restored.transcript) ? restored.transcript : [],
       transitions: Array.isArray(restored.transitions) ? restored.transitions : [],
-      pendingToolUseSummary: toStringValue(restored.pendingToolUseSummary),
       fileCache: restored.fileCache && typeof restored.fileCache === 'object' && !Array.isArray(restored.fileCache)
         ? restored.fileCache
         : {},
@@ -374,7 +237,6 @@ class QueryEngine {
       trace: this.state.trace.map((step) => toSerializableTraceStep(step)),
       transcript: Array.isArray(this.state.transcript) ? this.state.transcript : [],
       transitions: Array.isArray(this.state.transitions) ? this.state.transitions : [],
-      pendingToolUseSummary: toStringValue(this.state.pendingToolUseSummary),
       fileCache: this.state.fileCache && typeof this.state.fileCache === 'object' ? this.state.fileCache : {},
       lastTransition: this.state.lastTransition && typeof this.state.lastTransition === 'object'
         ? this.state.lastTransition
@@ -413,7 +275,6 @@ class QueryEngine {
       .slice(-MAX_HISTORY_MESSAGES_FOR_NEW_RUN);
     this.state.messages = compactedMessages;
     this.state.trace = [];
-    this.state.pendingToolUseSummary = '';
     this.state.fileCache = {};
     this.state.terminalReason = '';
     this.state.currentTurn = 0;
@@ -468,59 +329,6 @@ class QueryEngine {
     };
   }
 
-  async _askUserQuestion(payload = {}) {
-    if (typeof this.runtimeHandlers?.onUserQuestion !== 'function') {
-      throw new Error('user_question_handler_unavailable');
-    }
-    this.state.totalUsage.user_questions += 1;
-    this._recordTransition('user_question', {
-      title: toStringValue(payload?.title),
-    });
-    this._recordTranscript({
-      kind: 'user_question',
-      title: toStringValue(payload?.title),
-      prompt: toStringValue(payload?.prompt),
-    });
-    this._persistState();
-    const answer = await this.runtimeHandlers.onUserQuestion({
-      title: toStringValue(payload?.title),
-      prompt: toStringValue(payload?.prompt),
-      placeholder: toStringValue(payload?.placeholder),
-      defaultValue: toStringValue(payload?.defaultValue),
-      allowEmpty: Boolean(payload?.allowEmpty),
-    });
-    this._recordTranscript({
-      kind: 'user_question_answer',
-      answerPreview: previewText(answer),
-    });
-    this._persistState();
-    return toStringValue(answer);
-  }
-
-  async _sendBrief(payload = {}) {
-    if (typeof this.runtimeHandlers?.onBrief !== 'function') {
-      return;
-    }
-    await this.runtimeHandlers.onBrief({
-      title: toStringValue(payload?.title),
-      message: toStringValue(payload?.message),
-      level: toStringValue(payload?.level || 'info'),
-    });
-    this._recordTranscript({
-      kind: 'brief',
-      title: toStringValue(payload?.title),
-      preview: previewText(payload?.message),
-    });
-    this._persistState();
-  }
-
-  _addUsage(usage = {}) {
-    const payload = usage && typeof usage === 'object' ? usage : {};
-    this.state.totalUsage.prompt_tokens += Number(payload.prompt_tokens || 0);
-    this.state.totalUsage.completion_tokens += Number(payload.completion_tokens || 0);
-    this.state.totalUsage.total_tokens += Number(payload.total_tokens || 0);
-  }
-
   async _describeTools(allowedToolNames = null) {
     const key = Array.isArray(allowedToolNames)
       ? allowedToolNames.map((item) => toStringValue(item)).sort().join('|')
@@ -532,9 +340,10 @@ class QueryEngine {
   }
 
   _runtimeSnapshot() {
+    const mode = engineModeFromContext(this.runtime?.requestContext || {}, this.workspacePath);
     return {
-      engine: 'qwen_agent_sidecar',
-      mode: engineModeFromContext(this.runtime?.requestContext || {}, this.workspacePath),
+      engine: mode === 'source' ? 'backend_source_agent' : 'qwen_agent_sidecar',
+      mode,
       request: this.runtime?.requestContext || null,
       tools: Array.isArray(this.tools?.toolNames) ? this.tools.toolNames : [],
       transitions: Array.isArray(this.state.transitions) ? this.state.transitions.slice(-12) : [],
@@ -554,7 +363,7 @@ class QueryEngine {
     if (direct && !isBackendApiUrl(direct)) {
       return direct;
     }
-    throw new Error('Qwen-Agent requires llmBaseUrl pointing to an OpenAI-compatible /v1 server.');
+    throw new Error('Qwen-Agent requires llmBaseUrl pointing to an OpenAI API /v1 server.');
   }
 
   _messagesForAgent(extraMessages = []) {
@@ -573,105 +382,155 @@ class QueryEngine {
     return [...stateMessages, ...normalizedExtra];
   }
 
-  async _prefetchWikiEvidence({
+  async _runBackendSourceAnswer({
     runContext = {},
-    activeToolNames = [],
-    signal = null,
+    traceStartIndex = 0,
+    transcriptStartIndex = 0,
+    onStatus = async () => {},
+    onToken = async () => {},
     onToolUse = async () => {},
     onToolResult = async () => {},
+    onAssistantMessage = async () => {},
     onToolBatchStart = async () => {},
     onToolBatchEnd = async () => {},
-    onStatus = async () => {},
+    onTerminal = async () => {},
+    signal = null,
   } = {}) {
-    if (engineModeFromContext(runContext, this.workspacePath) !== 'wiki') {
-      return null;
+    if (signal?.aborted) {
+      throw new Error('Cancelled');
     }
-    if (!Array.isArray(activeToolNames) || !activeToolNames.includes('wiki_search')) {
-      return null;
-    }
-    const query = buildWikiPrefetchQuery({
-      prompt: toStringValue(runContext?.prompt),
-      messages: this.state.messages,
+    await onStatus({ phase: 'model', message: 'Running backend source agent...' });
+    this.state.currentTurn = 1;
+    this._recordTransition('backend_source_agent_start', {
+      mode: 'source',
     });
-    if (!query) {
-      return null;
-    }
-    const toolUse = {
-      id: WIKI_PREFETCH_TOOL_USE_ID,
-      name: 'wiki_search',
-      input: {
-        query,
-        limit: 5,
-      },
-    };
-    await onToolBatchStart({
-      turn: 0,
-      count: 1,
-      summary: 'wiki_search(query, limit)',
-      parallelCandidate: false,
+    this._recordTranscript({
+      kind: 'backend_source_agent_request',
+      thinking: shouldEnableQwenAgentThinking(),
     });
-    await onStatus({
-      phase: 'tool',
-      message: 'Loading wiki evidence...',
-      tool: 'wiki_search',
-    });
-    const execution = await this.runtime.executeToolUse({
-      turn: 0,
-      assistantText: 'wiki-mode evidence prefetch',
-      toolUse,
-      activeToolNames,
-      signal,
-      onToolUse,
-      onToolResult,
-    });
-    await onToolBatchEnd({
-      turn: 0,
-      count: 1,
-      summary: 'wiki_search',
-      parallel: false,
-    });
-    const content = toStringValue(execution?.resultBlock?.content);
-    this._recordTransition('wiki_evidence_prefetch', {
-      query,
-      ok: execution?.observation?.ok !== false,
-    });
-    return {
-      toolCallCount: 1,
-      query,
-      content: buildWikiPrefetchMessage(content),
-    };
-  }
 
-  async _loadProjectContext(runContext = {}) {
-    if (!this.workspacePath || engineModeFromContext(runContext, this.workspacePath) !== 'local') {
-      this.projectContext = null;
-      this.projectContextPrompt = '';
-      return;
+    const result = await answerBackendSource({
+      baseUrl: this.serverBaseUrl,
+      prompt: toStringValue(runContext?.prompt),
+      llmBaseUrl: this.llmBaseUrl || this.baseUrl,
+      model: this.model,
+      sessionId: this.sessionId,
+      maxTokens: Number(process.env.PIXLLM_QWEN_AGENT_MAX_TOKENS || DEFAULT_QWEN_AGENT_MAX_TOKENS),
+      maxLlmCalls: qwenAgentMaxLlmCallsForMode('source'),
+      enableThinking: shouldEnableQwenAgentThinking(),
+    });
+    if (signal?.aborted) {
+      throw new Error('Cancelled');
     }
-    try {
-      this.projectContext = await loadProjectContext({
-        workspacePath: this.workspacePath,
-        selectedFilePath: toStringValue(runContext?.selectedFilePath || this.selectedFilePath),
-        explicitPaths: Array.isArray(runContext?.explicitPaths) ? runContext.explicitPaths : [],
+
+    const backendTrace = Array.isArray(result?.trace) ? result.trace : [];
+    if (backendTrace.length > 0) {
+      await onToolBatchStart({
+        turn: 1,
+        count: backendTrace.length,
+        summary: backendTrace.map((item) => toStringValue(item?.tool)).filter(Boolean).join(', '),
+        parallelCandidate: false,
       });
-      this.projectContextPrompt = buildProjectContextPrompt(this.projectContext);
-      if (this.projectContextPrompt) {
-        this._recordTranscript({
-          kind: 'project_context_loaded',
-          summary: toStringValue(this.projectContext?.summary),
-        });
-        this._recordTransition('project_context_loaded', {
-          summary: toStringValue(this.projectContext?.summary),
-        });
-      }
-    } catch (error) {
-      this.projectContext = null;
-      this.projectContextPrompt = '';
+    }
+    for (const [index, item] of backendTrace.entries()) {
+      const toolName = toStringValue(item?.tool);
+      const toolUseId = `backend_source_${index + 1}`;
+      const input = item?.input && typeof item.input === 'object' && !Array.isArray(item.input)
+        ? item.input
+        : {};
+      const observation = item?.observation && typeof item.observation === 'object' && !Array.isArray(item.observation)
+        ? item.observation
+        : {
+            ok: item?.ok !== false,
+            summary: item?.summary || {},
+          };
+      await onToolUse({
+        turn: 1,
+        id: toolUseId,
+        name: toolName,
+        input,
+      });
+      this.state.trace.push({
+        round: 1,
+        thought: 'backend source agent',
+        tool: toolName,
+        toolUseId,
+        input,
+        observation,
+      });
       this._recordTranscript({
-        kind: 'project_context_error',
-        message: error instanceof Error ? error.message : String(error),
+        kind: 'tool_result',
+        turn: 1,
+        tool: toolName,
+        toolUseId,
+        ok: item?.ok !== false,
+        backend: true,
+        payload: observation,
+      });
+      await onToolResult({
+        turn: 1,
+        id: toolUseId,
+        name: toolName,
+        ok: item?.ok !== false,
+        input,
+        detail: item?.summary || observation,
       });
     }
+    if (backendTrace.length > 0) {
+      await onToolBatchEnd({
+        turn: 1,
+        count: backendTrace.length,
+        summary: 'backend_source_agent',
+        parallel: false,
+      });
+    }
+
+    const usage = result?.usage && typeof result.usage === 'object' ? result.usage : {};
+    this.state.totalUsage.tool_calls += Number(usage.tool_calls || backendTrace.length || 0);
+    this.state.totalUsage.completion_calls += Number(usage.completion_calls || 1);
+    this.state.totalUsage.streamed_completion_calls += 1;
+    this.state.totalUsage.prompt_tokens += Number(usage.prompt_tokens || 0);
+    this.state.totalUsage.completion_tokens += Number(usage.completion_tokens || 0);
+    this.state.totalUsage.total_tokens += Number(usage.total_tokens || 0);
+
+    const assistantText = toStringValue(result?.answer);
+    if (!assistantText) {
+      throw new Error('backend source agent did not produce a final answer');
+    }
+    this.state.messages.push({
+      role: 'assistant',
+      content: [createTextBlock(assistantText)],
+    });
+    this._recordTransition('assistant_message', {
+      turn: 1,
+      engine: 'backend_source_agent',
+      toolUses: backendTrace.length,
+    });
+    this._recordTranscript({
+      kind: 'assistant',
+      turn: 1,
+      engine: 'backend_source_agent',
+      toolCallCount: backendTrace.length,
+      preview: previewText(assistantText),
+    });
+    await onAssistantMessage({
+      turn: 1,
+      text: assistantText,
+      rawText: assistantText,
+      toolUses: backendTrace.length,
+      finishReason: 'stop',
+    });
+    this._persistState();
+
+    return await this._returnFinalAnswer({
+      finalAnswer: assistantText,
+      runTrace: this.state.trace.slice(traceStartIndex),
+      turn: 1,
+      transcriptStartIndex,
+      onStatus,
+      onToken,
+      onTerminal,
+    });
   }
 
   async _returnFinalAnswer({
@@ -704,7 +563,7 @@ class QueryEngine {
       trace: runTrace,
       transcript: this.state.transcript.slice(transcriptStartIndex),
       runtime: this._runtimeSnapshot(),
-      summary: `Completed by qwen-agent with ${runTrace.length} tool observations.`,
+      summary: `${this._runtimeSnapshot().engine} completed with ${runTrace.length} tool observations.`,
       primaryFilePath: toStringValue(primary.path),
       primaryFileContent: toStringValue(primary.content).slice(0, 24000),
       usage: { ...this.state.totalUsage },
@@ -724,14 +583,12 @@ class QueryEngine {
     onToolBatchStart = async () => {},
     onToolBatchEnd = async () => {},
     onTerminal = async () => {},
-    onUserQuestion = async () => '',
-    onBrief = async () => {},
     signal = null,
   } = {}) {
     this._compactStateForNewUserRun();
     const traceStartIndex = this.state.trace.length;
     const transcriptStartIndex = Array.isArray(this.state.transcript) ? this.state.transcript.length : 0;
-    this.runtimeHandlers = { onTransition, onUserQuestion, onBrief };
+    this.runtimeHandlers = { onTransition };
 
     try {
       const runContext = this.runtime.beginRun({
@@ -751,20 +608,33 @@ class QueryEngine {
         selectedFilePath: toStringValue(runContext?.selectedFilePath || this.selectedFilePath),
         explicitPaths: Array.isArray(runContext?.explicitPaths) ? runContext.explicitPaths.slice(0, 8) : [],
         initialToolNames: Array.isArray(runContext?.initialToolNames) ? runContext.initialToolNames.slice(0, 20) : [],
-        symbolHints: Array.isArray(runContext?.symbolHints) ? runContext.symbolHints.slice(0, 6) : [],
         engine: 'qwen_agent_sidecar',
       });
-      await this._loadProjectContext(runContext);
       this._persistState();
 
-      const activeToolNames = Array.isArray(this.tools?.toolNames) ? this.tools.toolNames.slice() : [];
       const requestMode = engineModeFromContext(runContext, this.workspacePath);
+      if (requestMode === 'source') {
+        return await this._runBackendSourceAnswer({
+          runContext,
+          traceStartIndex,
+          transcriptStartIndex,
+          onStatus,
+          onToken,
+          onToolUse,
+          onToolResult,
+          onAssistantMessage,
+          onToolBatchStart,
+          onToolBatchEnd,
+          onTerminal,
+          signal,
+        });
+      }
+
+      const activeToolNames = Array.isArray(this.tools?.toolNames) ? this.tools.toolNames.slice() : [];
       const toolDefinitions = await this._describeTools(activeToolNames);
       const systemPrompt = renderQwenAgentSystemPrompt({
         workspacePath: this.workspacePath,
         selectedFilePath: this.selectedFilePath,
-        requestContext: this.runtime?.requestContext || {},
-        projectContextPrompt: this.projectContextPrompt,
         toolDefinitions,
       });
 
@@ -779,19 +649,7 @@ class QueryEngine {
         toolCount: activeToolNames.length,
         thinking: shouldEnableQwenAgentThinking(),
       });
-      const prefetch = await this._prefetchWikiEvidence({
-        runContext,
-        activeToolNames,
-        signal,
-        onToolUse,
-        onToolResult,
-        onToolBatchStart,
-        onToolBatchEnd,
-        onStatus,
-      });
-      const agentMessages = this._messagesForAgent(
-        prefetch?.content ? [{ role: 'user', content: prefetch.content }] : [],
-      );
+      const agentMessages = this._messagesForAgent();
 
       const bridgeResult = await runQwenAgentBridge({
         llmBaseUrl: this._qwenAgentModelServer(),
@@ -822,56 +680,8 @@ class QueryEngine {
       this.state.totalUsage.completion_calls += 1;
       this.state.totalUsage.streamed_completion_calls += 1;
 
-      const runTrace = this.state.trace.slice(traceStartIndex);
-      const totalToolUses = Number(prefetch?.toolCallCount || 0) + Number(bridgeResult?.toolCallCount || 0);
-      let assistantText = toStringValue(bridgeResult?.answer);
-      if ((!assistantText || looksLikeProgressOnlyAnswer(assistantText)) && runTrace.length > 0) {
-        const retryReason = assistantText ? 'progress_only_answer' : 'missing_final_answer';
-        this._recordTransition('qwen_agent_finalize_retry', {
-          reason: retryReason,
-          toolUses: totalToolUses,
-        });
-        await onStatus({ phase: 'finalize', message: 'Synthesizing final answer from tool results...' });
-        const finalBridgeResult = await runQwenAgentBridge({
-          llmBaseUrl: this._qwenAgentModelServer(),
-          model: this.model,
-          systemPrompt: [
-            systemPrompt,
-            'The previous tool run ended without a complete final answer.',
-            'Do not call tools. Produce the final user-facing answer now from the collected observations.',
-          ].join('\n'),
-          messages: [{
-            role: 'user',
-            content: [
-              `Original user request:\n${toStringValue(runContext?.prompt || prompt)}`,
-              summarizeTraceForFinalAnswer(runTrace),
-            ].join('\n\n'),
-          }],
-          toolDefinitions: [],
-          runtime: this.runtime,
-          activeToolNames: [],
-          maxTokens: Number(process.env.PIXLLM_QWEN_AGENT_MAX_TOKENS || DEFAULT_QWEN_AGENT_MAX_TOKENS),
-          maxLlmCalls: 1,
-          enableThinking: shouldEnableQwenAgentThinking(),
-          signal,
-          onToolUse,
-          onToolResult,
-          onToolBatchStart,
-          onToolBatchEnd,
-          onStatus,
-          onModelToken: async (payload) => {
-            this.state.totalUsage.streamed_chars += String(payload?.delta || '').length;
-            await onModelToken({
-              ...payload,
-              turn: 1,
-            });
-          },
-          recordTranscript: (entry) => this._recordTranscript(entry),
-        });
-        this.state.totalUsage.completion_calls += 1;
-        this.state.totalUsage.streamed_completion_calls += 1;
-        assistantText = toStringValue(finalBridgeResult?.answer) || assistantText;
-      }
+      const totalToolUses = Number(bridgeResult?.toolCallCount || 0);
+      const assistantText = toStringValue(bridgeResult?.answer);
       if (!assistantText) {
         throw new Error('qwen-agent did not produce a final answer');
       }

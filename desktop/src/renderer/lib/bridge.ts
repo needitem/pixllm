@@ -37,16 +37,6 @@ export function subscribeDesktopEvent<T>(
   return subscribe(callback);
 }
 
-export function normalizeDesktopItems<T>(data: unknown): T[] {
-  if (Array.isArray(data)) {
-    return data as T[];
-  }
-  if (data && typeof data === 'object' && Array.isArray((data as { items?: unknown[] }).items)) {
-    return (data as { items: T[] }).items;
-  }
-  return [];
-}
-
 export const desktop = new Proxy({} as DesktopBridge, {
   get: (_target, name) => (...args: unknown[]) => invokeDesktop(name as keyof DesktopBridge, ...args)
 }) as DesktopBridge;

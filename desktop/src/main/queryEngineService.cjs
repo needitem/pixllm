@@ -2,7 +2,6 @@ const { randomUUID } = require('node:crypto');
 const { QueryEngine } = require('./QueryEngine.cjs');
 
 const ENGINE_REGISTRY = new Map();
-const QUESTION_REGISTRY = new Map();
 
 function toStringValue(value) {
   return String(value || '').trim();
@@ -72,21 +71,6 @@ async function startLocalAgentStream(eventSender, streamControllers, payload = {
         onToolBatchStart: async (toolBatch) => emit('tool_batch_start', toolBatch),
         onToolBatchEnd: async (toolBatch) => emit('tool_batch_end', toolBatch),
         onTerminal: async (terminal) => emit('terminal', terminal),
-        onUserQuestion: async (question) => {
-          const questionId = randomUUID();
-          emit('user_question', {
-            questionId,
-            title: toStringValue(question?.title || 'Question'),
-            prompt: toStringValue(question?.prompt),
-            placeholder: toStringValue(question?.placeholder),
-            defaultValue: toStringValue(question?.defaultValue),
-            allowEmpty: Boolean(question?.allowEmpty),
-          });
-          return await new Promise((resolve) => {
-            QUESTION_REGISTRY.set(`${requestId}::${questionId}`, resolve);
-          });
-        },
-        onBrief: async (brief) => emit('brief', brief),
         onToken: async (token) => emit('token', { content: token }),
       });
       emit('done', {
@@ -115,16 +99,6 @@ async function startLocalAgentStream(eventSender, streamControllers, payload = {
         local_summary: typeof engine?.state?.terminalReason === 'string' ? engine.state.terminalReason : '',
       });
     } finally {
-      for (const key of Array.from(QUESTION_REGISTRY.keys())) {
-        if (!key.startsWith(`${requestId}::`)) continue;
-        const resolve = QUESTION_REGISTRY.get(key);
-        QUESTION_REGISTRY.delete(key);
-        try {
-          resolve('');
-        } catch {
-          // ignore
-        }
-      }
       streamControllers.delete(requestId);
     }
   };
@@ -143,20 +117,8 @@ async function cancelLocalAgentStream(streamControllers, requestId) {
   return { ok: true, requestId };
 }
 
-async function answerLocalAgentQuestion(requestId, questionId, answer = '') {
-  const key = `${toStringValue(requestId)}::${toStringValue(questionId)}`;
-  const resolve = QUESTION_REGISTRY.get(key);
-  if (!resolve) {
-    return { ok: false, requestId: toStringValue(requestId), questionId: toStringValue(questionId) };
-  }
-  QUESTION_REGISTRY.delete(key);
-  resolve(toStringValue(answer));
-  return { ok: true, requestId: toStringValue(requestId), questionId: toStringValue(questionId) };
-}
-
 module.exports = {
   startLocalAgentStream,
   cancelLocalAgentStream,
-  answerLocalAgentQuestion,
   resetLocalAgentEngine,
 };

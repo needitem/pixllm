@@ -20,11 +20,6 @@ export function compactEndpoint(value: string): string {
     .trim();
 }
 
-export function resolveWikiId(value: string): string {
-  const normalized = String(value || '').trim().toLowerCase();
-  return normalized || 'engine';
-}
-
 export function formatDateTime(value: string | Date | null | undefined): string {
   if (!value) return 'Not available';
   const date = value instanceof Date ? value : new Date(value);

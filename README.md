@@ -75,7 +75,7 @@ PIXLLM은 로컬 코드베이스를 기준으로 질문하고, 실행 로그와 
 
 ## NXImageView 질문 응답 예시
 
-아래 캡처는 `TEST` 워크스페이스에서 `nximageview 써서, 이미지 로드한다음 보여주는 흐름 설명해줘` 같은 질문을 실행한 실제 앱 화면입니다. 현재 데스크톱은 위키와 검증된 참조를 바탕으로 설명과 근거를 정리하는 데 초점을 두며, 실행 가능한 새 프로그램 파일을 생성하는 계약은 포함하지 않습니다.
+아래 캡처는 `TEST` 워크스페이스에서 `nximageview 써서, 이미지 로드한다음 보여주는 흐름 설명해줘` 같은 질문을 실행한 실제 앱 화면입니다. 현재 데스크톱은 소스 참조와 검증된 선언을 바탕으로 설명과 근거를 정리하는 데 초점을 두며, 실행 가능한 새 프로그램 파일을 생성하는 계약은 포함하지 않습니다.
 
 ![TEST 워크스페이스 NXImageView 응답 화면](docs/assets/pixllm-desktop-test-nximageview-response.png)
 
@@ -118,7 +118,7 @@ npm run dist:portable
 ## 저장소 구조
 
 - `desktop/`: Electron 기반 데스크톱 앱
-- `backend/`: FastAPI 기반 위키 저장/검색 API
+- `backend/`: FastAPI 기반 소스 참조 검색 API
 - `docs/`: 참고 문서와 이미지 자산
 
 자주 보게 되는 파일은 아래와 같습니다.
@@ -126,7 +126,7 @@ npm run dist:portable
 - `desktop/src/renderer/App.svelte`
 - `desktop/src/main/`
 - `backend/app/`
-- `backend/.profiles/wiki_config.yaml`
+- `backend/.profiles/raw_source/source`
 
 ## 검증 명령
 

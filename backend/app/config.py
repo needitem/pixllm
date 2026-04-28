@@ -7,26 +7,16 @@ def env(name: str, default: str) -> str:
     return value if value not in (None, "") else default
 
 
-def env_int(name: str, default: int) -> int:
-    value = os.getenv(name)
-    if value in (None, ""):
-        return default
-    try:
-        return int(str(value).strip())
-    except Exception:
-        return default
-
-
-APP_NAME = env("PIXLLM_APP_NAME", "PIXLLM Wiki API")
+APP_NAME = env("PIXLLM_APP_NAME", "PIXLLM Source API")
 API_PREFIX = env("PIXLLM_API_PREFIX", "/api/v1")
-WIKI_PROFILE_DIR = env("WIKI_PROFILE_DIR", ".profiles")
-ANSWER_MODE = env("PIXLLM_ANSWER_MODE", "wiki-only")
-WORKFLOW_CLASSIFIER_URL = env("WORKFLOW_CLASSIFIER_URL", "")
-WORKFLOW_CLASSIFIER_MODEL = env("WORKFLOW_CLASSIFIER_MODEL", "")
-WORKFLOW_FAMILY_RANK_MARGIN = max(0, env_int("WORKFLOW_FAMILY_RANK_MARGIN", 18))
+SOURCE_DATA_DIR = env("PIXLLM_SOURCE_DATA_DIR", ".profiles")
+SOURCE_RUNTIME_DIR = env("SOURCE_RUNTIME_DIR", str(Path(SOURCE_DATA_DIR) / "source"))
+LLM_BASE_URL = env("PIXLLM_LLM_BASE_URL", "http://192.168.2.212:8000/v1")
+DEFAULT_MODEL = env("PIXLLM_DEFAULT_MODEL", "Qwen/Qwen3.6-27B")
 
 _BACKEND_ROOT = Path(__file__).resolve().parents[1]
+_SOURCE_DATA_ROOT = _BACKEND_ROOT / SOURCE_DATA_DIR
 RAW_SOURCE_ROOT = env(
     "RAW_SOURCE_ROOT",
-    str((_BACKEND_ROOT / WIKI_PROFILE_DIR / "wiki" / "raw_source" / "source").resolve()),
+    str((_SOURCE_DATA_ROOT / "raw_source" / "source").resolve()),
 )

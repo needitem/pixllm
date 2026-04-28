@@ -34,12 +34,12 @@ function ensureSessionsLayout() {
   fs.mkdirSync(sessionsItemsRoot(), { recursive: true });
 }
 
-function readJson(target, fallback) {
-  if (!fs.existsSync(target)) return fallback;
+function readJson(target, defaultValue) {
+  if (!fs.existsSync(target)) return defaultValue;
   try {
     return JSON.parse(fs.readFileSync(target, 'utf-8'));
   } catch {
-    return fallback;
+    return defaultValue;
   }
 }
 
@@ -68,24 +68,6 @@ function normalizeLocalTraceStep(step, index) {
   };
 }
 
-function normalizeRunSnapshot(snapshot) {
-  if (!snapshot || typeof snapshot !== 'object') {
-    return null;
-  }
-  return {
-    runId: String(snapshot.runId || ''),
-    status: typeof snapshot.status === 'string' ? snapshot.status : '',
-    responseType: typeof snapshot.responseType === 'string' ? snapshot.responseType : '',
-    tasks: Array.isArray(snapshot.tasks) ? snapshot.tasks : [],
-    approvals: Array.isArray(snapshot.approvals) ? snapshot.approvals : [],
-    artifacts: Array.isArray(snapshot.artifacts) ? snapshot.artifacts : [],
-    metadata: snapshot.metadata && typeof snapshot.metadata === 'object' && !Array.isArray(snapshot.metadata)
-      ? snapshot.metadata
-      : undefined,
-    editSummaries: Array.isArray(snapshot.editSummaries) ? snapshot.editSummaries : []
-  };
-}
-
 function normalizePlainObject(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : undefined;
 }
@@ -98,7 +80,6 @@ function normalizeMessage(message, index) {
     timestamp: String(message?.timestamp || nowIso()),
     status: typeof message?.status === 'string' ? message.status : '',
     state: typeof message?.state === 'string' ? message.state : 'done',
-    runId: typeof message?.runId === 'string' ? message.runId : '',
     statusEvents: Array.isArray(message?.statusEvents)
       ? message.statusEvents.map((item) => normalizeStatusEvent(item))
       : [],
@@ -110,7 +91,6 @@ function normalizeMessage(message, index) {
       : [],
     localSummary: typeof message?.localSummary === 'string' ? message.localSummary : '',
     localError: typeof message?.localError === 'string' ? message.localError : '',
-    runSnapshot: normalizeRunSnapshot(message?.runSnapshot),
     reasoningSummary: normalizePlainObject(message?.reasoningSummary),
     reasoningTrace: Array.isArray(message?.reasoningTrace) ? message.reasoningTrace : [],
     reasoningNarrative: Array.isArray(message?.reasoningNarrative)

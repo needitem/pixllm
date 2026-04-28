@@ -253,9 +253,6 @@ async function normalizeToolInvocation(tool, input, context) {
     tool?.workspaceRelativePaths,
     context?.workspacePath,
   );
-  if (typeof tool?.backfillObservableInput === 'function') {
-    await tool.backfillObservableInput(rawInput, context);
-  }
   const schema = normalizeInputSchema(tool?.inputSchema);
   const validation = validateValueAgainstSchema(rawInput, schema, 'input');
   if (!validation.ok) {
@@ -313,10 +310,7 @@ function toolMatchesName(tool, name) {
   if (!tool || !normalizedName) {
     return false;
   }
-  if (toStringValue(tool.name).toLowerCase() === normalizedName) {
-    return true;
-  }
-  return toStringList(tool.aliases).map((item) => item.toLowerCase()).includes(normalizedName);
+  return toStringValue(tool.name).toLowerCase() === normalizedName;
 }
 
 function findToolByName(tools, name) {
@@ -326,9 +320,6 @@ function findToolByName(tools, name) {
 
 function defineLocalTool(definition = {}) {
   return {
-    aliases: toStringList(definition.aliases),
-    searchHint: toStringValue(definition.searchHint),
-    laneAffinity: toStringList(definition.laneAffinity),
     workspaceRelativePaths: toStringList(definition.workspaceRelativePaths),
     kind: toStringValue(definition.kind || 'read'),
     inputSchema: normalizeInputSchema(definition.inputSchema),
@@ -344,10 +335,6 @@ function defineLocalTool(definition = {}) {
       typeof definition.checkPermissions === 'function'
         ? definition.checkPermissions
         : async (input) => ({ allow: true, input }),
-    backfillObservableInput:
-      typeof definition.backfillObservableInput === 'function'
-        ? definition.backfillObservableInput
-        : async () => {},
     getToolUseSummary:
       typeof definition.getToolUseSummary === 'function' ? definition.getToolUseSummary : () => null,
     getObservationEvidenceKinds:

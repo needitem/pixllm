@@ -1,5 +1,3 @@
-import type { ExecutionRun } from './api';
-
 export type DiffLineView = {
   type: 'context' | 'add' | 'remove';
   oldNumber?: number;
@@ -183,28 +181,4 @@ export function diffViewsFromUnknown(value: unknown): DiffFileView[] {
   }
 
   return uniqueDiffViews(results);
-}
-
-export function extractEditSummaries(runDetail: ExecutionRun) {
-  const texts: string[] = [];
-  for (const artifact of Array.isArray(runDetail.artifacts) ? runDetail.artifacts : []) {
-    if (typeof artifact.content === 'string') {
-      texts.push(artifact.content);
-    }
-  }
-  for (const task of Array.isArray(runDetail.tasks) ? runDetail.tasks : []) {
-    for (const step of Array.isArray(task.steps) ? task.steps : []) {
-      if (typeof step.output_preview === 'string') {
-        texts.push(step.output_preview);
-      }
-    }
-  }
-
-  const parsed = texts.flatMap((text) => extractUnifiedDiffs(text));
-  const unique = new Map<string, DiffFileView>();
-  for (const item of parsed) {
-    const key = `${item.file}::${item.diff}`;
-    if (!unique.has(key)) unique.set(key, item);
-  }
-  return Array.from(unique.values());
 }

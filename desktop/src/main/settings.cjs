@@ -2,7 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { ensureDesktopDataRoot } = require('./storage_paths.cjs');
 
-const SETTINGS_KEYS = ['serverBaseUrl', 'llmBaseUrl', 'workspacePath', 'selectedModel', 'wikiId', 'engineQuestionDefault', 'recentWorkspaces'];
+const SETTINGS_KEYS = ['serverBaseUrl', 'llmBaseUrl', 'workspacePath', 'selectedModel', 'engineQuestionDefault', 'recentWorkspaces'];
 const DEFAULT_MODEL = 'Qwen/Qwen3.6-27B';
 
 function settingsPath() {
@@ -15,7 +15,6 @@ function defaultSettings() {
     llmBaseUrl: process.env.PIXLLM_LLM_BASE_URL || '',
     workspacePath: '',
     selectedModel: DEFAULT_MODEL,
-    wikiId: 'engine',
     engineQuestionDefault: true,
     recentWorkspaces: []
   };
@@ -44,7 +43,6 @@ function finalizeSettings(source) {
   const selectedModel = typeof source?.selectedModel === 'string'
     ? source.selectedModel.trim() || DEFAULT_MODEL
     : DEFAULT_MODEL;
-  const wikiId = typeof source?.wikiId === 'string' ? source.wikiId.trim() : '';
   const recentWorkspaces = normalizeWorkspaceList([
     workspacePath,
     ...(Array.isArray(source?.recentWorkspaces) ? source.recentWorkspaces : [])
@@ -54,7 +52,6 @@ function finalizeSettings(source) {
     ...source,
     workspacePath,
     selectedModel,
-    wikiId,
     recentWorkspaces
   };
 }
@@ -68,8 +65,6 @@ function normalizeSettings(source) {
       normalized[key] = Boolean(source?.engineQuestionDefault);
     } else if (key === 'selectedModel') {
       normalized[key] = typeof source?.[key] === 'string' ? source[key].trim() : '';
-    } else if (key === 'wikiId') {
-      normalized[key] = typeof source?.wikiId === 'string' ? source.wikiId : '';
     } else if (typeof source?.[key] === 'string') {
       normalized[key] = source[key];
     }
