@@ -1,5 +1,5 @@
 export function getWorkspaceName(workspacePath: string): string {
-  if (!workspacePath) return 'Reference mode';
+  if (!workspacePath) return 'Source agent';
   const parts = workspacePath.replace(/\\/g, '/').split('/').filter(Boolean);
   return parts[parts.length - 1] || workspacePath;
 }
@@ -40,7 +40,7 @@ export function summarizeWorkspaceState(
   dirtyCount: number,
   diffCount: number
 ): string {
-  if (!workspacePath) return 'Backend reference mode is active. Searches run against the server on 192.168.2.238.';
+  if (!workspacePath) return 'Backend source agent is active on 192.168.2.238.';
   if (dirtyCount === 0 && diffCount === 0) return 'Workspace is clean and ready for a new run.';
   if (dirtyCount > 0 && diffCount > 0) {
     return `${dirtyCount} tracked changes across ${diffCount} files.`;

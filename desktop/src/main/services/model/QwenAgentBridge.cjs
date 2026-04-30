@@ -39,7 +39,43 @@ function clipText(value = '', maxChars = 3500) {
 
 function toolResultCharLimit(toolName = '') {
   void toolName;
-  return process.env.PIXLLM_QWEN_AGENT_TOOL_RESULT_CHARS || 3500;
+  const parsed = Number(process.env.PIXLLM_QWEN_AGENT_TOOL_RESULT_CHARS || 2500);
+  if (!Number.isFinite(parsed)) {
+    return 2500;
+  }
+  return Math.max(1000, Math.min(4000, Math.floor(parsed)));
+}
+
+function compactParameterSchema(schema = {}) {
+  const source = schema && typeof schema === 'object' && !Array.isArray(schema) ? schema : {};
+  const sourceProperties = source.properties && typeof source.properties === 'object' && !Array.isArray(source.properties)
+    ? source.properties
+    : {};
+  const properties = {};
+  for (const [name, definition] of Object.entries(sourceProperties)) {
+    if (!definition || typeof definition !== 'object' || Array.isArray(definition)) {
+      continue;
+    }
+    const compact = {};
+    for (const key of ['type', 'enum', 'items', 'minimum', 'maximum', 'minLength', 'maxLength']) {
+      if (Object.prototype.hasOwnProperty.call(definition, key)) {
+        compact[key] = definition[key];
+      }
+    }
+    properties[name] = Object.keys(compact).length > 0 ? compact : { type: 'string' };
+  }
+  const required = Array.isArray(source.required)
+    ? source.required.map((item) => toStringValue(item)).filter((item) => item && properties[item])
+    : [];
+  const compactSchema = {
+    type: toStringValue(source.type) || 'object',
+    properties,
+    required,
+  };
+  if (Object.prototype.hasOwnProperty.call(source, 'additionalProperties')) {
+    compactSchema.additionalProperties = source.additionalProperties;
+  }
+  return compactSchema;
 }
 
 function normalizeToolDefinitions(toolDefinitions = []) {
@@ -48,7 +84,7 @@ function normalizeToolDefinitions(toolDefinitions = []) {
       name: toStringValue(tool?.name),
       description: toStringValue(tool?.description),
       parameters: tool?.parameters && typeof tool.parameters === 'object' && !Array.isArray(tool.parameters)
-        ? tool.parameters
+        ? compactParameterSchema(tool.parameters)
         : {
             type: 'object',
             properties: {},

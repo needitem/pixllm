@@ -10,6 +10,8 @@ from ..schemas.source import (
     SourceReadRequest,
     SourceSearchRequest,
     SourceSymbolSearchRequest,
+    SourceTypeGraphRequest,
+    SourceUsagesRequest,
 )
 from ..services.source import agent as source_agent
 from ..services.source import service as source_service
@@ -66,6 +68,16 @@ async def grep_source(payload: SourceGrepRequest):
 @router.post("/symbols")
 async def search_source_symbols(payload: SourceSymbolSearchRequest):
     return ok(source_service.symbol_search(payload.query, limit=payload.limit))
+
+
+@router.post("/type-graph")
+async def source_type_graph(payload: SourceTypeGraphRequest):
+    return ok(source_service.type_graph(payload.query, limit=payload.limit))
+
+
+@router.post("/usages")
+async def source_usages(payload: SourceUsagesRequest):
+    return ok(source_service.source_usages(payload.query, limit=payload.limit))
 
 
 @router.post("/search")

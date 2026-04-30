@@ -1120,11 +1120,11 @@
           <div class="section-row">
             <div>
               <div class="section-title">Workspaces</div>
-              <div class="muted small">Switch local context, or clear it to search backend reference code only.</div>
+              <div class="muted small">Switch local workspace, or clear it to use the backend source agent.</div>
             </div>
             <div class="actions">
               {#if settings.workspacePath}
-                <button class="secondary" on:click={clearActiveWorkspace}>Reference</button>
+                <button class="secondary" on:click={clearActiveWorkspace}>Source agent</button>
               {/if}
               <button class="primary" on:click={addWorkspace}>Add</button>
             </div>
@@ -1212,7 +1212,7 @@
                   Workspace
                 </button>
                 <button class:active={viewMode === 'source'} on:click={() => (viewMode = 'source')}>
-                  Source Reference
+                  Source Explorer
                 </button>
               </div>
               <button class="secondary" on:click={toggleSidebar}>
@@ -1266,8 +1266,8 @@
             <section class="panel source-workspace-panel source-tab-panel">
               <div class="panel-head">
                 <div>
-                  <div class="section-title">Source Reference</div>
-                  <div class="muted small">Browse raw backend source declarations and snippets used for reference answers.</div>
+                  <div class="section-title">Source Explorer</div>
+                  <div class="muted small">Browse raw backend source declarations and snippets available to the source agent.</div>
                 </div>
                 <div class="panel-head-meta">
                   <span class="pill neutral">raw source</span>
@@ -1320,7 +1320,7 @@
                       {/each}
                     </div>
                   {:else}
-                    <div class="empty-state compact-empty">No source reference entries available.</div>
+                    <div class="empty-state compact-empty">No source entries available.</div>
                   {/if}
                 </div>
 
@@ -1533,7 +1533,7 @@
                   {/each}
                 {:else}
                   <div class="empty-state conversation-empty">
-                    Start with a prompt about backend reference code, a failing build, or a file you want changed.
+                    Start with a prompt about backend source code, a failing build, or a file you want changed.
                   </div>
                 {/if}
               </div>
@@ -1547,11 +1547,11 @@
                 <div class="muted small">
                   {settings.workspacePath
                     ? 'Workspace context is attached automatically. Ask for fixes, reviews, or implementation work.'
-                    : 'No local workspace is attached. Requests will use backend reference code on 192.168.2.238.'}
+                    : 'No local workspace is attached. Requests will use the backend source agent on 192.168.2.238.'}
                 </div>
               </div>
               <div class="panel-head-meta">
-                <span class="pill neutral">{settings.workspacePath ? 'Context on' : 'Reference only'}</span>
+                <span class="pill neutral">{settings.workspacePath ? 'Context on' : 'Source agent'}</span>
               </div>
             </div>
 
@@ -1561,7 +1561,7 @@
               rows="3"
               placeholder={settings.workspacePath
                 ? 'Describe the change you want, the file you care about, or the problem to fix.'
-                : 'Describe the symbol, API, or feature you want to find in backend reference code.'}
+                : 'Describe the symbol, API, or feature you want the backend source agent to inspect.'}
               on:keydown={handleComposerKeydown}
             ></textarea>
           </label>
@@ -1582,7 +1582,7 @@
                   ? engineQuestionChecked
                     ? '체크됨: 백엔드 원본 소스 기준으로 찾습니다.'
                     : '해제됨: 현재 워크스페이스 로컬 코드 기준으로 봅니다.'
-                  : '워크스페이스가 없어서 백엔드 원본 소스 검색만 사용합니다.'}
+                  : '워크스페이스가 없어서 백엔드 소스 에이전트를 사용합니다.'}
               </div>
             </div>
             <button

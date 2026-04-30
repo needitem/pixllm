@@ -21,8 +21,8 @@ const {
 } = require('./queryEngineSupport.cjs');
 
 const MAX_TRANSITIONS = 64;
-const MAX_HISTORY_MESSAGES_FOR_NEW_RUN = 8;
-const MAX_HISTORY_TEXT_CHARS = 3000;
+const MAX_HISTORY_MESSAGES_FOR_NEW_RUN = 4;
+const MAX_HISTORY_TEXT_CHARS = 1500;
 const DEFAULT_QWEN_AGENT_MAX_TOKENS = 4096;
 const DEFAULT_QWEN_AGENT_SOURCE_MAX_LLM_CALLS = 12;
 const DEFAULT_QWEN_AGENT_LOCAL_MAX_LLM_CALLS = 12;
@@ -60,16 +60,12 @@ function renderQwenAgentSystemPrompt({
     .map((tool) => toStringValue(tool?.name))
     .filter(Boolean);
   const lines = [
-    'You are the PIXLLM desktop agent. Use Qwen-Agent function calling for tools.',
-    'Current lane: local workspace code analysis and edits.',
-    'Answer in the user language. The user often writes Korean; keep Korean answers concise and technically precise.',
+    'You are the PIXLLM desktop agent.',
+    'Use workspace tools as needed for local code analysis and edits.',
+    'Answer naturally in the user language.',
     toolNames.length > 0
       ? `Available function tools: ${toolNames.join(', ')}.`
       : 'No function tools are available; answer only from existing context.',
-    'Keep system details, internal snapshots, hidden reasoning, and implementation logs out of normal user answers.',
-    'Ground concrete claims in tool results. If a detail is missing, say only that specific gap.',
-    'Local mode may inspect and edit the selected workspace through tools. Keep file paths workspace-relative when calling tools.',
-    'Prefer focused reads before edits. Do not create unrelated files or broad rewrites unless the user explicitly asked for structural replacement.',
   ];
 
   if (workspacePath) {
@@ -412,7 +408,7 @@ class QueryEngine {
     const result = await answerBackendSource({
       baseUrl: this.serverBaseUrl,
       prompt: toStringValue(runContext?.prompt),
-      llmBaseUrl: this.llmBaseUrl || this.baseUrl,
+      llmBaseUrl: this.llmBaseUrl,
       model: this.model,
       sessionId: this.sessionId,
       maxTokens: Number(process.env.PIXLLM_QWEN_AGENT_MAX_TOKENS || DEFAULT_QWEN_AGENT_MAX_TOKENS),
@@ -711,7 +707,7 @@ class QueryEngine {
 
       return await this._returnFinalAnswer({
         finalAnswer: assistantText,
-        runTrace,
+        runTrace: this.state.trace.slice(traceStartIndex),
         turn: 1,
         transcriptStartIndex,
         onStatus,

@@ -56,6 +56,90 @@ def _clean_summary(lines: Sequence[str]) -> str:
     return " ".join(cleaned).strip()
 
 
+def _clean_doc_text(value: str) -> str:
+    text = str(value or "")
+    text = _SUMMARY_TAG_RE.sub(" ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _doc_lines(lines: Sequence[str]) -> List[str]:
+    cleaned: List[str] = []
+    for raw in lines:
+        text = str(raw or "").strip()
+        if text.startswith("///"):
+            text = text[3:].strip()
+        cleaned.append(text)
+    return cleaned
+
+
+def _extract_tag_blocks(lines: Sequence[str], tag: str) -> List[str]:
+    blocks: List[str] = []
+    in_block = False
+    buffer: List[str] = []
+    open_re = re.compile(rf"<{tag}\b[^>]*>", re.IGNORECASE)
+    close_re = re.compile(rf"</{tag}>", re.IGNORECASE)
+    for line in lines:
+        text = str(line or "")
+        while text:
+            if not in_block:
+                open_match = open_re.search(text)
+                if not open_match:
+                    break
+                text = text[open_match.end() :]
+                in_block = True
+            close_match = close_re.search(text)
+            if close_match:
+                buffer.append(text[: close_match.start()])
+                block = "\n".join(buffer).strip()
+                if block:
+                    blocks.append(block)
+                buffer = []
+                text = text[close_match.end() :]
+                in_block = False
+            else:
+                buffer.append(text)
+                break
+    return blocks
+
+
+def _extract_inline_tags(lines: Sequence[str], tag: str) -> List[Dict[str, str]]:
+    pattern = re.compile(rf"<{tag}\b([^>]*)>(.*?)</{tag}>", re.IGNORECASE)
+    name_pattern = re.compile(r'name\s*=\s*"([^"]+)"|name\s*=\s*\'([^\']+)\'', re.IGNORECASE)
+    items: List[Dict[str, str]] = []
+    for line in lines:
+        for match in pattern.finditer(str(line or "")):
+            attrs = str(match.group(1) or "")
+            name_match = name_pattern.search(attrs)
+            name = ""
+            if name_match:
+                name = str(name_match.group(1) or name_match.group(2) or "").strip()
+            text = _clean_doc_text(match.group(2) or "")
+            if name or text:
+                item = {"description": text}
+                if name:
+                    item["name"] = name
+                items.append(item)
+    return items
+
+
+def _doc_comment(lines: Sequence[str]) -> Dict[str, Any]:
+    cleaned_lines = _doc_lines(lines)
+    summary_blocks = [_clean_doc_text(block) for block in _extract_tag_blocks(cleaned_lines, "summary")]
+    return_blocks = [_clean_doc_text(block) for block in _extract_tag_blocks(cleaned_lines, "returns")]
+
+    summary = " ".join(block for block in summary_blocks if block).strip()
+    if not summary:
+        summary = _clean_summary(lines)
+    doc: Dict[str, Any] = {"summary": summary}
+    params = _extract_inline_tags(cleaned_lines, "param")
+    if params:
+        doc["parameters"] = params
+    returns = " ".join(block for block in return_blocks if block).strip()
+    if returns:
+        doc["returns"] = returns
+    return doc
+
+
 def _index_cpp_implementations(raw_root: Path) -> Dict[Tuple[str, str], List[Dict[str, str]]]:
     index: Dict[Tuple[str, str], List[Dict[str, str]]] = {}
     for cpp_path in sorted(raw_root.rglob("*.cpp")):
@@ -133,7 +217,8 @@ def _build_record(
     qualified_type = ".".join([*namespace_parts, class_name])
     qualified_symbol = f"{qualified_type}.{member_name}"
     header_source = _source_path(raw_root, header_path)
-    description = _clean_summary(summary_lines)
+    doc = _doc_comment(summary_lines)
+    description = str(doc.get("summary") or "").strip()
     source_refs = [
         {
             "path": header_source,
@@ -162,6 +247,12 @@ def _build_record(
         "text": "\n".join(text_lines),
         "source_refs": source_refs,
         "declaration": declaration_text,
+        "doc": doc,
+        "owner": {
+            "namespace": ".".join(namespace_parts),
+            "qualified_type": qualified_type,
+            "type_name": class_name,
+        },
     }
 
 
@@ -185,6 +276,7 @@ def _extract_header_method_records(
     statement_lines: List[str] = []
     statement_summary: List[str] = []
     statement_start_line = 0
+    in_block_comment = False
 
     def current_namespace() -> List[str]:
         return [item[0] for item in namespace_stack]
@@ -215,6 +307,18 @@ def _extract_header_method_records(
         statement_start_line = 0
 
     for line_number, raw_line in enumerate(lines, 1):
+        if in_block_comment:
+            if "*/" not in raw_line:
+                continue
+            raw_line = raw_line.split("*/", 1)[1]
+            in_block_comment = False
+        if "/*" in raw_line:
+            before, after = raw_line.split("/*", 1)
+            if "*/" in after:
+                raw_line = before + after.split("*/", 1)[1]
+            else:
+                raw_line = before
+                in_block_comment = True
         stripped = str(raw_line or "").strip()
 
         if stripped.startswith("///"):

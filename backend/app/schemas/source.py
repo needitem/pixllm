@@ -6,12 +6,12 @@ from pydantic import BaseModel
 class SourceListRequest(BaseModel):
     path: Optional[str] = None
     depth: int = 1
-    limit: int = 200
+    limit: int = 80
 
 
 class SourceGlobRequest(BaseModel):
     pattern: str = "**/*"
-    limit: int = 200
+    limit: int = 80
 
 
 class SourceGrepRequest(BaseModel):
@@ -19,13 +19,23 @@ class SourceGrepRequest(BaseModel):
     path_glob: Optional[str] = None
     regex: bool = False
     case_sensitive: bool = False
-    limit: int = 50
-    context: int = 2
+    limit: int = 20
+    context: int = 1
 
 
 class SourceSymbolSearchRequest(BaseModel):
     query: str
-    limit: int = 20
+    limit: int = 10
+
+
+class SourceTypeGraphRequest(BaseModel):
+    query: str
+    limit: int = 12
+
+
+class SourceUsagesRequest(BaseModel):
+    query: str
+    limit: int = 12
 
 
 class SourceSearchRequest(BaseModel):
