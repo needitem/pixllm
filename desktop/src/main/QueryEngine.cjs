@@ -9,6 +9,7 @@ const {
   toStringValue,
 } = require('./query/blocks.cjs');
 const { loadAgentState, saveAgentState } = require('./state/agentStateStore.cjs');
+const { DEFAULT_LLM_BASE_URL } = require('./settings.cjs');
 const { listTasks, listTerminalCaptures } = require('./tasks/taskRuntime.cjs');
 const { readObservationsFromTrace } = require('./queryTrace.cjs');
 const {
@@ -355,11 +356,14 @@ class QueryEngine {
   }
 
   _qwenAgentModelServer() {
-    const direct = toStringValue(this.llmBaseUrl || this.baseUrl);
+    const direct = toStringValue(this.llmBaseUrl || process.env.PIXLLM_LLM_BASE_URL || DEFAULT_LLM_BASE_URL || this.baseUrl);
     if (direct && !isBackendApiUrl(direct)) {
       return direct;
     }
-    throw new Error('Qwen-Agent requires llmBaseUrl pointing to an OpenAI API /v1 server.');
+    throw new Error(
+      'Local mode requires an OpenAI-compatible LLM base URL, for example http://192.168.2.212:8000/v1. '
+      + 'Set Connection > LLM Base URL; Server API URL is only for the backend source API.',
+    );
   }
 
   _messagesForAgent(extraMessages = []) {

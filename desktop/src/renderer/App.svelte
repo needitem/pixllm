@@ -83,7 +83,7 @@
 
   const DEFAULT_SETTINGS: DesktopSettings = {
     serverBaseUrl: 'http://192.168.2.238:8000/api',
-    llmBaseUrl: '',
+    llmBaseUrl: 'http://192.168.2.212:8000/v1',
     workspacePath: '',
     selectedModel: 'Qwen/Qwen3.6-27B',
     engineQuestionDefault: true,
@@ -1238,7 +1238,7 @@
               </label>
               <label class="field">
                 <span>LLM Base URL</span>
-                <input bind:value={settingsForm.llmBaseUrl} placeholder="Optional direct LLM URL" />
+                <input bind:value={settingsForm.llmBaseUrl} placeholder="http://192.168.2.212:8000/v1" />
               </label>
               <label class="field">
                 <span>Chat Model</span>

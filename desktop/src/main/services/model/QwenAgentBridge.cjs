@@ -7,6 +7,7 @@ const { ensureDesktopDataRoot } = require('../../storage_paths.cjs');
 
 let cachedPythonCommand = null;
 let cachedSidecarScriptPath = '';
+let cachedRequirementsPath = '';
 
 function toStringValue(value) {
   return String(value || '').trim();
@@ -189,6 +190,80 @@ function probePythonCandidate(candidate) {
   };
 }
 
+function shouldAutoInstallDependencies() {
+  return !['0', 'false', 'no', 'off'].includes(
+    toStringValue(process.env.PIXLLM_QWEN_AGENT_AUTO_INSTALL).toLowerCase(),
+  );
+}
+
+function resolveRequirementsPath() {
+  if (!cachedRequirementsPath) {
+    cachedRequirementsPath = materializeSidecarFile('qwen_agent_requirements.txt');
+  }
+  return cachedRequirementsPath;
+}
+
+function shouldTryDependencyInstall(reason = '') {
+  const text = toStringValue(reason).toLowerCase();
+  if (!text || text.includes('python_too_old')) {
+    return false;
+  }
+  return text.includes('no module named')
+    || text.includes('modulenotfounderror')
+    || text.includes('qwen_agent')
+    || text.includes('soundfile');
+}
+
+function installQwenAgentDependencies(candidate) {
+  if (!shouldAutoInstallDependencies()) {
+    return {
+      ok: false,
+      reason: 'automatic qwen-agent dependency install is disabled by PIXLLM_QWEN_AGENT_AUTO_INSTALL',
+    };
+  }
+  const requirementsPath = resolveRequirementsPath();
+  if (!fs.existsSync(requirementsPath)) {
+    return {
+      ok: false,
+      reason: `requirements file not found: ${requirementsPath}`,
+    };
+  }
+  const result = spawnSync(
+    candidate.command,
+    [
+      ...candidate.args,
+      '-m',
+      'pip',
+      'install',
+      '--upgrade',
+      '-r',
+      requirementsPath,
+    ],
+    {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+      timeout: 180000,
+    },
+  );
+  if (result.error) {
+    return {
+      ok: false,
+      reason: result.error.message,
+    };
+  }
+  if (result.status !== 0) {
+    return {
+      ok: false,
+      reason: toStringValue(result.stderr || result.stdout) || `pip_exit_${result.status}`,
+    };
+  }
+  return {
+    ok: true,
+    reason: toStringValue(result.stdout || result.stderr).slice(-2000),
+  };
+}
+
 function resolvePythonCommand() {
   if (cachedPythonCommand) {
     return cachedPythonCommand;
@@ -207,6 +282,37 @@ function resolvePythonCommand() {
         executable: probe.executable,
       };
       return cachedPythonCommand;
+    }
+    if (probe.executableFound && shouldTryDependencyInstall(probe.reason)) {
+      const install = installQwenAgentDependencies(candidate);
+      if (install.ok) {
+        const reprobe = probePythonCandidate(candidate);
+        if (reprobe.ok) {
+          cachedPythonCommand = {
+            command: candidate.command,
+            args: candidate.args,
+            source: `${candidate.source}:auto-installed`,
+            executable: reprobe.executable,
+          };
+          return cachedPythonCommand;
+        }
+        failures.push({
+          command: candidate.command,
+          args: candidate.args,
+          source: `${candidate.source}:after-auto-install`,
+          executableFound: reprobe.executableFound,
+          reason: reprobe.reason,
+        });
+        continue;
+      }
+      failures.push({
+        command: candidate.command,
+        args: candidate.args,
+        source: `${candidate.source}:auto-install-failed`,
+        executableFound: true,
+        reason: install.reason,
+      });
+      continue;
     }
     failures.push({
       command: candidate.command,
@@ -231,7 +337,8 @@ function resolvePythonCommand() {
   throw new Error(
     [
       'Python was found, but qwen-agent dependencies are not importable.',
-      'Install them with: python -m pip install qwen-agent==0.0.34 soundfile>=0.13.1',
+      'The app tried to install bundled requirements automatically.',
+      'Manual fallback: python -m pip install --upgrade qwen-agent==0.0.34 "soundfile>=0.13.1"',
       detail,
     ].filter(Boolean).join('\n'),
   );

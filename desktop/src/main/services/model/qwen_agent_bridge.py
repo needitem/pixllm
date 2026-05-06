@@ -195,9 +195,6 @@ def main():
             "temperature": float(llm.get("temperature", 0.2)),
             "max_tokens": int(llm.get("max_tokens", 4096)),
             "top_k": int(llm.get("top_k", 20)),
-            "chat_template_kwargs": {
-                "enable_thinking": bool(llm.get("enable_thinking", False)),
-            },
         }
         model_cfg = {
             "model": to_text(llm.get("model")),
@@ -223,7 +220,7 @@ def main():
             function_list=tools,
         )
 
-        emit("start", tool_count=len(tools), thinking=bool(generate_cfg["chat_template_kwargs"]["enable_thinking"]))
+        emit("start", tool_count=len(tools), thinking=bool(llm.get("enable_thinking", False)))
         last_messages = []
         last_answer = ""
         for responses in bot.run(messages=messages):

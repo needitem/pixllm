@@ -4,6 +4,7 @@ const { ensureDesktopDataRoot } = require('./storage_paths.cjs');
 
 const SETTINGS_KEYS = ['serverBaseUrl', 'llmBaseUrl', 'workspacePath', 'selectedModel', 'engineQuestionDefault', 'recentWorkspaces'];
 const DEFAULT_MODEL = 'Qwen/Qwen3.6-27B';
+const DEFAULT_LLM_BASE_URL = 'http://192.168.2.212:8000/v1';
 
 function settingsPath() {
   return path.join(ensureDesktopDataRoot(), 'settings.json');
@@ -12,7 +13,7 @@ function settingsPath() {
 function defaultSettings() {
   return {
     serverBaseUrl: 'http://192.168.2.238:8000/api',
-    llmBaseUrl: process.env.PIXLLM_LLM_BASE_URL || '',
+    llmBaseUrl: process.env.PIXLLM_LLM_BASE_URL || DEFAULT_LLM_BASE_URL,
     workspacePath: '',
     selectedModel: DEFAULT_MODEL,
     engineQuestionDefault: true,
@@ -40,6 +41,9 @@ function normalizeWorkspaceList(list) {
 
 function finalizeSettings(source) {
   const workspacePath = typeof source?.workspacePath === 'string' ? source.workspacePath.trim() : '';
+  const llmBaseUrl = typeof source?.llmBaseUrl === 'string' && source.llmBaseUrl.trim()
+    ? source.llmBaseUrl.trim()
+    : (process.env.PIXLLM_LLM_BASE_URL || DEFAULT_LLM_BASE_URL);
   const selectedModel = typeof source?.selectedModel === 'string'
     ? source.selectedModel.trim() || DEFAULT_MODEL
     : DEFAULT_MODEL;
@@ -50,6 +54,7 @@ function finalizeSettings(source) {
 
   return {
     ...source,
+    llmBaseUrl,
     workspacePath,
     selectedModel,
     recentWorkspaces
@@ -78,7 +83,7 @@ function readStoredSettings() {
     return {};
   }
   try {
-    const parsed = JSON.parse(fs.readFileSync(target, 'utf-8'));
+    const parsed = JSON.parse(fs.readFileSync(target, 'utf-8').replace(/^\uFEFF/, ''));
     return normalizeSettings(parsed);
   } catch {
     return {};
@@ -98,6 +103,7 @@ function saveSettings(patch) {
 }
 
 module.exports = {
+  DEFAULT_LLM_BASE_URL,
   loadSettings,
   saveSettings
 };
