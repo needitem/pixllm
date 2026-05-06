@@ -26,12 +26,14 @@ const MAX_HISTORY_MESSAGES_FOR_NEW_RUN = 4;
 const MAX_HISTORY_TEXT_CHARS = 1500;
 const DEFAULT_QWEN_AGENT_MAX_TOKENS = 4096;
 const DEFAULT_QWEN_AGENT_SOURCE_MAX_LLM_CALLS = 12;
-const DEFAULT_QWEN_AGENT_LOCAL_MAX_LLM_CALLS = 12;
+const DEFAULT_QWEN_AGENT_LOCAL_MAX_LLM_CALLS = 16;
 
 function shouldEnableQwenAgentThinking() {
-  return ['1', 'true', 'yes', 'on'].includes(
-    toStringValue(process.env.PIXLLM_QWEN_AGENT_ENABLE_THINKING).toLowerCase(),
-  );
+  const value = toStringValue(process.env.PIXLLM_QWEN_AGENT_ENABLE_THINKING).toLowerCase();
+  if (!value) {
+    return true;
+  }
+  return !['0', 'false', 'no', 'off'].includes(value);
 }
 
 function engineModeFromContext(requestContext = {}, workspacePath = '') {
@@ -62,8 +64,9 @@ function renderQwenAgentSystemPrompt({
     .filter(Boolean);
   const lines = [
     'You are the PIXLLM desktop agent.',
-    'Use workspace tools as needed for local code analysis and edits.',
-    'Answer naturally in the user language.',
+    'Use workspace tools autonomously when the answer depends on local code.',
+    'Inspect enough relevant files and symbols to support the answer; do not stop at the first small snippet when more context is needed.',
+    'Answer naturally in the user language, with enough detail for the task and without a fixed template.',
     toolNames.length > 0
       ? `Available function tools: ${toolNames.join(', ')}.`
       : 'No function tools are available; answer only from existing context.',

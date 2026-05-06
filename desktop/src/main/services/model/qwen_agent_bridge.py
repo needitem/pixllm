@@ -119,6 +119,31 @@ def normalize_parameters(schema):
     }
 
 
+def is_truthy(value):
+    if isinstance(value, bool):
+        return value
+    return to_text(value).lower() in {"1", "true", "yes", "on"}
+
+
+def apply_thinking_config(generate_cfg, llm):
+    if not is_truthy(llm.get("enable_thinking", False)):
+        return generate_cfg
+    extra_body = generate_cfg.get("extra_body")
+    if not isinstance(extra_body, dict):
+        extra_body = {}
+    else:
+        extra_body = dict(extra_body)
+    chat_template_kwargs = extra_body.get("chat_template_kwargs")
+    if not isinstance(chat_template_kwargs, dict):
+        chat_template_kwargs = {}
+    else:
+        chat_template_kwargs = dict(chat_template_kwargs)
+    chat_template_kwargs["enable_thinking"] = True
+    extra_body["chat_template_kwargs"] = chat_template_kwargs
+    generate_cfg["extra_body"] = extra_body
+    return generate_cfg
+
+
 def build_bridge_tool(spec, bridge_url):
     from qwen_agent.tools.base import BaseTool
 
@@ -196,6 +221,7 @@ def main():
             "max_tokens": int(llm.get("max_tokens", 4096)),
             "top_k": int(llm.get("top_k", 20)),
         }
+        generate_cfg = apply_thinking_config(generate_cfg, llm)
         model_cfg = {
             "model": to_text(llm.get("model")),
             "model_server": ensure_model_server(llm.get("model_server")),

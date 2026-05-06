@@ -40,11 +40,11 @@ function clipText(value = '', maxChars = 3500) {
 
 function toolResultCharLimit(toolName = '') {
   void toolName;
-  const parsed = Number(process.env.PIXLLM_QWEN_AGENT_TOOL_RESULT_CHARS || 2500);
+  const parsed = Number(process.env.PIXLLM_QWEN_AGENT_TOOL_RESULT_CHARS || 8000);
   if (!Number.isFinite(parsed)) {
-    return 2500;
+    return 8000;
   }
-  return Math.max(1000, Math.min(4000, Math.floor(parsed)));
+  return Math.max(1000, Math.min(16000, Math.floor(parsed)));
 }
 
 function compactParameterSchema(schema = {}) {

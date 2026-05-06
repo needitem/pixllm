@@ -4,6 +4,13 @@ const {
 const { createToolResultBlock, toStringValue } = require('../../query/blocks.cjs');
 const { summarizeObservation } = require('../../queryTrace.cjs');
 
+const TOOL_OBSERVATION_SUMMARY_CHARS = 24000;
+const SEARCH_RESULT_LIMIT = 24;
+const SEARCH_RESULT_TEXT_CHARS = 320;
+const READ_RESULT_CHARS = 8000;
+const EDIT_DIFF_CHARS = 5000;
+const FALLBACK_RESULT_CHARS = 6000;
+
 function interruptedObservation(message = 'Interrupted by user') {
   return {
     ok: false,
@@ -15,7 +22,7 @@ function interruptedObservation(message = 'Interrupted by user') {
 }
 
 function buildToolExecutionResult(toolUse, observation) {
-  const summarized = summarizeObservation(toolUse?.name, observation, 12000);
+  const summarized = summarizeObservation(toolUse?.name, observation, TOOL_OBSERVATION_SUMMARY_CHARS);
   return {
     toolUse,
     observation,
@@ -83,10 +90,10 @@ function summarizeObservationForModel(toolName, observation = {}) {
     const items = summarizePathItems(payload.items, (item) => {
       const pathValue = toStringValue(item?.path);
       const line = Number(item?.line || 0);
-      const text = clipModelText(item?.text || item?.match || '', 220).replace(/\s+/g, ' ');
+      const text = clipModelText(item?.text || item?.match || '', SEARCH_RESULT_TEXT_CHARS).replace(/\s+/g, ' ');
       const head = [pathValue, line > 0 ? line : ''].filter(Boolean).join(':');
       return [head, text].filter(Boolean).join(' ');
-    }, 12);
+    }, SEARCH_RESULT_LIMIT);
     if (items.length > 0) {
       lines.push('matches:');
       lines.push(...items.map((item) => `- ${item}`));
@@ -95,7 +102,7 @@ function summarizeObservationForModel(toolName, observation = {}) {
   }
 
   if (['read_file', 'read_symbol_span'].includes(name)) {
-    const content = clipModelText(payload.content || '', 3600);
+    const content = clipModelText(payload.content || '', READ_RESULT_CHARS);
     if (content) {
       lines.push('content:');
       lines.push(content);
@@ -107,7 +114,7 @@ function summarizeObservationForModel(toolName, observation = {}) {
     if (Number.isFinite(Number(payload.added)) || Number.isFinite(Number(payload.removed))) {
       lines.push(`diff: +${Number(payload.added || 0)} -${Number(payload.removed || 0)}`);
     }
-    const diff = clipModelText(payload.diff || '', 2600);
+    const diff = clipModelText(payload.diff || '', EDIT_DIFF_CHARS);
     if (diff) {
       lines.push('patch:');
       lines.push(diff);
@@ -115,7 +122,7 @@ function summarizeObservationForModel(toolName, observation = {}) {
     return lines.join('\n').trim();
   }
 
-  const serializedResult = clipModelText(JSON.stringify(payload, null, 2), 2400);
+  const serializedResult = clipModelText(JSON.stringify(payload, null, 2), FALLBACK_RESULT_CHARS);
   if (serializedResult) {
     lines.push('result:');
     lines.push(serializedResult);
