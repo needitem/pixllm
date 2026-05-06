@@ -473,7 +473,11 @@ def _symbol_identity(record: Dict[str, Any]) -> str:
 
 def _query_word_tokens(query: str) -> List[str]:
     tokens: List[str] = []
-    for item in re.findall(r"[\w#.+]{2,}", _to_text(query), flags=re.UNICODE):
+    for item in re.findall(
+        r"[A-Za-z_][A-Za-z0-9_]*(?:[.#:+][A-Za-z_][A-Za-z0-9_]*)*|\d+|[가-힣]{2,}",
+        _to_text(query),
+        flags=re.UNICODE,
+    ):
         text = item.strip("_.+")
         if len(text) < 2 or not any(ch.isalnum() for ch in text):
             continue
@@ -903,6 +907,7 @@ _TYPE_GRAPH_SCHEMAS = {
     "declarations": ["symbol", "csharp_signature", "summary", "enum_literals", "types"],
     "types": ["type_name", "qualified_type", "bases"],
     "assignability": ["from", "to"],
+    "event_declarations": ["type_name", "kind", "name", "declaration", "summary", "path", "line_range"],
     "edges": ["from", "relation", "to", "signature"],
     "operations": [
         "owner_type",
@@ -1384,6 +1389,225 @@ def _source_spans_for_candidates(candidates: Sequence[Dict[str, Any]], *, query:
     return spans
 
 
+def _read_target_identity(target: Dict[str, Any]) -> str:
+    payload = {
+        "kind": _to_text(target.get("kind")),
+        "path": _to_text(target.get("path")),
+        "start_line": target.get("start_line"),
+        "end_line": target.get("end_line"),
+    }
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+
+def _compact_read_target(target: Dict[str, Any]) -> Dict[str, Any]:
+    return {key: value for key, value in target.items() if value not in ("", [], {}, None)}
+
+
+def _source_span_read_target(span: Dict[str, Any]) -> Dict[str, Any]:
+    path = _to_text(span.get("path"))
+    if not path:
+        return {}
+    target: Dict[str, Any] = {
+        "kind": "source_span",
+        "path": path,
+        "source": "source_spans",
+        "symbol": _to_text(span.get("symbol")),
+        "csharp_signature": _to_text(span.get("csharp_signature")),
+    }
+    start_line, end_line = _line_range_bounds(span.get("line_range"), padding=0)
+    if start_line is not None and end_line is not None:
+        target.update({"start_line": start_line, "end_line": end_line})
+    return _compact_read_target(target)
+
+
+def _read_target_score(target: Dict[str, Any], query: str, order: int) -> Tuple[int, int, int, int, int, str]:
+    text = _normalized_token(json.dumps(target, ensure_ascii=False, sort_keys=True))
+    term_hits = sum(1 for term in _query_terms(query) if term and term in text)
+    primary_hits = sum(1 for term in _query_primary_terms(query) if term and term in text)
+    kind_rank = 0 if _to_text(target.get("kind")) == "source_span" else 1
+    path = _to_text(target.get("path"))
+    return (-term_hits, -primary_hits, kind_rank, order, len(path), path)
+
+
+def _ranked_read_targets(
+    candidates: Sequence[Dict[str, Any]],
+    *,
+    source_spans: Sequence[Dict[str, Any]],
+    query: str,
+    limit: int,
+) -> List[Dict[str, Any]]:
+    entries: List[Tuple[Tuple[int, int, int, int, int, str], Dict[str, Any]]] = []
+    seen = set()
+
+    def append_target(target: Dict[str, Any], order: int) -> None:
+        compact = _compact_read_target(target)
+        if not _to_text(compact.get("path")):
+            return
+        key = _read_target_identity(compact)
+        if key in seen:
+            return
+        seen.add(key)
+        entries.append((_read_target_score(compact, query, order), compact))
+
+    for index, span in enumerate(source_spans):
+        if isinstance(span, dict):
+            append_target(_source_span_read_target(span), index)
+    base_order = len(entries)
+    for candidate_index, candidate in enumerate(candidates):
+        candidate_targets = candidate.get("read_targets") if isinstance(candidate.get("read_targets"), list) else []
+        for target_index, target in enumerate(candidate_targets):
+            if not isinstance(target, dict):
+                continue
+            enriched = {
+                **target,
+                "source": target.get("source") or "candidate_refs",
+                "symbol": target.get("symbol") or candidate.get("symbol"),
+                "csharp_signature": target.get("csharp_signature") or candidate.get("csharp_signature"),
+                "reason": target.get("reason") or candidate.get("reason"),
+            }
+            append_target(enriched, base_order + candidate_index * 4 + target_index)
+    return [target for _, target in sorted(entries, key=lambda item: item[0])[:limit]]
+
+
+def _leading_doc_summary(lines: Sequence[str], line_index: int) -> str:
+    docs: List[str] = []
+    idx = line_index - 1
+    while idx >= 0:
+        stripped = lines[idx].strip()
+        if not stripped.startswith("///"):
+            break
+        docs.insert(0, stripped)
+        idx -= 1
+    return _clean_doc_summary(docs)
+
+
+def _event_declarations_for_types(types: Sequence[Dict[str, Any]], *, limit: int) -> List[Dict[str, Any]]:
+    paths: List[str] = []
+    type_names = {
+        _to_text(item.get("type_name"))
+        for item in types
+        if isinstance(item, dict) and _to_text(item.get("type_name"))
+    }
+    type_keys = {_normalized_token(type_name) for type_name in type_names if _normalized_token(type_name)}
+    for item in types:
+        if not isinstance(item, dict):
+            continue
+        ref = item.get("source_ref") if isinstance(item.get("source_ref"), dict) else {}
+        path = _to_text(ref.get("path"))
+        if path and path not in paths:
+            paths.append(path)
+
+    declarations: List[Dict[str, Any]] = []
+    seen = set()
+    for source_path in paths:
+        path = _source_file_for_path(source_path)
+        if not path or not path.exists() or not path.is_file():
+            continue
+        lines = _read_lines(path)
+        current_type = ""
+        for idx, line in enumerate(lines):
+            stripped = line.strip()
+            if stripped.startswith("///"):
+                continue
+            type_match = re.search(r"\b(?:ref\s+)?class\s+([A-Za-z_][A-Za-z0-9_]*)\b", stripped)
+            if type_match:
+                current_type = type_match.group(1)
+            event_match = re.search(r"\bevent\s+(.+?)\s+([A-Za-z_][A-Za-z0-9_]*)\s*;", stripped)
+            delegate_match = re.search(r"\bdelegate\s+(.+?)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(", stripped)
+            match = event_match or delegate_match
+            if not match:
+                continue
+            declaration = re.sub(r"\s+", " ", stripped).strip()
+            declaration_key = _normalized_token(declaration)
+            if event_match and current_type not in type_names:
+                continue
+            if delegate_match and not any(type_key and type_key in declaration_key for type_key in type_keys):
+                continue
+            name = match.group(2)
+            key = (source_path, idx + 1, name, declaration)
+            if key in seen:
+                continue
+            seen.add(key)
+            item = {
+                "type_name": current_type if current_type in type_names else "",
+                "kind": "event" if event_match else "delegate",
+                "name": name,
+                "declaration": declaration,
+                "summary": _leading_doc_summary(lines, idx),
+                "path": _source_path(path),
+                "line_range": f"{idx + 1}-{idx + 1}",
+            }
+            declarations.append(_compact_read_target(item))
+    declarations.sort(
+        key=lambda item: (
+            0 if _to_text(item.get("kind")) == "event" else 1,
+            _to_text(item.get("type_name")),
+            _to_text(item.get("path")),
+            _to_text(item.get("line_range")),
+        )
+    )
+    return declarations[:limit]
+
+
+def _type_family_key(value: Any) -> str:
+    name = _to_text(value)
+    parts = re.findall(r"[A-Z]+(?=[A-Z][a-z]|$)|[A-Z]?[a-z]+|\d+", name)
+    if not parts:
+        return _normalized_token(name)
+    if len(parts[0]) <= 3 and len(parts) > 1:
+        return _normalized_token("".join(parts[:2]))
+    return _normalized_token(parts[0])
+
+
+def _event_types_for_candidates(
+    candidates: Sequence[Dict[str, Any]],
+    type_relations: Sequence[Any],
+    *,
+    limit: int,
+) -> List[Dict[str, Any]]:
+    type_records = _load_type_index()
+    by_name = {
+        _to_text(record.get("type_name")): record
+        for record in type_records
+        if _to_text(record.get("type_name"))
+    }
+    seed_order: Dict[str, int] = {}
+
+    def add_type_name(value: Any, order: int) -> None:
+        type_name = _to_text(value)
+        if type_name in by_name and type_name not in seed_order:
+            seed_order[type_name] = order
+
+    for candidate_index, candidate in enumerate(candidates[:limit]):
+        base_order = candidate_index * 10
+        add_type_name(candidate.get("type_name"), base_order)
+        add_type_name(candidate.get("return_type"), base_order + 1)
+        parameter_types = candidate.get("parameter_types") if isinstance(candidate.get("parameter_types"), list) else []
+        for parameter_index, type_name in enumerate(parameter_types):
+            add_type_name(type_name, base_order + 2 + parameter_index)
+
+    seeds = set(seed_order)
+    expanded = set(seeds)
+    expanded_order = dict(seed_order)
+    for relation in type_relations:
+        if not isinstance(relation, (list, tuple)) or len(relation) < 2:
+            continue
+        source_type = _to_text(relation[0])
+        target_type = _to_text(relation[1])
+        if source_type in seeds and target_type in by_name:
+            if _type_family_key(source_type) == _type_family_key(target_type):
+                expanded.add(target_type)
+                expanded_order.setdefault(target_type, seed_order[source_type] + 1)
+        if target_type in seeds and source_type in by_name:
+            if _type_family_key(source_type) == _type_family_key(target_type):
+                expanded.add(source_type)
+                expanded_order.setdefault(source_type, seed_order[target_type] + 1)
+
+    ordered = [by_name[type_name] for type_name in expanded if type_name in by_name]
+    ordered.sort(key=lambda record: (expanded_order.get(_to_text(record.get("type_name")), 9999), _to_text(record.get("type_name"))))
+    return [_type_payload(record) for record in ordered[: max(limit, 1)]]
+
+
 def _record_by_symbol() -> Dict[str, Dict[str, Any]]:
     return {
         _to_text(record.get("qualified_symbol")): record
@@ -1637,24 +1861,23 @@ def find_source(query: str, *, limit: int = 12) -> Dict[str, Any]:
         if len(file_candidates) >= safe_limit:
             break
 
-    read_targets: List[Dict[str, Any]] = []
-    seen_targets = set()
-    for candidate in candidates:
-        for target in candidate.get("read_targets") if isinstance(candidate.get("read_targets"), list) else []:
-            key = json.dumps(target, ensure_ascii=False, sort_keys=True)
-            if key in seen_targets:
-                continue
-            seen_targets.add(key)
-            read_targets.append(target)
-            if len(read_targets) >= safe_limit * 2:
-                break
-        if len(read_targets) >= safe_limit * 2:
-            break
-
     output_candidate_limit = max(40, safe_limit * 3)
     output_type_member_limit = max(32, safe_limit * 2)
     output_candidates = sorted(candidates, key=lambda item: _candidate_output_order(item, normalized_query))[:output_candidate_limit]
+    source_spans = _source_spans_for_candidates(output_candidates, query=normalized_query, limit=min(12, safe_limit))
+    read_targets = _ranked_read_targets(
+        output_candidates,
+        source_spans=source_spans,
+        query=normalized_query,
+        limit=max(16, safe_limit),
+    )
     type_relations = graph.get("assignability", [])[:32]
+    event_types = _event_types_for_candidates(
+        output_candidates,
+        type_relations,
+        limit=max(12, safe_limit),
+    )
+    event_declarations = _event_declarations_for_types(event_types, limit=min(12, safe_limit))
     context = get_context()
     return {
         "ok": True,
@@ -1666,11 +1889,13 @@ def find_source(query: str, *, limit: int = 12) -> Dict[str, Any]:
         },
         "type_relations": type_relations,
         "csharp_ref_constraints": _csharp_ref_constraints(output_candidates, type_relations),
+        "event_declarations": event_declarations,
         "type_members": [_candidate_for_output(item) for item in type_members[:output_type_member_limit]],
         "candidates": [_candidate_for_output(item) for item in output_candidates],
         "files": file_candidates[: min(8, safe_limit)],
-        "read_targets": read_targets[: max(16, safe_limit)],
-        "source_spans": _source_spans_for_candidates(output_candidates, query=normalized_query, limit=min(12, safe_limit)),
+        "recommended_reads": read_targets[: min(8, safe_limit)],
+        "read_targets": read_targets,
+        "source_spans": source_spans,
     }
 
 
@@ -2235,6 +2460,7 @@ def type_graph(query: str, *, limit: int = 12) -> Dict[str, Any]:
     )
     paths = _type_graph_paths(all_operations, selected_types, normalized_query, limit=min(6, safe_limit))
     operations = _type_graph_output_operations(all_operations, paths[:3], limit=safe_limit * 6)
+    event_declarations = _event_declarations_for_types(selected_types, limit=min(12, safe_limit))
     payload = {
         "ok": True,
         "query": normalized_query,
@@ -2242,6 +2468,7 @@ def type_graph(query: str, *, limit: int = 12) -> Dict[str, Any]:
         "declarations": [_type_graph_declaration_row(item) for item in declarations[: min(4, safe_limit)]],
         "types": [_type_graph_type_row(item) for item in selected_types[: safe_limit + 4]],
         "assignability": [_type_graph_assignability_row(item) for item in assignability],
+        "event_declarations": event_declarations,
         "edges": [],
         "operations": [_type_graph_operation_row(item) for item in operations],
         "paths": [_type_graph_path_row(item) for item in paths[:3]],

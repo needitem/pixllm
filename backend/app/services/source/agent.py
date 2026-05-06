@@ -13,12 +13,11 @@ MAX_OBSERVATIONS_FOR_MODEL = 8
 MAX_TOOL_CALLS_PER_STEP = 4
 MODEL_OBSERVATION_CHARS = 12000
 MAX_API_SIGNATURES_FOR_MODEL = 64
+MAX_EVENT_DECLARATIONS_FOR_MODEL = 12
 MAX_TYPE_RELATIONS_FOR_MODEL = 32
 MAX_READ_TARGETS_FOR_MODEL = 12
 MAX_SOURCE_SPANS_FOR_MODEL = 12
 SOURCE_SPAN_CONTENT_CHARS = 2200
-REWRITE_TIMEOUT_SECONDS = 15
-_SOURCE_IDENTIFIER_CACHE: Optional[set] = None
 
 
 def _to_text(value: Any) -> str:
@@ -59,11 +58,6 @@ def _ensure_model_server(value: str) -> str:
     return base if base.endswith("/v1") else f"{base}/v1"
 
 
-def _ensure_rewrite_server() -> str:
-    base = _to_text(config.REWRITE_LLM_BASE_URL).rstrip("/")
-    return base if base.endswith("/v1") else f"{base}/v1"
-
-
 def _json_for_model(payload: Any) -> str:
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
@@ -89,6 +83,8 @@ def _minimum_observation_for_model(item: Dict[str, Any]) -> Dict[str, Any]:
         ("candidates", 12),
         ("type_members", 16),
         ("files", 12),
+        ("event_declarations", 12),
+        ("recommended_reads", 8),
         ("read_targets", 16),
         ("source_spans", 12),
         ("type_relations", 24),
@@ -111,12 +107,14 @@ def _minimum_observation_for_model(item: Dict[str, Any]) -> Dict[str, Any]:
 def _source_facts_for_model(observations: List[Dict[str, Any]], *, final: bool = False) -> Dict[str, Any]:
     api_signatures: List[Dict[str, Any]] = []
     source_spans: List[Dict[str, Any]] = []
+    event_declarations: List[Dict[str, Any]] = []
     type_relations: List[Any] = []
     ref_constraints: List[Dict[str, Any]] = []
     read_targets: List[Dict[str, Any]] = []
     seen_api = set()
     seen_signature = set()
     seen_span = set()
+    seen_event = set()
     seen_target = set()
 
     def append_api(item: Dict[str, Any]) -> None:
@@ -179,6 +177,18 @@ def _source_facts_for_model(observations: List[Dict[str, Any]], *, final: bool =
         seen_target.add(key)
         read_targets.append(item)
 
+    def append_event(item: Dict[str, Any]) -> None:
+        path = _to_text(item.get("path"))
+        line_range = _to_text(item.get("line_range"))
+        name = _to_text(item.get("name"))
+        if not path and not name:
+            return
+        key = (path, line_range, name)
+        if key in seen_event:
+            return
+        seen_event.add(key)
+        event_declarations.append(item)
+
     for item in observations:
         observation = item.get("observation") if isinstance(item, dict) else None
         if not isinstance(observation, dict):
@@ -192,6 +202,12 @@ def _source_facts_for_model(observations: List[Dict[str, Any]], *, final: bool =
         for span in observation.get("source_spans") if isinstance(observation.get("source_spans"), list) else []:
             if isinstance(span, dict):
                 append_span(span)
+        for event in observation.get("event_declarations") if isinstance(observation.get("event_declarations"), list) else []:
+            if isinstance(event, dict):
+                append_event(event)
+        for target in observation.get("recommended_reads") if isinstance(observation.get("recommended_reads"), list) else []:
+            if isinstance(target, dict):
+                append_target(target)
         for target in observation.get("read_targets") if isinstance(observation.get("read_targets"), list) else []:
             if isinstance(target, dict):
                 append_target(target)
@@ -219,6 +235,8 @@ def _source_facts_for_model(observations: List[Dict[str, Any]], *, final: bool =
         facts["csharp_ref_constraints"] = ref_constraints[:16]
     if type_relations:
         facts["type_relations"] = type_relations[:MAX_TYPE_RELATIONS_FOR_MODEL]
+    if event_declarations:
+        facts["event_declarations"] = event_declarations[:MAX_EVENT_DECLARATIONS_FOR_MODEL]
     if read_targets and not final:
         facts["read_targets"] = read_targets[:MAX_READ_TARGETS_FOR_MODEL]
     if source_spans:
@@ -294,164 +312,11 @@ def _not_observed_api_answer(prompt: str, observations: List[Dict[str, Any]]) ->
     )
 
 
-def _message_text(message: Dict[str, Any]) -> str:
-    content = message.get("content") if isinstance(message, dict) else ""
-    if isinstance(content, list):
-        return "\n".join(_to_text(item.get("text") if isinstance(item, dict) else item) for item in content).strip()
-    return _to_text(content)
-
-
-def _strip_rewrite_text(value: Any) -> str:
-    text = _to_text(value)
-    if text.startswith("```"):
-        text = re.sub(r"^```(?:json|text)?\s*", "", text, flags=re.IGNORECASE).strip()
-        text = re.sub(r"\s*```$", "", text).strip()
-    try:
-        parsed = json.loads(text)
-        if isinstance(parsed, list):
-            text = " ".join(_to_text(item) for item in parsed if _to_text(item))
-        elif isinstance(parsed, dict):
-            text = " ".join(_to_text(value) for value in parsed.values() if _to_text(value))
-    except Exception:
-        pass
-    text = text.strip().strip("\"'`")
-    text = re.sub(r"\s+", " ", text).strip()
-    return text
-
-
-def _preserved_source_tokens(value: Any) -> List[str]:
-    tokens: List[str] = []
-    for token in re.findall(r"[A-Za-z#_][A-Za-z0-9#_+.]*", _to_text(value)):
-        if len(token) < 2:
-            continue
-        token_key = token.lower()
-        is_identifier = (
-            token.isupper()
-            or any(ch.isupper() for ch in token[1:])
-            or "#" in token
-            or token.lower() in {"csharp", "cpp", "c++"}
-        )
-        if is_identifier and token_key not in {item.lower() for item in tokens}:
-            tokens.append(token)
-    return tokens
-
-
-def _is_source_like_identifier(value: str) -> bool:
-    token = _to_text(value)
-    if len(token) < 2:
-        return False
-    return bool(
-        token.isupper()
-        or any(ch.isupper() for ch in token[1:])
-        or "#" in token
-        or "." in token
-        or token.lower() in {"csharp", "cpp", "c++"}
-    )
-
-
-def _source_identifier_keys() -> set:
-    global _SOURCE_IDENTIFIER_CACHE
-    if _SOURCE_IDENTIFIER_CACHE is not None:
-        return set(_SOURCE_IDENTIFIER_CACHE)
-    keys = set()
-    try:
-        records = source_service.load_methods_index()
-    except Exception:
-        records = []
-    for record in records:
-        for field in ("member_name", "type_name", "qualified_symbol", "qualified_type", "declaration"):
-            for token in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", _to_text(record.get(field))):
-                keys.add(token.lower())
-    _SOURCE_IDENTIFIER_CACHE = keys
-    return set(keys)
-
-
-def _rewrite_word_tokens(value: Any) -> List[str]:
-    tokens: List[str] = []
-    for token in re.findall(r"[\w#.+]{2,}", _to_text(value), flags=re.UNICODE):
-        text = token.strip("_.+")
-        if len(text) < 2 or not any(ch.isalnum() for ch in text):
-            continue
-        if text not in tokens:
-            tokens.append(text)
-    return tokens
-
-
-def _merge_rewrite_query(original: str, rewritten: str) -> str:
-    terms: List[str] = []
-    seen = set()
-    source_keys = _source_identifier_keys()
-    language_keys = {"c#", "csharp", "cpp", "c++"}
-    for token in [
-        *_preserved_source_tokens(original),
-        *_rewrite_word_tokens(rewritten),
-        *_rewrite_word_tokens(original),
-    ]:
-        text = _to_text(token)
-        if len(text) < 2:
-            continue
-        if _is_source_like_identifier(text) and text.lower() not in source_keys and text.lower() not in language_keys:
-            continue
-        key = text.lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        terms.append(text)
-    return _clip(" ".join(terms), 240).replace("\n...[truncated]", "").strip()
-
-
-def _rewrite_source_query(query: str, trace: "_TraceRecorder") -> str:
-    original = _to_text(query)
-    if not original:
-        return ""
-    endpoint = f"{_ensure_rewrite_server()}/chat/completions"
-    payload = {
-        "model": config.REWRITE_MODEL,
-        "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "You rewrite developer questions for source-code search. "
-                    "Output English operation words and exact identifiers only. "
-                    "Do not answer the question."
-                ),
-            },
-            {"role": "user", "content": original},
-        ],
-        "temperature": 0,
-        "max_tokens": 96,
-    }
-    result: Dict[str, Any] = {
-        "ok": False,
-        "query": original,
-        "rewritten_query": "",
-        "merged_query": original,
-        "model": config.REWRITE_MODEL,
-        "model_server": _ensure_rewrite_server(),
-    }
-    try:
-        request = urllib.request.Request(
-            endpoint,
-            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-            headers={"Content-Type": "application/json", "Authorization": "Bearer EMPTY"},
-            method="POST",
-        )
-        with urllib.request.urlopen(request, timeout=REWRITE_TIMEOUT_SECONDS) as response:
-            raw_response = json.loads(response.read().decode("utf-8"))
-        rewritten = _strip_rewrite_text(_message_text(_choice_message(raw_response)))
-        merged = _merge_rewrite_query(original, rewritten)
-        result.update({"ok": True, "rewritten_query": rewritten, "merged_query": merged or original})
-    except Exception as exc:
-        result["error"] = repr(exc)
-    trace.append("source_query_rewrite", {"query": original}, result, phase="rewrite")
-    return _to_text(result.get("merged_query")) or original
-
-
 def _build_system_prompt() -> str:
     return "\n".join(
         [
             "You are the PIXLLM backend source agent.",
-            "Use source_search first, then source_read only when exact source spans matter.",
+            "Use source_search for discovery and source_read for exact source spans or declarations when concrete code evidence is needed.",
             "Treat source_facts.api_signatures as the observed API set.",
             "For named-API questions, answer from matching observed signatures only; if none match, say it was not observed and do not substitute unrelated APIs or code.",
             "For SDK/API calls in code, use observed Pixoneer/NXDL signatures; ordinary C# language/runtime syntax is allowed.",
@@ -530,7 +395,7 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "source_search",
-            "description": "Find candidate source files, symbols, and read targets for a natural-language or API query.",
+            "description": "Find candidate symbols, files, source_spans, and recommended_reads suitable for source_read.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -545,7 +410,7 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "source_read",
-            "description": "Read a source file span or indexed symbol target returned by a source tool.",
+            "description": "Inspect exact source evidence from Source/... spans or .runtime symbol paths returned by source_search.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -599,8 +464,8 @@ COMPACT_TOOL_DESCRIPTIONS = {
     "source_overview": "Source root, counts, modules, index status.",
     "source_ls": "List Source/ paths.",
     "source_glob": "Find Source/ files by glob.",
-    "source_search": "Find candidate symbols, files, and read targets.",
-    "source_read": "Read a Source/ span or indexed symbol target.",
+    "source_search": "Discover candidate symbols/files plus recommended source_read targets.",
+    "source_read": "Inspect exact Source/ spans or indexed symbol targets.",
     "source_type_graph": "Return compact type/member graph and signatures.",
     "source_usages": "Find real source usages.",
 }
@@ -683,10 +548,7 @@ def _tool_definitions_for_step(prompt: str, observations: List[Dict[str, Any]]) 
 
 def _search_query_with_prompt(raw_query: str, prompt: str) -> str:
     query = _to_text(raw_query)
-    prompt_text = _to_text(prompt)
-    if prompt_text and prompt_text not in query:
-        query = f"{query}\n{prompt_text}".strip()
-    return query
+    return query or _to_text(prompt)
 
 
 def _execute_tool(name: str, arguments: Dict[str, Any], trace: _TraceRecorder, *, prompt: str = "") -> Dict[str, Any]:
@@ -714,12 +576,10 @@ def _execute_tool(name: str, arguments: Dict[str, Any], trace: _TraceRecorder, *
         )
     elif name == "source_search":
         raw_query = _to_text(arguments.get("query") or arguments.get("pattern"))
-        rewritten_query = _rewrite_source_query(_search_query_with_prompt(raw_query, prompt), trace)
-        arguments["query"] = rewritten_query
-        if rewritten_query != raw_query:
-            arguments["original_query"] = raw_query
+        query = _search_query_with_prompt(raw_query, prompt)
+        arguments["query"] = query
         result = source_service.find_source(
-            rewritten_query,
+            query,
             limit=max(12, _safe_int(arguments.get("limit"), 12, 1, 40)),
         )
     elif name == "source_read":
@@ -732,22 +592,18 @@ def _execute_tool(name: str, arguments: Dict[str, Any], trace: _TraceRecorder, *
             result = {"ok": False, "error": "source_path_not_found", "path": _to_text(arguments.get("path"))}
     elif name == "source_type_graph":
         raw_query = _to_text(arguments.get("query") or arguments.get("pattern"))
-        rewritten_query = _rewrite_source_query(_search_query_with_prompt(raw_query, prompt), trace)
-        arguments["query"] = rewritten_query
-        if rewritten_query != raw_query:
-            arguments["original_query"] = raw_query
+        query = _search_query_with_prompt(raw_query, prompt)
+        arguments["query"] = query
         result = source_service.type_graph(
-            rewritten_query,
+            query,
             limit=max(12, _safe_int(arguments.get("limit"), 12, 1, 20)),
         )
     elif name == "source_usages":
         raw_query = _to_text(arguments.get("query") or arguments.get("pattern"))
-        rewritten_query = _rewrite_source_query(_search_query_with_prompt(raw_query, prompt), trace)
-        arguments["query"] = rewritten_query
-        if rewritten_query != raw_query:
-            arguments["original_query"] = raw_query
+        query = _search_query_with_prompt(raw_query, prompt)
+        arguments["query"] = query
         result = source_service.source_usages(
-            rewritten_query,
+            query,
             limit=_safe_int(arguments.get("limit"), 12, 1, 50),
         )
     else:
@@ -828,6 +684,7 @@ def _chat_completion_response(
     model_cfg: Dict[str, Any],
     messages: List[Dict[str, Any]],
     max_tokens: int,
+    enable_thinking: bool = False,
     tools: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     endpoint = f"{_to_text(model_cfg.get('model_server')).rstrip('/')}/chat/completions"
@@ -837,7 +694,7 @@ def _chat_completion_response(
         "temperature": 0,
         "max_tokens": max_tokens,
         "top_k": 20,
-        "chat_template_kwargs": {"enable_thinking": False},
+        "chat_template_kwargs": {"enable_thinking": bool(enable_thinking)},
     }
     if tools:
         payload["tools"] = tools
@@ -914,11 +771,13 @@ def _final_answer(
     observations: List[Dict[str, Any]],
     model_cfg: Dict[str, Any],
     max_tokens: int,
+    enable_thinking: bool = False,
 ) -> Tuple[str, Dict[str, int]]:
     response = _chat_completion_response(
         model_cfg=model_cfg,
         messages=_build_messages(prompt, observations, final=True),
         max_tokens=max_tokens,
+        enable_thinking=enable_thinking,
         tools=None,
     )
     return _message_answer(_choice_message(response)), _response_usage(response)
@@ -934,7 +793,6 @@ def answer_source_question(
     max_llm_calls: int = 12,
     enable_thinking: bool = False,
 ) -> Dict[str, Any]:
-    del enable_thinking
     normalized_prompt = _to_text(prompt)
     if not normalized_prompt:
         raise ApiError("EMPTY_PROMPT", "prompt is required")
@@ -957,6 +815,7 @@ def answer_source_question(
             model_cfg=model_cfg,
             messages=_build_messages(normalized_prompt, observations, final=bool(observations)),
             max_tokens=completion_token_budget,
+            enable_thinking=enable_thinking,
             tools=_tool_definitions_for_step(normalized_prompt, observations),
         )
         _add_response_usage(usage_totals, response)
@@ -981,6 +840,7 @@ def answer_source_question(
                 observations=observations,
                 model_cfg=model_cfg,
                 max_tokens=completion_token_budget,
+                enable_thinking=enable_thinking,
             )
             for key, value in final_usage.items():
                 usage_totals[key] = int(usage_totals.get(key) or 0) + value
