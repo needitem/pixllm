@@ -17,6 +17,7 @@ pixoneer_source
 
 # Logs/temp
 *.log
+*.tar
 
 # Python artifacts
 __pycache__/
