@@ -30,6 +30,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from ... import config
 from ...envelopes import ApiError
+from ...logging_config import get_logger
 from . import service as source_service
 from ._common import (
     clip as _clip,
@@ -38,6 +39,10 @@ from ._common import (
     safe_int as _safe_int,
     to_text as _to_text,
 )
+
+
+# 소스 에이전트(LLM 호출/도구 실행) 로깅용 'pixllm.agent' 로거
+logger = get_logger("agent")
 
 
 # ---------------------------------------------------------------------------
@@ -1014,6 +1019,8 @@ def _chat_completion_response(
             return json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
+        # ApiError로 감싸기 전에 실패한 엔드포인트와 응답 본문을 남겨 LLM 서버 장애를 추적한다
+        logger.error("LLM request failed (%s) at %s: %s", exc.code, endpoint, detail or repr(exc))
         raise ApiError("LLM_HTTP_ERROR", detail or repr(exc), status_code=502) from exc
 
 
@@ -1179,6 +1186,15 @@ def answer_source_question(
     # 전체 루프의 토큰 사용량 누적 합계
     usage_totals = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
+    # 답변 처리 시작을 기록 (모델/서버/프롬프트 길이/최대 스텝)
+    logger.info(
+        "source answer start: model=%s server=%s prompt_chars=%d max_steps=%d",
+        model_cfg["model"],
+        model_cfg["model_server"],
+        len(normalized_prompt),
+        max_steps,
+    )
+
     # === 메인 에이전트 루프 ===
     for _ in range(max_steps):
         # (1) 모델 호출 — 관찰이 하나라도 있으면 final=True 메시지로
@@ -1227,8 +1243,16 @@ def answer_source_question(
             completion_calls += 1
     # 그래도 답이 비어 있으면 서버 오류로 처리
     if not final_answer:
+        logger.error("source answer produced no result after %d completion calls", completion_calls)
         raise ApiError("LLM_EMPTY_ANSWER", "backend source agent did not produce an answer", status_code=502)
 
+    # 정상 완료: 도구 호출 수/모델 호출 수/총 토큰을 한 줄로 기록
+    logger.info(
+        "source answer done: tool_calls=%d completion_calls=%d total_tokens=%d",
+        len(trace.items),
+        completion_calls,
+        usage_totals["total_tokens"],
+    )
     return {
         "answer": final_answer,
         "session_id": _to_text(session_id),

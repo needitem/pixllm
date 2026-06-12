@@ -34,6 +34,9 @@ DEFAULT_MODEL = env("PIXLLM_DEFAULT_MODEL", "Qwen/Qwen3.6-27B")
 # 워크플로 재작성(rewrite) 전용 LLM 서버 주소와 모델 (현재 별도 기능에서 사용)
 REWRITE_LLM_BASE_URL = env("PIXLLM_REWRITE_LLM_BASE_URL", "http://192.168.2.238:8002/v1")
 REWRITE_MODEL = env("PIXLLM_REWRITE_MODEL", "workflow-rewrite-qwen")
+# 로깅 레벨/포맷 (환경변수로 override 가능). logging_config가 읽어 'pixllm' 로거에 적용한다.
+LOG_LEVEL = env("PIXLLM_LOG_LEVEL", "INFO")
+LOG_FORMAT = env("PIXLLM_LOG_FORMAT", "%(asctime)s %(levelname)s %(name)s %(message)s")
 
 # backend/ 디렉터리의 절대 경로 (이 파일 위치 기준으로 계산)
 _BACKEND_ROOT = Path(__file__).resolve().parents[1]

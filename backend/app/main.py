@@ -17,7 +17,12 @@ from fastapi.responses import JSONResponse
 from . import config
 from .deps import close_state, init_state
 from .envelopes import ApiError, err
+from .logging_config import get_logger
 from .routers import health, source
+
+
+# 이 모듈(app 계열)에서 쓰는 'pixllm.app' 로거
+logger = get_logger("app")
 
 
 def _build_exception_response(exc: Exception) -> JSONResponse:
@@ -27,6 +32,9 @@ def _build_exception_response(exc: Exception) -> JSONResponse:
     - HTTPException: FastAPI/Starlette 기본 예외 → "HTTP_ERROR" 코드로 래핑
     - RequestValidationError: 요청 본문 검증 실패 → 422 "VALIDATION_ERROR"
     - 그 외: 예상 못 한 버그 → 내부 정보 노출을 막기 위해 고정 메시지의 500
+
+    응답을 만든 뒤, 5xx는 스택트레이스와 함께 error 레벨로, 4xx는 warning으로 로깅한다.
+    (예전에는 예외를 봉투로만 바꾸고 로그를 전혀 남기지 않아 서버 측 추적이 불가능했다.)
     """
     if isinstance(exc, ApiError):
         status_code = exc.status_code
@@ -40,17 +48,24 @@ def _build_exception_response(exc: Exception) -> JSONResponse:
     else:
         status_code = 500
         payload = err("INTERNAL_SERVER_ERROR", "internal server error")
+    # 5xx는 서버 책임 오류 → 스택트레이스까지, 4xx는 클라이언트 요청 문제 → 한 줄 경고
+    if status_code >= 500:
+        logger.error("request failed (%s): %r", status_code, exc, exc_info=exc)
+    else:
+        logger.warning("request rejected (%s): %s", status_code, payload["error"]["message"])
     return JSONResponse(status_code=status_code, content=payload)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """앱 수명주기 관리: 시작 시 전역 상태 초기화, 종료 시 정리."""
+    """앱 수명주기 관리: 시작 시 전역 상태 초기화, 종료 시 정리. 시작/종료를 로그로 남긴다."""
     del app
+    logger.info("starting %s", config.APP_NAME)
     await init_state()
     try:
         yield
     finally:
+        logger.info("shutting down %s", config.APP_NAME)
         await close_state()
 
 
