@@ -18,36 +18,91 @@ from .methods_index import _read_source_text, build_methods_index_from_raw_sourc
 
 
 # 인덱싱/탐색 대상으로 인정하는 소스 파일 확장자 (C++/CLI 헤더·구현 + C#)
+
+
+# ==========================================================================
+#  1.  설정 · 상수 · 캐시
+# ==========================================================================
+
 SOURCE_EXTENSIONS = {".h", ".hpp", ".cpp", ".cxx", ".cc", ".cs"}
-# 런타임 디렉터리 기준 메서드 인덱스 JSON의 상대 경로 (read_source의 심볼 조회 경로 접두사로도 사용)
+
 METHODS_INDEX_RELATIVE_PATH = ".runtime/methods_index.json"
-# 런타임 디렉터리 기준 소스 manifest(모듈별 파일 통계) JSON의 상대 경로
+
 SOURCE_MANIFEST_RELATIVE_PATH = ".runtime/source_manifest.json"
-# read_source가 반환하는 본문의 최대 문자 수 (초과분은 _clip_text로 절단)
+
 MAX_READ_CHARS = 6000
-# read_source에서 줄 범위를 지정하지 않았을 때 읽는 기본 줄 수
+
 DEFAULT_READ_LINES = 120
-# read_source 한 번 호출로 읽을 수 있는 최대 줄 수
+
 MAX_READ_LINES = 180
-# grep_source에 허용하는 검색 패턴 최대 길이 (비정상적으로 긴 패턴 차단)
+
 MAX_GREP_PATTERN_LENGTH = 200
-# type_graph 결과 JSON의 문자 수 예산 (_fit_type_graph_payload가 이 한도에 맞춰 축소)
+
 TYPE_GRAPH_RESULT_CHARS = config.TYPE_GRAPH_RESULT_CHARS
-# C++/CLI 소스에서 namespace 선언 줄을 찾는 정규식 (_load_type_index에서 사용)
+
 _NAMESPACE_DECL_RE = re.compile(r"^\s*namespace\s+([A-Za-z_][A-Za-z0-9_]*)\b")
 
-# ---- 모듈 수준 캐시 5종 (프로세스 생존 동안 유지) ----
-# methods_index.json의 파싱 결과 캐시. 파일 mtime이 바뀌면 무효화된다.
+# --- 모듈 수준 캐시 (프로세스 생존 동안 유지) ---
 _INDEX_CACHE: Dict[str, Any] = {"mtime": 0.0, "records": []}
-# enum 이름 → 리터럴 목록 캐시 (_enum_literals). 소스 전체를 다시 훑지 않기 위함.
+
 _ENUM_CACHE: Dict[str, List[str]] = {}
-# 헤더에서 파싱한 타입 선언 인덱스 캐시 (_load_type_index). 소스 루트 경로가 키.
+
 _TYPE_CACHE: Dict[str, Any] = {"root": "", "records": []}
-# 파일 경로 → (mtime, 줄 목록) 캐시 (_read_lines). mtime이 다르면 다시 읽는다.
+
 _LINE_CACHE: Dict[str, Tuple[float, List[str]]] = {}
-# 파일 경로 → (mtime, 정규화 토큰 줄 목록) 캐시 (_read_normalized_lines). 검색 매칭용.
+
 _NORMALIZED_LINE_CACHE: Dict[str, Tuple[float, List[str]]] = {}
 
+_CS_PRIMITIVE_TYPES = {
+    "bool",
+    "byte",
+    "char",
+    "decimal",
+    "double",
+    "float",
+    "int",
+    "long",
+    "object",
+    "short",
+    "string",
+    "uint",
+    "ulong",
+    "ushort",
+    "void",
+    "Void",
+    "Int16",
+    "Int32",
+    "Int64",
+    "UInt16",
+    "UInt32",
+    "UInt64",
+}
+
+_TYPE_GRAPH_SCHEMAS = {
+    "declarations": ["symbol", "csharp_signature", "summary", "enum_literals", "types"],
+    "types": ["type_name", "qualified_type", "bases"],
+    "assignability": ["from", "to"],
+    "event_declarations": ["type_name", "kind", "name", "declaration", "summary", "path", "line_range"],
+    "edges": ["from", "relation", "to", "signature"],
+    "operations": [
+        "owner_type",
+        "qualified_owner_type",
+        "member_name",
+        "csharp_signature",
+        "returns",
+        "accepts",
+        "ref_accepts",
+        "out_accepts",
+        "enum_literals",
+    ],
+    "paths": ["from", "to", "steps"],
+    "path_steps": ["from", "relation", "to", "member_name", "csharp_signature"],
+}
+
+
+# ==========================================================================
+#  2.  파일 I/O · 경로 · 탐색/읽기 도구  (경로 보안 포함)
+# ==========================================================================
 
 def source_root() -> Path:
     """인덱싱 대상 SDK 원본 소스 트리의 루트 디렉터리(config.RAW_SOURCE_ROOT)를 반환한다."""
@@ -266,122 +321,6 @@ def _load_json_file(path: Path, default_value: Any) -> Any:
         return default_value
 
 
-def _build_source_manifest(records: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
-    """소스 트리를 한 번 훑어 모듈(최상위 디렉터리)별 파일 통계 manifest를 만든다.
-
-    각 모듈의 전체/헤더/구현 파일 수와 인덱스의 메서드 수, 생성 시각을 담는다.
-    get_context가 이 manifest를 읽어 에이전트에게 작업공간 개요를 제공한다.
-    """
-    root = source_root()
-    files = [path for path in sorted(root.rglob("*")) if _is_source_file(path)]
-    modules: Dict[str, Dict[str, Any]] = {}
-    for path in files:
-        rel = path.relative_to(root).as_posix()
-        module = rel.split("/", 1)[0]
-        item = modules.setdefault(
-            module,
-            {
-                "module": module,
-                "file_count": 0,
-                "header_count": 0,
-                "implementation_count": 0,
-            },
-        )
-        item["file_count"] += 1
-        item["header_count"] += 1 if path.suffix.lower() in {".h", ".hpp"} else 0
-        item["implementation_count"] += 1 if path.suffix.lower() in {".cpp", ".cxx", ".cc", ".cs"} else 0
-
-    return {
-        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "raw_source_root": root.as_posix(),
-        "file_count": len(files),
-        "method_count": len(records),
-        "modules": sorted(modules.values(), key=lambda item: str(item.get("module") or "")),
-    }
-
-
-def rebuild_index() -> Dict[str, Any]:
-    """메서드 인덱스와 manifest를 처음부터 다시 생성해 디스크에 저장한다.
-
-    인덱스 수명주기의 시작점: rebuild_index → load_methods_index(mtime 캐시) → get_context(요약).
-    methods_index.py의 파서로 records를 만들고 두 JSON 파일을 기록한 뒤
-    _INDEX_CACHE를 새 내용으로 즉시 채워 재로드 비용을 없앤다. 결과로 경로/건수 요약을 반환한다.
-    """
-    records = build_methods_index_from_raw_source(source_root())
-    manifest = _build_source_manifest(records)
-    methods_path = methods_index_file()
-    manifest_path = source_manifest_file()
-    methods_path.parent.mkdir(parents=True, exist_ok=True)
-    methods_path.write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
-    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-    _INDEX_CACHE["mtime"] = methods_path.stat().st_mtime if methods_path.exists() else time.time()
-    _INDEX_CACHE["records"] = records
-    return {
-        "methods_index_path": methods_path.as_posix(),
-        "source_manifest_path": manifest_path.as_posix(),
-        "method_count": len(records),
-        "file_count": int(manifest.get("file_count") or 0),
-        "raw_source_root": source_root().as_posix(),
-    }
-
-
-def load_methods_index() -> List[Dict[str, Any]]:
-    """메서드 인덱스 레코드 목록을 반환한다. (모든 심볼 검색의 데이터 원천)
-
-    파일이 없으면 rebuild_index()로 만들고, 파일 mtime이 _INDEX_CACHE에 저장된
-    mtime과 같으면 디스크를 건너뛰고 캐시 사본을 돌려준다. dict가 아닌 항목은 걸러낸다.
-    """
-    path = methods_index_file()
-    if not path.exists():
-        rebuild_index()
-    try:
-        mtime = path.stat().st_mtime
-    except Exception:
-        mtime = 0.0
-    if _INDEX_CACHE.get("records") and float(_INDEX_CACHE.get("mtime") or 0.0) == mtime:
-        return list(_INDEX_CACHE.get("records") or [])
-    records = _load_json_file(path, [])
-    if not isinstance(records, list):
-        records = []
-    _INDEX_CACHE["mtime"] = mtime
-    _INDEX_CACHE["records"] = [item for item in records if isinstance(item, dict)]
-    return list(_INDEX_CACHE["records"])
-
-
-def get_context() -> Dict[str, Any]:
-    """manifest를 요약해 작업공간 컨텍스트(루트 경로, 파일/메서드 수, 모듈 목록)를 반환한다.
-
-    manifest가 없으면 rebuild_index()로 생성한 뒤 다시 읽는다.
-    에이전트가 세션 시작 시 소스 구조를 파악하는 용도로 쓰인다.
-    """
-    manifest = _load_json_file(source_manifest_file(), {})
-    if not manifest:
-        rebuild_index()
-        manifest = _load_json_file(source_manifest_file(), {})
-    modules = _as_list(manifest, "modules")
-    module_summaries = [
-        {
-            "module": _to_text(item.get("module")),
-            "file_count": int(item.get("file_count") or 0),
-            "header_count": int(item.get("header_count") or 0),
-            "implementation_count": int(item.get("implementation_count") or 0),
-        }
-        for item in modules
-        if isinstance(item, dict)
-    ]
-    return {
-        "source": {
-            "id": "raw",
-            "root_path": source_root().as_posix(),
-            "runtime_path": runtime_root().as_posix(),
-            "method_count": int(manifest.get("method_count") or 0),
-            "file_count": int(manifest.get("file_count") or 0),
-            "generated_at": _to_text(manifest.get("generated_at")),
-        },
-        "modules": module_summaries,
-    }
-
-
 def list_source(path: str = "", *, depth: int = 1, limit: int = 200) -> Dict[str, Any]:
     """디렉터리 내용을 나열한다. (깊이 제한이 있는 `ls -R` 에 해당)
 
@@ -524,196 +463,217 @@ def grep_source(
     return {"ok": True, "pattern": raw_pattern, "path_glob": path_glob, "total": len(matches), "matches": matches}
 
 
-def _method_payload(record: Dict[str, Any], *, include_doc: bool = False) -> Dict[str, Any]:
-    """메서드 인덱스 레코드를 API 응답용 payload로 변환한다.
+def read_source(path: str, *, start_line: Optional[int] = None, end_line: Optional[int] = None) -> Optional[Dict[str, Any]]:
+    """소스를 읽는다. (/source/read, 에이전트 source_read 도구) 경로 형식이 두 가지다:
 
-    C++/CLI 선언을 C# 시그니처로 변환해 붙이고(shape에서 반환/파라미터 타입 분해),
-    "e"로 시작하는 enum 타입이 시그니처에 등장하면 enum_literals도 함께 담는다.
-    include_doc=True면 owner 정보와 문서주석(doc, examples 제외)을 추가한다.
-    path는 ".runtime/methods_index.json#Qualified.Symbol" 형태의 심볼 조회 경로다.
+    1. ".runtime/methods_index.json#Qualified.Symbol" — 인덱스에서 해당 심볼의
+       선언/문서/시그니처 payload를 반환 (파일을 읽지 않음)
+    2. "Source/디렉터리/파일.h" — 실제 파일의 지정 구간을 줄 번호를 붙여 반환.
+       start_line 생략 시 앞 120줄, 최대 180줄/6000자로 제한.
+       응답의 context 필드에는 구간 앞쪽의 namespace/타입 선언 요약이 들어가
+       발췌만 보고도 어느 클래스 안의 코드인지 알 수 있다.
+
+    경로가 없거나 소스 루트를 벗어나면 None을 반환한다. (라우터가 NOT_FOUND로 변환)
     """
-    refs = [
-        {
-            "path": _to_text(item.get("path")),
-            "line_range": _to_text(item.get("line_range")),
-        }
-        for item in (_as_list(record, "source_refs"))
-        if isinstance(item, dict) and _to_text(item.get("path"))
-    ]
-    csharp_signature = _csharp_signature(record.get("declaration"))
-    shape = _csharp_signature_shape(csharp_signature)
-    enum_literals = {
-        type_name: _enum_literals(type_name)
-        for type_name in [shape.get("return_type_name"), *shape.get("parameter_type_names", [])]
-        if _to_text(type_name).startswith("e") and _enum_literals(_to_text(type_name))
-    }
-    payload = {
-        "symbol": _to_text(record.get("qualified_symbol")),
-        "qualified_type": _to_text(record.get("qualified_type")),
-        "type_name": _to_text(record.get("type_name")),
-        "member_name": _to_text(record.get("member_name")),
-        "declaration": _to_text(record.get("declaration")),
-        "csharp_signature": csharp_signature,
-        "return_type": shape.get("return_type"),
-        "parameter_types": shape.get("parameter_types", []),
-        "kind": "symbol",
-        "path": f"{METHODS_INDEX_RELATIVE_PATH}#{_to_text(record.get('qualified_symbol'))}",
-        "source_refs": refs,
-    }
-    if enum_literals:
-        payload["enum_literals"] = enum_literals
-    if include_doc:
-        payload["owner"] = record.get("owner") if isinstance(record.get("owner"), dict) else {}
-        doc = record.get("doc") if isinstance(record.get("doc"), dict) else {}
-        payload["doc"] = {key: value for key, value in doc.items() if key != "examples"}
-    return payload
-
-
-def _symbol_identity(record: Dict[str, Any]) -> str:
-    """레코드의 심볼/타입/멤버/선언을 모두 이어붙여 정규화한 매칭용 식별 문자열을 만든다."""
-    return _normalized_token(
-        "\n".join(
-            [
-                *(_to_text(record.get(key)) for key in ("qualified_symbol", "qualified_type", "type_name", "member_name", "declaration")),
-            ]
-        )
-    )
-
-
-def _query_word_tokens(query: str) -> List[str]:
-    """질의 문장에서 단어 토큰을 추출한다.
-
-    영문 식별자(점/해시 등으로 이어진 "Type.Member" 형태 포함), 숫자, 2자 이상의
-    한글 단어를 등장 순서대로(중복 제거) 모은다. 모든 질의 토큰화의 기반 함수.
-    """
-    tokens: List[str] = []
-    for item in re.findall(
-        r"[A-Za-z_][A-Za-z0-9_]*(?:[.#:+][A-Za-z_][A-Za-z0-9_]*)*|\d+|[가-힣]{2,}",
-        _to_text(query),
-        flags=re.UNICODE,
-    ):
-        text = item.strip("_.+")
-        if len(text) < 2 or not any(ch.isalnum() for ch in text):
-            continue
-        if text not in tokens:
-            tokens.append(text)
-    return tokens
-
-
-def _is_ascii_identifier(value: str) -> bool:
-    """값이 ASCII 식별자(영문/숫자/언더스코어, 숫자로 시작 안 함) 형태인지 판정한다."""
-    return bool(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", _to_text(value)))
-
-
-def _query_identifier_tokens(query: str) -> List[str]:
-    """자연어 질의 안에서 "코드 식별자로 보이는" 토큰만 골라낸다.
-
-    일반 영단어와 구분하기 위해 토큰의 '모양'을 본다: 4자 이상이면서
-    숫자 포함, CamelCase(대문자 2개 이상 + 소문자 혼재), 또는 약어(대문자 2개 이상)
-    형태일 때만 식별자로 인정한다. 단 "Xxx API"처럼 API라는 단어가 뒤따르는
-    이름은 모양과 무관하게 식별자 후보로 본다. "Type.Member" 토큰은 분해해서도 검사한다.
-    find_source의 exact_identifier 매칭과 사용처 검색의 씨앗이 된다.
-    """
-    tokens: List[str] = []
-    named_api_tokens = {
-        _to_text(match)
-        for match in re.findall(r"\b([A-Za-z_][A-Za-z0-9_]*)\s+API(?=$|[^A-Za-z0-9_])", _to_text(query), flags=re.IGNORECASE)
-    }
-    expanded_tokens: List[str] = []
-    for token in _query_word_tokens(query):
-        expanded_tokens.append(token)
-        expanded_tokens.extend(part for part in re.split(r"[.#:+]+", token) if part)
-    for token in expanded_tokens:
-        if not _is_ascii_identifier(token) or len(token) < 4:
-            continue
-        letters = [ch for ch in token if ch.isalpha()]
-        upper_count = sum(1 for ch in letters if ch.isupper())
-        has_digit = any(ch.isdigit() for ch in token)
-        has_case_shape = bool(letters) and upper_count >= 2 and upper_count < len(letters)
-        has_acronym_shape = upper_count >= 2
-        if token not in named_api_tokens and not (has_digit or has_case_shape or has_acronym_shape):
-            continue
-        if token not in tokens:
-            tokens.append(token)
-    return tokens
-
-
-def _query_primary_terms(query: str) -> List[str]:
-    """질의의 단어 토큰을 CamelCase 분해 없이 통째로 정규화한 "1차 검색어" 목록을 만든다.
-
-    _query_terms보다 강한 매칭(단어 전체 일치)에 쓰여 가중치가 높게 부여된다.
-    """
-    terms: List[str] = []
-    for item in _query_word_tokens(query):
-        token_key = _normalized_token(item)
-        if len(token_key) > 1 and token_key not in terms:
-            terms.append(token_key)
-    return terms
-
-
-def _query_terms(query: str) -> List[str]:
-    """질의를 세분화한 검색어 목록을 만든다. (CamelCase 분해 포함)
-
-    예: "GetPixelValue" → ["getpixelvalue", "get", "pixel", "value"].
-    원형 토큰과 분해 조각을 모두 정규화해 넣어, 부분 일치 점수 계산의 기본 단위가 된다.
-    """
-    terms: List[str] = []
-    for item in _query_word_tokens(query):
-        candidates = [item]
-        if _is_ascii_identifier(item):
-            candidates.extend(re.findall(r"[A-Z]?[a-z]+|[A-Z]+(?=[A-Z]|$)|\d+", item))
-        for candidate in candidates:
-            token_key = _normalized_token(candidate)
-            if len(token_key) > 1 and token_key not in terms:
-                terms.append(token_key)
-    return terms
-
-
-def _record_match_order(record: Dict[str, Any], query: str) -> Optional[Tuple[int, str]]:
-    """메서드 레코드가 질의에 얼마나 잘 맞는지 정렬 키를 계산한다. (낮을수록 = 더 음수일수록 상위)
-
-    가중치 의미:
-      - 멤버 이름이 검색어와 완전히 같으면 항목당 -40 (가장 강한 신호)
-      - 타입 이름이 검색어와 완전히 같으면 항목당 -20
-      - 질의 전체가 식별 문자열에 통째로 포함되면(완전일치) -20
-      - 검색어가 식별 문자열/요약에 부분 포함되면 항목당 -1
-    아무 검색어도 맞지 않으면 None(매치 아님). symbol_search/declaration_search의 순위가 이것이다.
-    반환 튜플 2번째 요소는 동점일 때 심볼 이름순 정렬을 위한 것이다.
-    """
-    query_key = _normalized_token(query)
-    terms = _query_terms(query)
-    identity = _symbol_identity(record)
-    member_identity = _normalized_token(record.get("member_name"))
-    type_identity = _normalized_token(record.get("type_name"))
-    doc = record.get("doc") if isinstance(record.get("doc"), dict) else {}
-    summary = _normalized_token(doc.get("summary"))
-    if not query_key and not terms:
-        return 0, _to_text(record.get("qualified_symbol"))
-    exact = bool(query_key and query_key in identity)
-    term_hits = sum(1 for term in terms if term in identity or term in summary)
-    member_hits = sum(1 for term in terms if term and term == member_identity)
-    type_hits = sum(1 for term in terms if term and term == type_identity)
-    if not exact and term_hits <= 0:
+    path_value = _to_text(path)
+    # 형식 1: 인덱스 심볼 경로 ("#" 뒤가 qualified symbol)
+    if path_value.startswith(METHODS_INDEX_RELATIVE_PATH) and "#" in path_value:
+        symbol = path_value.split("#", 1)[1].strip()
+        for record in load_methods_index():
+            if _to_text(record.get("qualified_symbol")) == symbol:
+                return {
+                    "ok": True,
+                    "source_id": "raw",
+                    **_method_payload(record, include_doc=True),
+                }
         return None
-    return -(40 * member_hits) - (20 * type_hits) - (20 if exact else 0) - term_hits, _to_text(record.get("qualified_symbol"))
+
+    # 형식 2: 실제 파일 구간 읽기
+    target = _source_file_for_path(path_value)
+    if not target or not target.exists() or not target.is_file():
+        return None
+    lines = _read_lines(target)
+    if start_line is None:
+        start_index = 0
+        end_index = min(len(lines), DEFAULT_READ_LINES)
+    else:
+        start_index = max(0, int(start_line or 1) - 1)
+        requested_end = int(end_line or start_index + DEFAULT_READ_LINES)
+        end_index = min(len(lines), max(start_index + 1, min(requested_end, start_index + MAX_READ_LINES)))
+    content = "\n".join(f"{idx + 1}: {lines[idx]}" for idx in range(start_index, end_index))
+    rel = target.relative_to(source_root().resolve()).as_posix()
+    source_path = f"Source/{rel}"
+    return {
+        "ok": True,
+        "source_id": "raw",
+        "path": source_path,
+        "title": rel,
+        "kind": "source_file",
+        "line_range": f"{start_index + 1}-{end_index}",
+        "context": _source_context(lines, start_index=start_index, end_index=end_index),
+        "content": _clip_text(content, MAX_READ_CHARS),
+    }
 
 
-def symbol_search(query: str, *, limit: int = 20) -> Dict[str, Any]:
-    """메서드 인덱스 전체를 _record_match_order 점수로 정렬해 상위 심볼을 반환한다.
+def search_source(
+    *,
+    query: str,
+    limit: int = 12,
+    include_content: bool = False,
+    kind: Optional[str] = None,
+) -> Dict[str, Any]:
+    """단순 통합 검색. (/source/search 전용 — 에이전트는 더 풍부한 find_source를 쓴다)
 
-    빈 질의면 전체를 심볼 이름순으로 나열한다. 결과 항목은 _method_payload 형식(문서주석 제외).
+    kind에 따라 동작이 갈린다:
+      - "method"/"symbol"     : 심볼 검색만
+      - "file"/"source_file"  : 파일명 글롭만 (query를 글롭 패턴으로 해석)
+      - 그 외(기본)           : 심볼 검색 절반 + grep 매치 절반을 섞어 반환
     """
-    normalized_query = _to_text(query)
-    safe_limit = _safe_limit(limit, default=20, high=100)
-    matches: List[Tuple[Tuple[int, str], Dict[str, Any]]] = []
-    for record in load_methods_index():
-        order = _record_match_order(record, normalized_query)
-        if normalized_query and order is None:
-            continue
-        matches.append((order or (0, _to_text(record.get("qualified_symbol"))), record))
-    matches.sort(key=lambda item: item[0])
-    results = [_method_payload(record) for _, record in matches[:safe_limit]]
-    return {"ok": True, "query": normalized_query, "total": len(results), "results": results}
+    normalized_kind = _to_text(kind).lower()
+    safe_limit = _safe_limit(limit, default=12, high=100)
+    if normalized_kind in {"method", "symbol"}:
+        result = symbol_search(query, limit=safe_limit)
+        return {"source_id": "raw", "query": _to_text(query), "total": result["total"], "results": result["results"]}
+    if normalized_kind in {"file", "source_file"}:
+        result = glob_source(query or "**/*", limit=safe_limit)
+        return {"source_id": "raw", "query": _to_text(query), "total": result["total"], "results": result["matches"]}
+
+    symbols = symbol_search(query, limit=max(1, safe_limit // 2))["results"]
+    remaining = max(1, safe_limit - len(symbols))
+    matches = grep_source(query, limit=remaining, context=1)["matches"] if _to_text(query) else []
+    results: List[Dict[str, Any]] = [*symbols]
+    for item in matches:
+        result_item = {
+            "path": item["path"],
+            "title": item["path"],
+            "kind": "source_span",
+            "line_range": item["line_range"],
+            "excerpt": item.get("snippet") or item["line_text"],
+        }
+        if include_content:
+            result_item["content"] = item.get("snippet") or item["line_text"]
+        results.append(result_item)
+    return {"source_id": "raw", "query": _to_text(query), "total": len(results), "results": results[:safe_limit]}
+
+
+# ==========================================================================
+#  3.  원본 파싱 — 인덱스 빌드/로드 · 헤더 → 타입 · 시그니처 · enum
+# ==========================================================================
+
+def _build_source_manifest(records: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    """소스 트리를 한 번 훑어 모듈(최상위 디렉터리)별 파일 통계 manifest를 만든다.
+
+    각 모듈의 전체/헤더/구현 파일 수와 인덱스의 메서드 수, 생성 시각을 담는다.
+    get_context가 이 manifest를 읽어 에이전트에게 작업공간 개요를 제공한다.
+    """
+    root = source_root()
+    files = [path for path in sorted(root.rglob("*")) if _is_source_file(path)]
+    modules: Dict[str, Dict[str, Any]] = {}
+    for path in files:
+        rel = path.relative_to(root).as_posix()
+        module = rel.split("/", 1)[0]
+        item = modules.setdefault(
+            module,
+            {
+                "module": module,
+                "file_count": 0,
+                "header_count": 0,
+                "implementation_count": 0,
+            },
+        )
+        item["file_count"] += 1
+        item["header_count"] += 1 if path.suffix.lower() in {".h", ".hpp"} else 0
+        item["implementation_count"] += 1 if path.suffix.lower() in {".cpp", ".cxx", ".cc", ".cs"} else 0
+
+    return {
+        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "raw_source_root": root.as_posix(),
+        "file_count": len(files),
+        "method_count": len(records),
+        "modules": sorted(modules.values(), key=lambda item: str(item.get("module") or "")),
+    }
+
+
+def rebuild_index() -> Dict[str, Any]:
+    """메서드 인덱스와 manifest를 처음부터 다시 생성해 디스크에 저장한다.
+
+    인덱스 수명주기의 시작점: rebuild_index → load_methods_index(mtime 캐시) → get_context(요약).
+    methods_index.py의 파서로 records를 만들고 두 JSON 파일을 기록한 뒤
+    _INDEX_CACHE를 새 내용으로 즉시 채워 재로드 비용을 없앤다. 결과로 경로/건수 요약을 반환한다.
+    """
+    records = build_methods_index_from_raw_source(source_root())
+    manifest = _build_source_manifest(records)
+    methods_path = methods_index_file()
+    manifest_path = source_manifest_file()
+    methods_path.parent.mkdir(parents=True, exist_ok=True)
+    methods_path.write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    _INDEX_CACHE["mtime"] = methods_path.stat().st_mtime if methods_path.exists() else time.time()
+    _INDEX_CACHE["records"] = records
+    return {
+        "methods_index_path": methods_path.as_posix(),
+        "source_manifest_path": manifest_path.as_posix(),
+        "method_count": len(records),
+        "file_count": int(manifest.get("file_count") or 0),
+        "raw_source_root": source_root().as_posix(),
+    }
+
+
+def load_methods_index() -> List[Dict[str, Any]]:
+    """메서드 인덱스 레코드 목록을 반환한다. (모든 심볼 검색의 데이터 원천)
+
+    파일이 없으면 rebuild_index()로 만들고, 파일 mtime이 _INDEX_CACHE에 저장된
+    mtime과 같으면 디스크를 건너뛰고 캐시 사본을 돌려준다. dict가 아닌 항목은 걸러낸다.
+    """
+    path = methods_index_file()
+    if not path.exists():
+        rebuild_index()
+    try:
+        mtime = path.stat().st_mtime
+    except Exception:
+        mtime = 0.0
+    if _INDEX_CACHE.get("records") and float(_INDEX_CACHE.get("mtime") or 0.0) == mtime:
+        return list(_INDEX_CACHE.get("records") or [])
+    records = _load_json_file(path, [])
+    if not isinstance(records, list):
+        records = []
+    _INDEX_CACHE["mtime"] = mtime
+    _INDEX_CACHE["records"] = [item for item in records if isinstance(item, dict)]
+    return list(_INDEX_CACHE["records"])
+
+
+def get_context() -> Dict[str, Any]:
+    """manifest를 요약해 작업공간 컨텍스트(루트 경로, 파일/메서드 수, 모듈 목록)를 반환한다.
+
+    manifest가 없으면 rebuild_index()로 생성한 뒤 다시 읽는다.
+    에이전트가 세션 시작 시 소스 구조를 파악하는 용도로 쓰인다.
+    """
+    manifest = _load_json_file(source_manifest_file(), {})
+    if not manifest:
+        rebuild_index()
+        manifest = _load_json_file(source_manifest_file(), {})
+    modules = _as_list(manifest, "modules")
+    module_summaries = [
+        {
+            "module": _to_text(item.get("module")),
+            "file_count": int(item.get("file_count") or 0),
+            "header_count": int(item.get("header_count") or 0),
+            "implementation_count": int(item.get("implementation_count") or 0),
+        }
+        for item in modules
+        if isinstance(item, dict)
+    ]
+    return {
+        "source": {
+            "id": "raw",
+            "root_path": source_root().as_posix(),
+            "runtime_path": runtime_root().as_posix(),
+            "method_count": int(manifest.get("method_count") or 0),
+            "file_count": int(manifest.get("file_count") or 0),
+            "generated_at": _to_text(manifest.get("generated_at")),
+        },
+        "modules": module_summaries,
+    }
 
 
 def _declaration_type_tokens(declaration: str) -> List[str]:
@@ -838,33 +798,6 @@ def _csharp_signature(declaration: Any) -> str:
     name = match.group("name")
     params = ", ".join(_csharp_parameter(item) for item in _split_parameters(match.group("params")))
     return f"{return_type} {name}({params})"
-
-
-# C#/.NET 기본 타입 집합. "SDK 고유 타입"을 골라낼 때 제외 목록으로 쓰인다.
-_CS_PRIMITIVE_TYPES = {
-    "bool",
-    "byte",
-    "char",
-    "decimal",
-    "double",
-    "float",
-    "int",
-    "long",
-    "object",
-    "short",
-    "string",
-    "uint",
-    "ulong",
-    "ushort",
-    "void",
-    "Void",
-    "Int16",
-    "Int32",
-    "Int64",
-    "UInt16",
-    "UInt32",
-    "UInt64",
-}
 
 
 def _simple_csharp_type_name(type_text: Any) -> str:
@@ -1117,231 +1050,200 @@ def _type_payload(record: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-# type_graph 결과의 각 섹션을 "행(row) 배열"로 압축할 때의 열(column) 정의.
-# dict 키를 매 행마다 반복하지 않아 JSON 크기를 크게 줄인다. 모델은 이 스키마를 보고 행을 해석한다.
-_TYPE_GRAPH_SCHEMAS = {
-    "declarations": ["symbol", "csharp_signature", "summary", "enum_literals", "types"],
-    "types": ["type_name", "qualified_type", "bases"],
-    "assignability": ["from", "to"],
-    "event_declarations": ["type_name", "kind", "name", "declaration", "summary", "path", "line_range"],
-    "edges": ["from", "relation", "to", "signature"],
-    "operations": [
-        "owner_type",
-        "qualified_owner_type",
-        "member_name",
-        "csharp_signature",
-        "returns",
-        "accepts",
-        "ref_accepts",
-        "out_accepts",
-        "enum_literals",
-    ],
-    "paths": ["from", "to", "steps"],
-    "path_steps": ["from", "relation", "to", "member_name", "csharp_signature"],
-}
+# ==========================================================================
+#  4.  검색 — find_source · symbol · declaration · usages  (+ 토큰화/매칭/후보 헬퍼)
+# ==========================================================================
 
+def _method_payload(record: Dict[str, Any], *, include_doc: bool = False) -> Dict[str, Any]:
+    """메서드 인덱스 레코드를 API 응답용 payload로 변환한다.
 
-def _type_graph_type_row(type_item: Dict[str, Any]) -> List[Any]:
-    """타입 dict를 _TYPE_GRAPH_SCHEMAS["types"] 열 순서의 행 배열로 압축한다."""
-    return [
-        type_item.get("type_name") or "",
-        type_item.get("qualified_type") or "",
-        _as_list(type_item, "bases"),
+    C++/CLI 선언을 C# 시그니처로 변환해 붙이고(shape에서 반환/파라미터 타입 분해),
+    "e"로 시작하는 enum 타입이 시그니처에 등장하면 enum_literals도 함께 담는다.
+    include_doc=True면 owner 정보와 문서주석(doc, examples 제외)을 추가한다.
+    path는 ".runtime/methods_index.json#Qualified.Symbol" 형태의 심볼 조회 경로다.
+    """
+    refs = [
+        {
+            "path": _to_text(item.get("path")),
+            "line_range": _to_text(item.get("line_range")),
+        }
+        for item in (_as_list(record, "source_refs"))
+        if isinstance(item, dict) and _to_text(item.get("path"))
     ]
+    csharp_signature = _csharp_signature(record.get("declaration"))
+    shape = _csharp_signature_shape(csharp_signature)
+    enum_literals = {
+        type_name: _enum_literals(type_name)
+        for type_name in [shape.get("return_type_name"), *shape.get("parameter_type_names", [])]
+        if _to_text(type_name).startswith("e") and _enum_literals(_to_text(type_name))
+    }
+    payload = {
+        "symbol": _to_text(record.get("qualified_symbol")),
+        "qualified_type": _to_text(record.get("qualified_type")),
+        "type_name": _to_text(record.get("type_name")),
+        "member_name": _to_text(record.get("member_name")),
+        "declaration": _to_text(record.get("declaration")),
+        "csharp_signature": csharp_signature,
+        "return_type": shape.get("return_type"),
+        "parameter_types": shape.get("parameter_types", []),
+        "kind": "symbol",
+        "path": f"{METHODS_INDEX_RELATIVE_PATH}#{_to_text(record.get('qualified_symbol'))}",
+        "source_refs": refs,
+    }
+    if enum_literals:
+        payload["enum_literals"] = enum_literals
+    if include_doc:
+        payload["owner"] = record.get("owner") if isinstance(record.get("owner"), dict) else {}
+        doc = record.get("doc") if isinstance(record.get("doc"), dict) else {}
+        payload["doc"] = {key: value for key, value in doc.items() if key != "examples"}
+    return payload
 
 
-def _type_graph_declaration_row(declaration: Dict[str, Any]) -> List[Any]:
-    """선언 payload를 _TYPE_GRAPH_SCHEMAS["declarations"] 열 순서의 행 배열로 압축한다."""
-    doc = declaration.get("doc") if isinstance(declaration.get("doc"), dict) else {}
-    return [
-        declaration.get("symbol") or "",
-        declaration.get("csharp_signature") or "",
-        doc.get("summary") or "",
-        declaration.get("enum_literals") or {},
-        declaration.get("types") or [],
-    ]
-
-
-def _type_graph_assignability_row(item: Dict[str, Any]) -> List[str]:
-    """assignability(파생→베이스 대입 가능) 관계를 [from, to] 행으로 압축한다."""
-    return [_to_text(item.get("from")), _to_text(item.get("to"))]
-
-
-def _type_graph_operation_row(operation: Dict[str, Any]) -> List[Any]:
-    """연산(operation) dict를 _TYPE_GRAPH_SCHEMAS["operations"] 열 순서의 행 배열로 압축한다."""
-    return [
-        operation.get("owner_type") or "",
-        operation.get("qualified_owner_type") or "",
-        operation.get("member_name") or "",
-        operation.get("csharp_signature") or "",
-        operation.get("returns") or "",
-        operation.get("accepts") or [],
-        operation.get("ref_accepts") or [],
-        operation.get("out_accepts") or [],
-        operation.get("enum_literals") or {},
-    ]
-
-
-def _type_graph_path_row(path: Dict[str, Any]) -> List[Any]:
-    """경로 dict를 [from, to, steps] 행으로 압축한다. steps의 각 항목은 path_steps 스키마를 따른다."""
-    steps = []
-    for step in _as_list(path, "steps"):
-        operation = step.get("operation") if isinstance(step.get("operation"), dict) else {}
-        steps.append(
+def _symbol_identity(record: Dict[str, Any]) -> str:
+    """레코드의 심볼/타입/멤버/선언을 모두 이어붙여 정규화한 매칭용 식별 문자열을 만든다."""
+    return _normalized_token(
+        "\n".join(
             [
-                _to_text(step.get("from")),
-                _to_text(step.get("relation")),
-                _to_text(step.get("to")),
-                _to_text(operation.get("member_name")),
-                _to_text(operation.get("csharp_signature")),
+                *(_to_text(record.get(key)) for key in ("qualified_symbol", "qualified_type", "type_name", "member_name", "declaration")),
             ]
         )
-    return [_to_text(path.get("from")), _to_text(path.get("to")), steps]
-
-
-def _type_graph_output_operations(
-    operations: Sequence[Dict[str, Any]],
-    paths: Sequence[Dict[str, Any]],
-    *,
-    limit: int,
-) -> List[Dict[str, Any]]:
-    """출력에 포함할 연산을 선별한다: 점수 상위 limit개 + 경로(paths)에 등장한 연산은 무조건 포함.
-
-    경로 스텝에 나오는 연산이 빠지면 모델이 경로를 따라갈 수 없으므로 보존이 필수다.
-    (member_name, csharp_signature) 쌍으로 중복을 제거한다.
-    """
-    path_keys = set()
-    for path in paths:
-        for step in _as_list(path, "steps"):
-            operation = step.get("operation") if isinstance(step.get("operation"), dict) else {}
-            member_name = _to_text(operation.get("member_name"))
-            signature = _to_text(operation.get("csharp_signature"))
-            if member_name and signature:
-                path_keys.add((member_name, signature))
-
-    selected: List[Dict[str, Any]] = []
-    seen = set()
-
-    def append(operation: Dict[str, Any]) -> None:
-        member_name = _to_text(operation.get("member_name"))
-        signature = _to_text(operation.get("csharp_signature"))
-        key = (member_name, signature)
-        if not member_name or not signature or key in seen:
-            return
-        seen.add(key)
-        selected.append(operation)
-
-    for operation in operations[:limit]:
-        append(operation)
-    for operation in operations:
-        key = (_to_text(operation.get("member_name")), _to_text(operation.get("csharp_signature")))
-        if key in path_keys:
-            append(operation)
-    return selected
-
-
-def _json_chars(payload: Any) -> int:
-    """payload를 최소 구분자 JSON으로 직렬화했을 때의 문자 수를 잰다. (예산 축소 판단용)"""
-    return len(json_for_model(payload))
-
-
-def _path_operation_signatures(path_rows: Sequence[List[Any]]) -> set:
-    """행 형식으로 압축된 경로들에서 스텝에 등장하는 C# 시그니처 집합을 수집한다."""
-    signatures = set()
-    for path in path_rows:
-        if not isinstance(path, list) or len(path) < 3 or not isinstance(path[2], list):
-            continue
-        for step in path[2]:
-            if isinstance(step, list) and len(step) >= 5:
-                signature = _to_text(step[4])
-                if signature:
-                    signatures.add(signature)
-    return signatures
-
-
-def _operation_row_signature(row: Any) -> str:
-    """연산 행(row)에서 C# 시그니처 열(인덱스 3)을 꺼낸다. 형식이 다르면 빈 문자열."""
-    if isinstance(row, list) and len(row) >= 4:
-        return _to_text(row[3])
-    return ""
-
-
-def _select_operation_rows(
-    rows: Sequence[List[Any]],
-    path_rows: Sequence[List[Any]],
-    *,
-    limit: int,
-) -> List[List[Any]]:
-    """행 형식 연산 목록을 limit개로 줄이되, 경로에 등장하는 시그니처의 행은 한도와 무관하게 유지한다.
-
-    _type_graph_output_operations와 같은 원칙을 "이미 행으로 압축된" 데이터에 적용한 버전으로,
-    _fit_type_graph_payload의 축소 단계에서 사용된다.
-    """
-    path_signatures = _path_operation_signatures(path_rows)
-    selected: List[List[Any]] = []
-    seen = set()
-
-    def append(row: List[Any]) -> None:
-        signature = _operation_row_signature(row)
-        key = signature or _json_chars(row)
-        if key in seen:
-            return
-        seen.add(key)
-        selected.append(row)
-
-    for row in rows[: max(0, limit)]:
-        append(row)
-    for row in rows:
-        if _operation_row_signature(row) in path_signatures:
-            append(row)
-    return selected
-
-
-def _fit_type_graph_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """type_graph 결과를 TYPE_GRAPH_RESULT_CHARS(15000자) 예산 안으로 단계적으로 축소한다.
-
-    이미 예산 이내면 그대로 반환. 초과 시 budgets의 각 단계
-    (declarations, types, operations, paths, assignability 한도)를 큰 것부터 작은 것 순으로
-    적용해 보고, 처음으로 예산을 만족하는 후보를 반환한다.
-    마지막 단계까지도 초과하면 operations를 한 행씩 뒤에서 잘라내며 강제로 맞춘다.
-    """
-    if _json_chars(payload) <= TYPE_GRAPH_RESULT_CHARS:
-        return payload
-
-    # 축소 단계표: (declarations, types, operations, paths, assignability) 최대 개수.
-    # 위에서 아래로 갈수록 더 공격적으로 줄인다.
-    budgets = (
-        (4, 16, 72, 3, 80),
-        (4, 12, 56, 3, 64),
-        (3, 10, 44, 2, 48),
-        (2, 8, 32, 2, 32),
-        (1, 6, 24, 1, 16),
-        (1, 4, 16, 1, 8),
     )
-    best: Dict[str, Any] = payload
-    for declaration_limit, type_limit, operation_limit, path_limit, assignability_limit in budgets:
-        path_rows = _as_list(payload, "paths")[:path_limit]
-        operation_rows = (
-            _select_operation_rows(payload.get("operations") or [], path_rows, limit=operation_limit)
-            if isinstance(payload.get("operations"), list)
-            else []
-        )
-        candidate = {
-            **payload,
-            "declarations": payload.get("declarations", [])[:declaration_limit],
-            "types": payload.get("types", [])[:type_limit],
-            "assignability": payload.get("assignability", [])[:assignability_limit],
-            "operations": operation_rows,
-            "paths": path_rows,
-        }
-        best = candidate
-        if _json_chars(candidate) <= TYPE_GRAPH_RESULT_CHARS:
-            return candidate
 
-    # 모든 단계가 실패한 경우: operations를 한 행씩 제거하며 예산을 맞춘다 (최소 1개는 남김)
-    while _json_chars(best) > TYPE_GRAPH_RESULT_CHARS and len(best.get("operations") or []) > 1:
-        best = {**best, "operations": best["operations"][:-1]}
-    return best
+
+def _query_word_tokens(query: str) -> List[str]:
+    """질의 문장에서 단어 토큰을 추출한다.
+
+    영문 식별자(점/해시 등으로 이어진 "Type.Member" 형태 포함), 숫자, 2자 이상의
+    한글 단어를 등장 순서대로(중복 제거) 모은다. 모든 질의 토큰화의 기반 함수.
+    """
+    tokens: List[str] = []
+    for item in re.findall(
+        r"[A-Za-z_][A-Za-z0-9_]*(?:[.#:+][A-Za-z_][A-Za-z0-9_]*)*|\d+|[가-힣]{2,}",
+        _to_text(query),
+        flags=re.UNICODE,
+    ):
+        text = item.strip("_.+")
+        if len(text) < 2 or not any(ch.isalnum() for ch in text):
+            continue
+        if text not in tokens:
+            tokens.append(text)
+    return tokens
+
+
+def _is_ascii_identifier(value: str) -> bool:
+    """값이 ASCII 식별자(영문/숫자/언더스코어, 숫자로 시작 안 함) 형태인지 판정한다."""
+    return bool(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", _to_text(value)))
+
+
+def _query_identifier_tokens(query: str) -> List[str]:
+    """자연어 질의 안에서 "코드 식별자로 보이는" 토큰만 골라낸다.
+
+    일반 영단어와 구분하기 위해 토큰의 '모양'을 본다: 4자 이상이면서
+    숫자 포함, CamelCase(대문자 2개 이상 + 소문자 혼재), 또는 약어(대문자 2개 이상)
+    형태일 때만 식별자로 인정한다. 단 "Xxx API"처럼 API라는 단어가 뒤따르는
+    이름은 모양과 무관하게 식별자 후보로 본다. "Type.Member" 토큰은 분해해서도 검사한다.
+    find_source의 exact_identifier 매칭과 사용처 검색의 씨앗이 된다.
+    """
+    tokens: List[str] = []
+    named_api_tokens = {
+        _to_text(match)
+        for match in re.findall(r"\b([A-Za-z_][A-Za-z0-9_]*)\s+API(?=$|[^A-Za-z0-9_])", _to_text(query), flags=re.IGNORECASE)
+    }
+    expanded_tokens: List[str] = []
+    for token in _query_word_tokens(query):
+        expanded_tokens.append(token)
+        expanded_tokens.extend(part for part in re.split(r"[.#:+]+", token) if part)
+    for token in expanded_tokens:
+        if not _is_ascii_identifier(token) or len(token) < 4:
+            continue
+        letters = [ch for ch in token if ch.isalpha()]
+        upper_count = sum(1 for ch in letters if ch.isupper())
+        has_digit = any(ch.isdigit() for ch in token)
+        has_case_shape = bool(letters) and upper_count >= 2 and upper_count < len(letters)
+        has_acronym_shape = upper_count >= 2
+        if token not in named_api_tokens and not (has_digit or has_case_shape or has_acronym_shape):
+            continue
+        if token not in tokens:
+            tokens.append(token)
+    return tokens
+
+
+def _query_primary_terms(query: str) -> List[str]:
+    """질의의 단어 토큰을 CamelCase 분해 없이 통째로 정규화한 "1차 검색어" 목록을 만든다.
+
+    _query_terms보다 강한 매칭(단어 전체 일치)에 쓰여 가중치가 높게 부여된다.
+    """
+    terms: List[str] = []
+    for item in _query_word_tokens(query):
+        token_key = _normalized_token(item)
+        if len(token_key) > 1 and token_key not in terms:
+            terms.append(token_key)
+    return terms
+
+
+def _query_terms(query: str) -> List[str]:
+    """질의를 세분화한 검색어 목록을 만든다. (CamelCase 분해 포함)
+
+    예: "GetPixelValue" → ["getpixelvalue", "get", "pixel", "value"].
+    원형 토큰과 분해 조각을 모두 정규화해 넣어, 부분 일치 점수 계산의 기본 단위가 된다.
+    """
+    terms: List[str] = []
+    for item in _query_word_tokens(query):
+        candidates = [item]
+        if _is_ascii_identifier(item):
+            candidates.extend(re.findall(r"[A-Z]?[a-z]+|[A-Z]+(?=[A-Z]|$)|\d+", item))
+        for candidate in candidates:
+            token_key = _normalized_token(candidate)
+            if len(token_key) > 1 and token_key not in terms:
+                terms.append(token_key)
+    return terms
+
+
+def _record_match_order(record: Dict[str, Any], query: str) -> Optional[Tuple[int, str]]:
+    """메서드 레코드가 질의에 얼마나 잘 맞는지 정렬 키를 계산한다. (낮을수록 = 더 음수일수록 상위)
+
+    가중치 의미:
+      - 멤버 이름이 검색어와 완전히 같으면 항목당 -40 (가장 강한 신호)
+      - 타입 이름이 검색어와 완전히 같으면 항목당 -20
+      - 질의 전체가 식별 문자열에 통째로 포함되면(완전일치) -20
+      - 검색어가 식별 문자열/요약에 부분 포함되면 항목당 -1
+    아무 검색어도 맞지 않으면 None(매치 아님). symbol_search/declaration_search의 순위가 이것이다.
+    반환 튜플 2번째 요소는 동점일 때 심볼 이름순 정렬을 위한 것이다.
+    """
+    query_key = _normalized_token(query)
+    terms = _query_terms(query)
+    identity = _symbol_identity(record)
+    member_identity = _normalized_token(record.get("member_name"))
+    type_identity = _normalized_token(record.get("type_name"))
+    doc = record.get("doc") if isinstance(record.get("doc"), dict) else {}
+    summary = _normalized_token(doc.get("summary"))
+    if not query_key and not terms:
+        return 0, _to_text(record.get("qualified_symbol"))
+    exact = bool(query_key and query_key in identity)
+    term_hits = sum(1 for term in terms if term in identity or term in summary)
+    member_hits = sum(1 for term in terms if term and term == member_identity)
+    type_hits = sum(1 for term in terms if term and term == type_identity)
+    if not exact and term_hits <= 0:
+        return None
+    return -(40 * member_hits) - (20 * type_hits) - (20 if exact else 0) - term_hits, _to_text(record.get("qualified_symbol"))
+
+
+def symbol_search(query: str, *, limit: int = 20) -> Dict[str, Any]:
+    """메서드 인덱스 전체를 _record_match_order 점수로 정렬해 상위 심볼을 반환한다.
+
+    빈 질의면 전체를 심볼 이름순으로 나열한다. 결과 항목은 _method_payload 형식(문서주석 제외).
+    """
+    normalized_query = _to_text(query)
+    safe_limit = _safe_limit(limit, default=20, high=100)
+    matches: List[Tuple[Tuple[int, str], Dict[str, Any]]] = []
+    for record in load_methods_index():
+        order = _record_match_order(record, normalized_query)
+        if normalized_query and order is None:
+            continue
+        matches.append((order or (0, _to_text(record.get("qualified_symbol"))), record))
+    matches.sort(key=lambda item: item[0])
+    results = [_method_payload(record) for _, record in matches[:safe_limit]]
+    return {"ok": True, "query": normalized_query, "total": len(results), "results": results}
 
 
 def _line_range_bounds(value: Any, *, padding: int = 1) -> Tuple[Optional[int], Optional[int]]:
@@ -2308,6 +2210,283 @@ def find_source(query: str, *, limit: int = 12) -> Dict[str, Any]:
     }
 
 
+def source_usages(query: str, *, limit: int = 12) -> Dict[str, Any]:
+    """타입/메서드의 "실제 사용처"를 찾는다. (/source/usages, 에이전트 source_usages 도구)
+
+    grep과 달리 주석 줄(///, //, *)을 건너뛰고,
+    한 줄 안에 검색어(상위 4개)가 전부 등장해야 매치로 친다.
+    — 단순 언급이 아니라 실제 호출/사용 코드를 찾기 위한 조건.
+    매치 줄 앞뒤 2줄을 스니펫으로 함께 반환한다.
+    """
+    normalized_query = _to_text(query)
+    safe_limit = _safe_limit(limit, default=12, high=50)
+    terms = _query_terms(normalized_query)
+    matches: List[Dict[str, Any]] = []
+    for path in _iter_source_files():
+        lines = _read_lines(path)
+        for idx, line in enumerate(lines):
+            stripped = line.strip()
+            if not stripped or stripped.startswith(("///", "//", "*")):
+                continue
+            line_key = _normalized_token(stripped)
+            if terms and not all(term in line_key for term in terms[:4]):
+                if _normalized_token(normalized_query) not in line_key:
+                    continue
+            start = max(0, idx - 2)
+            end = min(len(lines), idx + 3)
+            snippet = "\n".join(f"{line_no + 1}: {lines[line_no]}" for line_no in range(start, end))
+            matches.append(
+                {
+                    "path": _source_path(path),
+                    "line": idx + 1,
+                    "line_range": f"{start + 1}-{end}",
+                    "line_text": stripped,
+                    "snippet": _clip_text(snippet, 1600),
+                }
+            )
+            if len(matches) >= safe_limit:
+                return {"ok": True, "query": normalized_query, "total": len(matches), "matches": matches}
+    return {"ok": True, "query": normalized_query, "total": len(matches), "matches": matches}
+
+
+def declaration_search(query: str, *, limit: int = 12) -> Dict[str, Any]:
+    """선언 검색: symbol_search와 같은 점수 방식이지만, 결과에 더 풍부한 정보를 붙인다.
+
+    각 결과 payload에 문서주석(doc), 선언에 등장하는 SDK 타입 목록(types),
+    'e'로 시작하는 enum 타입의 리터럴 목록(enum_literals)까지 포함한다.
+    type_graph와 find_source가 내부적으로 사용한다.
+    """
+    normalized_query = _to_text(query)
+    safe_limit = _safe_limit(limit, default=12, high=40)
+    matches: List[Tuple[Tuple[int, str], Dict[str, Any]]] = []
+    for record in load_methods_index():
+        order = _record_match_order(record, normalized_query)
+        if normalized_query and order is None:
+            continue
+        matches.append((order or (0, _to_text(record.get("qualified_symbol"))), record))
+    matches.sort(key=lambda item: item[0])
+    results: List[Dict[str, Any]] = []
+    for _, record in matches[:safe_limit]:
+        payload = _method_payload(record, include_doc=True)
+        payload["types"] = _declaration_type_tokens(payload.get("declaration"))
+        enum_literals = {
+            token: _enum_literals(token)
+            for token in payload["types"]
+            if token.startswith("e") and _enum_literals(token)
+        }
+        if enum_literals:
+            payload["enum_literals"] = enum_literals
+        results.append(payload)
+    return {"ok": True, "query": normalized_query, "total": len(results), "results": results}
+
+
+# ==========================================================================
+#  5.  그래프 탐색 — type_graph · BFS · 간선/연산 · 출력 압축
+# ==========================================================================
+
+def _type_graph_type_row(type_item: Dict[str, Any]) -> List[Any]:
+    """타입 dict를 _TYPE_GRAPH_SCHEMAS["types"] 열 순서의 행 배열로 압축한다."""
+    return [
+        type_item.get("type_name") or "",
+        type_item.get("qualified_type") or "",
+        _as_list(type_item, "bases"),
+    ]
+
+
+def _type_graph_declaration_row(declaration: Dict[str, Any]) -> List[Any]:
+    """선언 payload를 _TYPE_GRAPH_SCHEMAS["declarations"] 열 순서의 행 배열로 압축한다."""
+    doc = declaration.get("doc") if isinstance(declaration.get("doc"), dict) else {}
+    return [
+        declaration.get("symbol") or "",
+        declaration.get("csharp_signature") or "",
+        doc.get("summary") or "",
+        declaration.get("enum_literals") or {},
+        declaration.get("types") or [],
+    ]
+
+
+def _type_graph_assignability_row(item: Dict[str, Any]) -> List[str]:
+    """assignability(파생→베이스 대입 가능) 관계를 [from, to] 행으로 압축한다."""
+    return [_to_text(item.get("from")), _to_text(item.get("to"))]
+
+
+def _type_graph_operation_row(operation: Dict[str, Any]) -> List[Any]:
+    """연산(operation) dict를 _TYPE_GRAPH_SCHEMAS["operations"] 열 순서의 행 배열로 압축한다."""
+    return [
+        operation.get("owner_type") or "",
+        operation.get("qualified_owner_type") or "",
+        operation.get("member_name") or "",
+        operation.get("csharp_signature") or "",
+        operation.get("returns") or "",
+        operation.get("accepts") or [],
+        operation.get("ref_accepts") or [],
+        operation.get("out_accepts") or [],
+        operation.get("enum_literals") or {},
+    ]
+
+
+def _type_graph_path_row(path: Dict[str, Any]) -> List[Any]:
+    """경로 dict를 [from, to, steps] 행으로 압축한다. steps의 각 항목은 path_steps 스키마를 따른다."""
+    steps = []
+    for step in _as_list(path, "steps"):
+        operation = step.get("operation") if isinstance(step.get("operation"), dict) else {}
+        steps.append(
+            [
+                _to_text(step.get("from")),
+                _to_text(step.get("relation")),
+                _to_text(step.get("to")),
+                _to_text(operation.get("member_name")),
+                _to_text(operation.get("csharp_signature")),
+            ]
+        )
+    return [_to_text(path.get("from")), _to_text(path.get("to")), steps]
+
+
+def _type_graph_output_operations(
+    operations: Sequence[Dict[str, Any]],
+    paths: Sequence[Dict[str, Any]],
+    *,
+    limit: int,
+) -> List[Dict[str, Any]]:
+    """출력에 포함할 연산을 선별한다: 점수 상위 limit개 + 경로(paths)에 등장한 연산은 무조건 포함.
+
+    경로 스텝에 나오는 연산이 빠지면 모델이 경로를 따라갈 수 없으므로 보존이 필수다.
+    (member_name, csharp_signature) 쌍으로 중복을 제거한다.
+    """
+    path_keys = set()
+    for path in paths:
+        for step in _as_list(path, "steps"):
+            operation = step.get("operation") if isinstance(step.get("operation"), dict) else {}
+            member_name = _to_text(operation.get("member_name"))
+            signature = _to_text(operation.get("csharp_signature"))
+            if member_name and signature:
+                path_keys.add((member_name, signature))
+
+    selected: List[Dict[str, Any]] = []
+    seen = set()
+
+    def append(operation: Dict[str, Any]) -> None:
+        member_name = _to_text(operation.get("member_name"))
+        signature = _to_text(operation.get("csharp_signature"))
+        key = (member_name, signature)
+        if not member_name or not signature or key in seen:
+            return
+        seen.add(key)
+        selected.append(operation)
+
+    for operation in operations[:limit]:
+        append(operation)
+    for operation in operations:
+        key = (_to_text(operation.get("member_name")), _to_text(operation.get("csharp_signature")))
+        if key in path_keys:
+            append(operation)
+    return selected
+
+
+def _json_chars(payload: Any) -> int:
+    """payload를 최소 구분자 JSON으로 직렬화했을 때의 문자 수를 잰다. (예산 축소 판단용)"""
+    return len(json_for_model(payload))
+
+
+def _path_operation_signatures(path_rows: Sequence[List[Any]]) -> set:
+    """행 형식으로 압축된 경로들에서 스텝에 등장하는 C# 시그니처 집합을 수집한다."""
+    signatures = set()
+    for path in path_rows:
+        if not isinstance(path, list) or len(path) < 3 or not isinstance(path[2], list):
+            continue
+        for step in path[2]:
+            if isinstance(step, list) and len(step) >= 5:
+                signature = _to_text(step[4])
+                if signature:
+                    signatures.add(signature)
+    return signatures
+
+
+def _operation_row_signature(row: Any) -> str:
+    """연산 행(row)에서 C# 시그니처 열(인덱스 3)을 꺼낸다. 형식이 다르면 빈 문자열."""
+    if isinstance(row, list) and len(row) >= 4:
+        return _to_text(row[3])
+    return ""
+
+
+def _select_operation_rows(
+    rows: Sequence[List[Any]],
+    path_rows: Sequence[List[Any]],
+    *,
+    limit: int,
+) -> List[List[Any]]:
+    """행 형식 연산 목록을 limit개로 줄이되, 경로에 등장하는 시그니처의 행은 한도와 무관하게 유지한다.
+
+    _type_graph_output_operations와 같은 원칙을 "이미 행으로 압축된" 데이터에 적용한 버전으로,
+    _fit_type_graph_payload의 축소 단계에서 사용된다.
+    """
+    path_signatures = _path_operation_signatures(path_rows)
+    selected: List[List[Any]] = []
+    seen = set()
+
+    def append(row: List[Any]) -> None:
+        signature = _operation_row_signature(row)
+        key = signature or _json_chars(row)
+        if key in seen:
+            return
+        seen.add(key)
+        selected.append(row)
+
+    for row in rows[: max(0, limit)]:
+        append(row)
+    for row in rows:
+        if _operation_row_signature(row) in path_signatures:
+            append(row)
+    return selected
+
+
+def _fit_type_graph_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """type_graph 결과를 TYPE_GRAPH_RESULT_CHARS(15000자) 예산 안으로 단계적으로 축소한다.
+
+    이미 예산 이내면 그대로 반환. 초과 시 budgets의 각 단계
+    (declarations, types, operations, paths, assignability 한도)를 큰 것부터 작은 것 순으로
+    적용해 보고, 처음으로 예산을 만족하는 후보를 반환한다.
+    마지막 단계까지도 초과하면 operations를 한 행씩 뒤에서 잘라내며 강제로 맞춘다.
+    """
+    if _json_chars(payload) <= TYPE_GRAPH_RESULT_CHARS:
+        return payload
+
+    # 축소 단계표: (declarations, types, operations, paths, assignability) 최대 개수.
+    # 위에서 아래로 갈수록 더 공격적으로 줄인다.
+    budgets = (
+        (4, 16, 72, 3, 80),
+        (4, 12, 56, 3, 64),
+        (3, 10, 44, 2, 48),
+        (2, 8, 32, 2, 32),
+        (1, 6, 24, 1, 16),
+        (1, 4, 16, 1, 8),
+    )
+    best: Dict[str, Any] = payload
+    for declaration_limit, type_limit, operation_limit, path_limit, assignability_limit in budgets:
+        path_rows = _as_list(payload, "paths")[:path_limit]
+        operation_rows = (
+            _select_operation_rows(payload.get("operations") or [], path_rows, limit=operation_limit)
+            if isinstance(payload.get("operations"), list)
+            else []
+        )
+        candidate = {
+            **payload,
+            "declarations": payload.get("declarations", [])[:declaration_limit],
+            "types": payload.get("types", [])[:type_limit],
+            "assignability": payload.get("assignability", [])[:assignability_limit],
+            "operations": operation_rows,
+            "paths": path_rows,
+        }
+        best = candidate
+        if _json_chars(candidate) <= TYPE_GRAPH_RESULT_CHARS:
+            return candidate
+
+    # 모든 단계가 실패한 경우: operations를 한 행씩 제거하며 예산을 맞춘다 (최소 1개는 남김)
+    while _json_chars(best) > TYPE_GRAPH_RESULT_CHARS and len(best.get("operations") or []) > 1:
+        best = {**best, "operations": best["operations"][:-1]}
+    return best
+
+
 def _type_order(record: Dict[str, Any], query: str, connected_types: Optional[Sequence[str]] = None) -> Optional[Tuple[int, str]]:
     """타입 레코드가 질의에 얼마나 적합한지 정렬 키를 계산한다. (낮을수록 상위, None이면 매치 안 됨)
 
@@ -2977,170 +3156,11 @@ def type_graph(query: str, *, limit: int = 12) -> Dict[str, Any]:
     return _fit_type_graph_payload(payload)
 
 
-def source_usages(query: str, *, limit: int = 12) -> Dict[str, Any]:
-    """타입/메서드의 "실제 사용처"를 찾는다. (/source/usages, 에이전트 source_usages 도구)
 
-    grep과 달리 주석 줄(///, //, *)을 건너뛰고,
-    한 줄 안에 검색어(상위 4개)가 전부 등장해야 매치로 친다.
-    — 단순 언급이 아니라 실제 호출/사용 코드를 찾기 위한 조건.
-    매치 줄 앞뒤 2줄을 스니펫으로 함께 반환한다.
-    """
-    normalized_query = _to_text(query)
-    safe_limit = _safe_limit(limit, default=12, high=50)
-    terms = _query_terms(normalized_query)
-    matches: List[Dict[str, Any]] = []
-    for path in _iter_source_files():
-        lines = _read_lines(path)
-        for idx, line in enumerate(lines):
-            stripped = line.strip()
-            if not stripped or stripped.startswith(("///", "//", "*")):
-                continue
-            line_key = _normalized_token(stripped)
-            if terms and not all(term in line_key for term in terms[:4]):
-                if _normalized_token(normalized_query) not in line_key:
-                    continue
-            start = max(0, idx - 2)
-            end = min(len(lines), idx + 3)
-            snippet = "\n".join(f"{line_no + 1}: {lines[line_no]}" for line_no in range(start, end))
-            matches.append(
-                {
-                    "path": _source_path(path),
-                    "line": idx + 1,
-                    "line_range": f"{start + 1}-{end}",
-                    "line_text": stripped,
-                    "snippet": _clip_text(snippet, 1600),
-                }
-            )
-            if len(matches) >= safe_limit:
-                return {"ok": True, "query": normalized_query, "total": len(matches), "matches": matches}
-    return {"ok": True, "query": normalized_query, "total": len(matches), "matches": matches}
+# ==========================================================================
+#  공개 심볼
+# ==========================================================================
 
-
-def declaration_search(query: str, *, limit: int = 12) -> Dict[str, Any]:
-    """선언 검색: symbol_search와 같은 점수 방식이지만, 결과에 더 풍부한 정보를 붙인다.
-
-    각 결과 payload에 문서주석(doc), 선언에 등장하는 SDK 타입 목록(types),
-    'e'로 시작하는 enum 타입의 리터럴 목록(enum_literals)까지 포함한다.
-    type_graph와 find_source가 내부적으로 사용한다.
-    """
-    normalized_query = _to_text(query)
-    safe_limit = _safe_limit(limit, default=12, high=40)
-    matches: List[Tuple[Tuple[int, str], Dict[str, Any]]] = []
-    for record in load_methods_index():
-        order = _record_match_order(record, normalized_query)
-        if normalized_query and order is None:
-            continue
-        matches.append((order or (0, _to_text(record.get("qualified_symbol"))), record))
-    matches.sort(key=lambda item: item[0])
-    results: List[Dict[str, Any]] = []
-    for _, record in matches[:safe_limit]:
-        payload = _method_payload(record, include_doc=True)
-        payload["types"] = _declaration_type_tokens(payload.get("declaration"))
-        enum_literals = {
-            token: _enum_literals(token)
-            for token in payload["types"]
-            if token.startswith("e") and _enum_literals(token)
-        }
-        if enum_literals:
-            payload["enum_literals"] = enum_literals
-        results.append(payload)
-    return {"ok": True, "query": normalized_query, "total": len(results), "results": results}
-
-
-def read_source(path: str, *, start_line: Optional[int] = None, end_line: Optional[int] = None) -> Optional[Dict[str, Any]]:
-    """소스를 읽는다. (/source/read, 에이전트 source_read 도구) 경로 형식이 두 가지다:
-
-    1. ".runtime/methods_index.json#Qualified.Symbol" — 인덱스에서 해당 심볼의
-       선언/문서/시그니처 payload를 반환 (파일을 읽지 않음)
-    2. "Source/디렉터리/파일.h" — 실제 파일의 지정 구간을 줄 번호를 붙여 반환.
-       start_line 생략 시 앞 120줄, 최대 180줄/6000자로 제한.
-       응답의 context 필드에는 구간 앞쪽의 namespace/타입 선언 요약이 들어가
-       발췌만 보고도 어느 클래스 안의 코드인지 알 수 있다.
-
-    경로가 없거나 소스 루트를 벗어나면 None을 반환한다. (라우터가 NOT_FOUND로 변환)
-    """
-    path_value = _to_text(path)
-    # 형식 1: 인덱스 심볼 경로 ("#" 뒤가 qualified symbol)
-    if path_value.startswith(METHODS_INDEX_RELATIVE_PATH) and "#" in path_value:
-        symbol = path_value.split("#", 1)[1].strip()
-        for record in load_methods_index():
-            if _to_text(record.get("qualified_symbol")) == symbol:
-                return {
-                    "ok": True,
-                    "source_id": "raw",
-                    **_method_payload(record, include_doc=True),
-                }
-        return None
-
-    # 형식 2: 실제 파일 구간 읽기
-    target = _source_file_for_path(path_value)
-    if not target or not target.exists() or not target.is_file():
-        return None
-    lines = _read_lines(target)
-    if start_line is None:
-        start_index = 0
-        end_index = min(len(lines), DEFAULT_READ_LINES)
-    else:
-        start_index = max(0, int(start_line or 1) - 1)
-        requested_end = int(end_line or start_index + DEFAULT_READ_LINES)
-        end_index = min(len(lines), max(start_index + 1, min(requested_end, start_index + MAX_READ_LINES)))
-    content = "\n".join(f"{idx + 1}: {lines[idx]}" for idx in range(start_index, end_index))
-    rel = target.relative_to(source_root().resolve()).as_posix()
-    source_path = f"Source/{rel}"
-    return {
-        "ok": True,
-        "source_id": "raw",
-        "path": source_path,
-        "title": rel,
-        "kind": "source_file",
-        "line_range": f"{start_index + 1}-{end_index}",
-        "context": _source_context(lines, start_index=start_index, end_index=end_index),
-        "content": _clip_text(content, MAX_READ_CHARS),
-    }
-
-
-def search_source(
-    *,
-    query: str,
-    limit: int = 12,
-    include_content: bool = False,
-    kind: Optional[str] = None,
-) -> Dict[str, Any]:
-    """단순 통합 검색. (/source/search 전용 — 에이전트는 더 풍부한 find_source를 쓴다)
-
-    kind에 따라 동작이 갈린다:
-      - "method"/"symbol"     : 심볼 검색만
-      - "file"/"source_file"  : 파일명 글롭만 (query를 글롭 패턴으로 해석)
-      - 그 외(기본)           : 심볼 검색 절반 + grep 매치 절반을 섞어 반환
-    """
-    normalized_kind = _to_text(kind).lower()
-    safe_limit = _safe_limit(limit, default=12, high=100)
-    if normalized_kind in {"method", "symbol"}:
-        result = symbol_search(query, limit=safe_limit)
-        return {"source_id": "raw", "query": _to_text(query), "total": result["total"], "results": result["results"]}
-    if normalized_kind in {"file", "source_file"}:
-        result = glob_source(query or "**/*", limit=safe_limit)
-        return {"source_id": "raw", "query": _to_text(query), "total": result["total"], "results": result["matches"]}
-
-    symbols = symbol_search(query, limit=max(1, safe_limit // 2))["results"]
-    remaining = max(1, safe_limit - len(symbols))
-    matches = grep_source(query, limit=remaining, context=1)["matches"] if _to_text(query) else []
-    results: List[Dict[str, Any]] = [*symbols]
-    for item in matches:
-        result_item = {
-            "path": item["path"],
-            "title": item["path"],
-            "kind": "source_span",
-            "line_range": item["line_range"],
-            "excerpt": item.get("snippet") or item["line_text"],
-        }
-        if include_content:
-            result_item["content"] = item.get("snippet") or item["line_text"]
-        results.append(result_item)
-    return {"source_id": "raw", "query": _to_text(query), "total": len(results), "results": results[:safe_limit]}
-
-
-# 모듈의 공개 API — routers/source.py, agent.py, services/health/service.py가 이 함수들만 사용한다.
 __all__ = [
     "find_source",
     "get_context",
