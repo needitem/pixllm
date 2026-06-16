@@ -22,3 +22,6 @@ pixoneer_source
 # Python artifacts
 __pycache__/
 *.py[cod]
+
+# Presentation decks (local-only, not part of the repo)
+presentation/
