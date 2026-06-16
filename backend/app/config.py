@@ -47,3 +47,26 @@ RAW_SOURCE_ROOT = env(
     "RAW_SOURCE_ROOT",
     str((_SOURCE_DATA_ROOT / "raw_source" / "source").resolve()),
 )
+
+
+def env_int(name: str, default: int) -> int:
+    """환경 변수를 정수로 읽는다. 미설정/빈 값/형식 오류면 default를 쓴다."""
+    try:
+        return int(env(name, str(default)))
+    except ValueError:
+        return default
+
+
+# --- LLM 호출 파라미터 / 컨텍스트 예산 (환경별 튜닝, 미설정 시 기본값) ---
+# vLLM 동기 HTTP 호출 타임아웃(초)
+LLM_TIMEOUT_SECONDS = env_int("PIXLLM_LLM_TIMEOUT", 180)
+# Authorization: Bearer <key>. vLLM은 인증이 없어 기본 "EMPTY".
+LLM_API_KEY = env("PIXLLM_LLM_API_KEY", "EMPTY")
+# 샘플링 top_k (temperature는 결정성 위해 코드에서 0 고정)
+LLM_TOP_K = env_int("PIXLLM_LLM_TOP_K", 20)
+# 응답 1회당 최대 토큰 / 에이전트 루프 최대 스텝 (요청 본문에서 override 가능)
+DEFAULT_MAX_TOKENS = env_int("PIXLLM_MAX_TOKENS", 4096)
+DEFAULT_MAX_LLM_CALLS = env_int("PIXLLM_MAX_LLM_CALLS", 12)
+# 모델에 주입할 관찰/타입그래프 컨텍스트 예산(문자 수) — 모델 컨텍스트 창에 맞춰 조정
+MODEL_OBSERVATION_CHARS = env_int("PIXLLM_MODEL_OBSERVATION_CHARS", 12000)
+TYPE_GRAPH_RESULT_CHARS = env_int("PIXLLM_TYPE_GRAPH_RESULT_CHARS", 15000)

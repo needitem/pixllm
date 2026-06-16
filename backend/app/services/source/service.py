@@ -1,45 +1,7 @@
-"""소스 탐색의 핵심 서비스 레이어.
-
-Pixoneer NXDL SDK의 C++/CLI(.NET managed C++) 소스 트리를 대상으로,
-methods_index.py가 생성한 메서드 인덱스(methods_index.json)를 로드/캐싱하고
-그 위에 파일 탐색·코드 검색·심볼 검색·타입 그래프·통합 검색 기능을 구현한다.
-
-routers/source.py의 모든 REST 엔드포인트와 agent.py(LLM 에이전트)의 모든 도구가
-이 모듈의 공개 함수를 호출한다. 즉, "소스에 대한 질문"은 전부 이 파일을 거친다.
-
-함수 그룹 지도
-==============
-- 캐시/경로 유틸:
-    _INDEX_CACHE / _ENUM_CACHE / _TYPE_CACHE / _LINE_CACHE / _NORMALIZED_LINE_CACHE (모듈 캐시 5종),
-    source_root, runtime_root, methods_index_file, source_manifest_file,
-    _source_file_for_path, _source_dir_for_path ("Source/..." 가상 경로 → 실제 경로 변환 + 경로 탈출 차단),
-    _read_lines, _read_normalized_lines (mtime 기반 파일 줄 캐시)
-- 인덱스 수명주기:
-    rebuild_index (인덱스+manifest 생성/저장) → load_methods_index (mtime 캐시 로드)
-    → get_context (manifest 요약 제공)
-- 파일 탐색 계열:
-    list_source (깊이 제한 ls), glob_source (fnmatch 패턴), grep_source (부분문자열/정규식 + 컨텍스트 줄),
-    source_usages (주석이 아닌 줄에서 모든 검색어가 등장하는 "실사용" 줄 찾기)
-- 검색 점수 계열:
-    _query_word_tokens / _query_identifier_tokens (CamelCase·대문자 모양으로 코드 식별자 추정)
-    / _query_terms (CamelCase 분해), _record_match_order (가중치 점수; 음수일수록 상위)
-    → symbol_search / declaration_search
-- C++/CLI → C# 시그니처 변환 계열:
-    _csharp_type, _csharp_parameter, _csharp_signature, _csharp_signature_shape.
-    사용자는 C# 바인딩으로 SDK를 사용하므로 모델에게는 C# 형태의 시그니처를 보여줘야 한다.
-- 타입 인덱스/열거형:
-    _load_type_index (헤더를 스테이트 머신으로 훑어 타입 선언 수집), _enum_literals (enum 리터럴 추출+캐시)
-- 타입 그래프:
-    type_graph (연결 타입 수집 → 멤버 부착 → assignability → 확장 → operations → BFS 경로 → 행(row) 압축
-    → _fit_type_graph_payload 예산 축소), _type_graph_* 보조 함수들
-- 통합 검색:
-    find_source (agent.py의 source_search 도구 본체; 후보 수집/보강/source_spans/read_targets 묶음),
-    read_source (파일 구간 또는 심볼 조회), search_source (REST 전용 단순 통합 검색)
-"""
-
 import json
 import re
 import time
+from collections import deque
 from fnmatch import fnmatch
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
@@ -70,7 +32,7 @@ MAX_READ_LINES = 180
 # grep_source에 허용하는 검색 패턴 최대 길이 (비정상적으로 긴 패턴 차단)
 MAX_GREP_PATTERN_LENGTH = 200
 # type_graph 결과 JSON의 문자 수 예산 (_fit_type_graph_payload가 이 한도에 맞춰 축소)
-TYPE_GRAPH_RESULT_CHARS = 15000
+TYPE_GRAPH_RESULT_CHARS = config.TYPE_GRAPH_RESULT_CHARS
 # C++/CLI 소스에서 namespace 선언 줄을 찾는 정규식 (_load_type_index에서 사용)
 _NAMESPACE_DECL_RE = re.compile(r"^\s*namespace\s+([A-Za-z_][A-Za-z0-9_]*)\b")
 
@@ -111,6 +73,12 @@ def methods_index_file() -> Path:
 def source_manifest_file() -> Path:
     """소스 manifest(source_manifest.json)의 절대 경로를 반환한다."""
     return runtime_root() / PurePosixPath(SOURCE_MANIFEST_RELATIVE_PATH).as_posix()
+
+
+def _as_list(container: Any, key: str) -> List[Any]:
+    """container[key]가 list면 그대로, 아니면 빈 리스트. (반복되던 isinstance 가드 축약)"""
+    value = container.get(key) if isinstance(container, dict) else None
+    return value if isinstance(value, list) else []
 
 
 def _clip_text(value: Any, limit: int = MAX_READ_CHARS) -> str:
@@ -390,7 +358,7 @@ def get_context() -> Dict[str, Any]:
     if not manifest:
         rebuild_index()
         manifest = _load_json_file(source_manifest_file(), {})
-    modules = manifest.get("modules") if isinstance(manifest.get("modules"), list) else []
+    modules = _as_list(manifest, "modules")
     module_summaries = [
         {
             "module": _to_text(item.get("module")),
@@ -569,7 +537,7 @@ def _method_payload(record: Dict[str, Any], *, include_doc: bool = False) -> Dic
             "path": _to_text(item.get("path")),
             "line_range": _to_text(item.get("line_range")),
         }
-        for item in (record.get("source_refs") if isinstance(record.get("source_refs"), list) else [])
+        for item in (_as_list(record, "source_refs"))
         if isinstance(item, dict) and _to_text(item.get("path"))
     ]
     csharp_signature = _csharp_signature(record.get("declaration"))
@@ -1143,7 +1111,7 @@ def _type_payload(record: Dict[str, Any]) -> Dict[str, Any]:
         "type_name": _to_text(record.get("type_name")),
         "kind": _to_text(record.get("kind")),
         "declaration": _to_text(record.get("declaration")),
-        "bases": record.get("bases") if isinstance(record.get("bases"), list) else [],
+        "bases": _as_list(record, "bases"),
         "source_ref": record.get("source_ref") if isinstance(record.get("source_ref"), dict) else {},
         "summary": _to_text(record.get("summary")),
     }
@@ -1178,7 +1146,7 @@ def _type_graph_type_row(type_item: Dict[str, Any]) -> List[Any]:
     return [
         type_item.get("type_name") or "",
         type_item.get("qualified_type") or "",
-        type_item.get("bases") if isinstance(type_item.get("bases"), list) else [],
+        _as_list(type_item, "bases"),
     ]
 
 
@@ -1217,7 +1185,7 @@ def _type_graph_operation_row(operation: Dict[str, Any]) -> List[Any]:
 def _type_graph_path_row(path: Dict[str, Any]) -> List[Any]:
     """경로 dict를 [from, to, steps] 행으로 압축한다. steps의 각 항목은 path_steps 스키마를 따른다."""
     steps = []
-    for step in path.get("steps") if isinstance(path.get("steps"), list) else []:
+    for step in _as_list(path, "steps"):
         operation = step.get("operation") if isinstance(step.get("operation"), dict) else {}
         steps.append(
             [
@@ -1244,7 +1212,7 @@ def _type_graph_output_operations(
     """
     path_keys = set()
     for path in paths:
-        for step in path.get("steps") if isinstance(path.get("steps"), list) else []:
+        for step in _as_list(path, "steps"):
             operation = step.get("operation") if isinstance(step.get("operation"), dict) else {}
             member_name = _to_text(operation.get("member_name"))
             signature = _to_text(operation.get("csharp_signature"))
@@ -1352,7 +1320,7 @@ def _fit_type_graph_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     )
     best: Dict[str, Any] = payload
     for declaration_limit, type_limit, operation_limit, path_limit, assignability_limit in budgets:
-        path_rows = payload.get("paths")[:path_limit] if isinstance(payload.get("paths"), list) else []
+        path_rows = _as_list(payload, "paths")[:path_limit]
         operation_rows = (
             _select_operation_rows(payload.get("operations") or [], path_rows, limit=operation_limit)
             if isinstance(payload.get("operations"), list)
@@ -1399,7 +1367,7 @@ def _read_targets_for_method(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
     symbol_path = _to_text(payload.get("path"))
     if symbol_path:
         targets.append({"kind": "symbol", "path": symbol_path})
-    for ref in payload.get("source_refs") if isinstance(payload.get("source_refs"), list) else []:
+    for ref in _as_list(payload, "source_refs"):
         path = _to_text(ref.get("path")) if isinstance(ref, dict) else ""
         if not path:
             continue
@@ -1533,7 +1501,7 @@ def _csharp_ref_constraints(candidates: Sequence[Dict[str, Any]], relations: Seq
     candidate_types = {_to_text(candidate.get("type_name")) for candidate in candidates if _to_text(candidate.get("type_name"))}
     constraints: List[Dict[str, Any]] = []
     for candidate in candidates:
-        for ref_type in candidate.get("ref_parameter_types") if isinstance(candidate.get("ref_parameter_types"), list) else []:
+        for ref_type in _as_list(candidate, "ref_parameter_types"):
             ref_type_text = _to_text(ref_type)
             assignable_types = [
                 _to_text(row[0])
@@ -1585,7 +1553,7 @@ def _usage_terms_for_candidates(candidates: Sequence[Dict[str, Any]], query: str
         _append_usage_term(terms, seen, candidate.get("member_name"))
         _append_usage_term(terms, seen, candidate.get("type_name"))
         _append_usage_term(terms, seen, candidate.get("return_type"))
-        for parameter_type in candidate.get("parameter_types") if isinstance(candidate.get("parameter_types"), list) else []:
+        for parameter_type in _as_list(candidate, "parameter_types"):
             _append_usage_term(terms, seen, parameter_type)
     return terms[:36]
 
@@ -1686,7 +1654,7 @@ def _source_spans_for_candidates(candidates: Sequence[Dict[str, Any]], *, query:
         if len(spans) >= limit:
             return spans
     for candidate in candidates:
-        candidate_targets = candidate.get("read_targets") if isinstance(candidate.get("read_targets"), list) else []
+        candidate_targets = _as_list(candidate, "read_targets")
         source_targets = [
             target
             for target in candidate_targets
@@ -1803,7 +1771,7 @@ def _ranked_read_targets(
             append_target(_source_span_read_target(span), index)
     base_order = len(entries)
     for candidate_index, candidate in enumerate(candidates):
-        candidate_targets = candidate.get("read_targets") if isinstance(candidate.get("read_targets"), list) else []
+        candidate_targets = _as_list(candidate, "read_targets")
         for target_index, target in enumerate(candidate_targets):
             if not isinstance(target, dict):
                 continue
@@ -1951,7 +1919,7 @@ def _event_types_for_candidates(
         base_order = candidate_index * 10
         add_type_name(candidate.get("type_name"), base_order)
         add_type_name(candidate.get("return_type"), base_order + 1)
-        parameter_types = candidate.get("parameter_types") if isinstance(candidate.get("parameter_types"), list) else []
+        parameter_types = _as_list(candidate, "parameter_types")
         for parameter_index, type_name in enumerate(parameter_types):
             add_type_name(type_name, base_order + 2 + parameter_index)
 
@@ -2133,7 +2101,7 @@ def find_source(query: str, *, limit: int = 12) -> Dict[str, Any]:
         그래프 출력은 행(row) 배열로 압축돼 있어 시그니처/멤버명으로
         _find_record_by_signature를 통해 원본 레코드를 역추적한다.
         """
-        for path in graph.get("paths") if isinstance(graph.get("paths"), list) else []:
+        for path in _as_list(graph, "paths"):
             steps = path[2] if isinstance(path, list) and len(path) >= 3 and isinstance(path[2], list) else []
             for step in steps:
                 if isinstance(step, list) and len(step) >= 5:
@@ -2141,7 +2109,7 @@ def find_source(query: str, *, limit: int = 12) -> Dict[str, Any]:
                         _find_record_by_signature(records, signature=_to_text(step[4]), member_name=_to_text(step[3])),
                         "graph_path",
                     )
-        for row in graph.get("operations") if isinstance(graph.get("operations"), list) else []:
+        for row in _as_list(graph, "operations"):
             if isinstance(row, list) and len(row) >= 4:
                 append_record(
                     _find_record_by_signature(
@@ -2152,7 +2120,7 @@ def find_source(query: str, *, limit: int = 12) -> Dict[str, Any]:
                     ),
                     "graph_operation",
                 )
-        for row in graph.get("declarations") if isinstance(graph.get("declarations"), list) else []:
+        for row in _as_list(graph, "declarations"):
             if isinstance(row, list) and row:
                 record = _find_record_by_signature(
                     records,
@@ -2219,7 +2187,7 @@ def find_source(query: str, *, limit: int = 12) -> Dict[str, Any]:
         if _to_text(candidate.get("type_name"))
     }
     for candidate in list(candidates):
-        parameter_types = candidate.get("parameter_types") if isinstance(candidate.get("parameter_types"), list) else []
+        parameter_types = _as_list(candidate, "parameter_types")
         for type_name in [
             _to_text(candidate.get("return_type")),
             *(_to_text(item) for item in parameter_types),
@@ -2287,7 +2255,7 @@ def find_source(query: str, *, limit: int = 12) -> Dict[str, Any]:
         file_candidates.append({"kind": "source_file", "reason": reason, "path": normalized_path, "source": source})
 
     for candidate in candidates:
-        for ref in candidate.get("source_refs") if isinstance(candidate.get("source_refs"), list) else []:
+        for ref in _as_list(candidate, "source_refs"):
             append_file(_to_text(ref.get("path")) if isinstance(ref, dict) else "", "candidate_ref", _to_text(candidate.get("symbol")))
     for token in _query_word_tokens(normalized_query):
         if not _is_ascii_identifier(token):
@@ -2360,7 +2328,7 @@ def _type_order(record: Dict[str, Any], query: str, connected_types: Optional[Se
                 _to_text(record.get("type_name")),
                 _to_text(record.get("declaration")),
                 _to_text(record.get("summary")),
-                " ".join(_to_text(item) for item in (record.get("bases") if isinstance(record.get("bases"), list) else [])),
+                " ".join(_to_text(item) for item in (_as_list(record, "bases"))),
             ]
         )
     )
@@ -2442,12 +2410,12 @@ def _type_graph_edges(types: Sequence[Dict[str, Any]], known_type_names: set) ->
         owner_type = _to_text(type_item.get("type_name"))
         if not owner_type:
             continue
-        for base in type_item.get("bases") if isinstance(type_item.get("bases"), list) else []:
+        for base in _as_list(type_item, "bases"):
             base_name = _to_text(base)
             if base_name:
                 append({"from": owner_type, "relation": "inherits", "to": base_name})
 
-        for member in type_item.get("members") if isinstance(type_item.get("members"), list) else []:
+        for member in _as_list(type_item, "members"):
             signature = _to_text(member.get("csharp_signature"))
             if not signature:
                 continue
@@ -2528,7 +2496,7 @@ def _type_graph_operations(types: Sequence[Dict[str, Any]], known_type_names: se
         owner_type = _to_text(type_item.get("type_name"))
         if not owner_type:
             continue
-        for member in type_item.get("members") if isinstance(type_item.get("members"), list) else []:
+        for member in _as_list(type_item, "members"):
             signature = _to_text(member.get("csharp_signature"))
             if not signature:
                 continue
@@ -2690,14 +2658,14 @@ def _type_graph_paths(
         if owner and returns:
             add_step(owner, returns, "returns", operation)
             add_step(returns, owner, "returned_by", operation)
-        for accepted in operation.get("accepts", []) if isinstance(operation.get("accepts"), list) else []:
+        for accepted in _as_list(operation, "accepts"):
             accepted_type = _to_text(accepted)
             if accepted_type and owner:
                 add_step(accepted_type, owner, "accepted_by", operation)
 
     for type_item in types:
         type_name = _to_text(type_item.get("type_name"))
-        for base in type_item.get("bases") if isinstance(type_item.get("bases"), list) else []:
+        for base in _as_list(type_item, "bases"):
             base_name = _to_text(base)
             if type_name in _CS_PRIMITIVE_TYPES or base_name in _CS_PRIMITIVE_TYPES:
                 continue
@@ -2750,7 +2718,7 @@ def _type_graph_paths(
         for candidate in [_to_text(operation.get("returns")), _to_text(operation.get("owner_type"))]:
             if candidate and candidate in type_names and candidate not in start_nodes:
                 start_nodes.append(candidate)
-        for accepted in operation.get("accepts", []) if isinstance(operation.get("accepts"), list) else []:
+        for accepted in _as_list(operation, "accepts"):
             accepted_type = _to_text(accepted)
             if accepted_type and accepted_type in type_names and accepted_type not in start_nodes:
                 start_nodes.append(accepted_type)
@@ -2761,9 +2729,10 @@ def _type_graph_paths(
     seen_paths = set()
     goal_nodes = set(query_type_names)
     for start in start_nodes[:16]:
-        queue: List[Tuple[str, List[Dict[str, Any]]]] = [(start, [])]
+        # deque로 양끝 O(1) — list.pop(0)의 O(n) 제거
+        queue: "deque[Tuple[str, List[Dict[str, Any]]]]" = deque([(start, [])])
         while queue and len(paths) < limit * 6:
-            node, steps = queue.pop(0)
+            node, steps = queue.popleft()
             if steps and node in goal_nodes:
                 path_key = tuple((step["from"], step["relation"], step["to"]) for step in steps)
                 if path_key not in seen_paths:
@@ -2793,12 +2762,13 @@ def _type_graph_paths(
                     )
             if len(steps) >= 7:
                 continue
+            # 방문집합(사이클 방지)은 이웃마다가 아니라 노드당 한 번만 계산 (결과 동일)
+            path_nodes = set()
+            for existing in steps:
+                path_nodes.add(_to_text(existing.get("from")))
+                path_nodes.add(_to_text(existing.get("to")))
             for step in adjacency.get(node, [])[:24]:
                 next_node = _to_text(step.get("to"))
-                path_nodes = set()
-                for existing in steps:
-                    path_nodes.add(_to_text(existing.get("from")))
-                    path_nodes.add(_to_text(existing.get("to")))
                 if not next_node or next_node in path_nodes:
                     continue
                 queue.append((next_node, [*steps, step]))
@@ -2838,7 +2808,7 @@ def type_graph(query: str, *, limit: int = 12) -> Dict[str, Any]:
     declarations = declaration_search(normalized_query, limit=safe_limit).get("results", [])
     connected_types: List[str] = []
     for item in declarations:
-        for token in item.get("types") if isinstance(item.get("types"), list) else []:
+        for token in _as_list(item, "types"):
             if token not in connected_types:
                 connected_types.append(token)
         type_name = _to_text(item.get("type_name"))
@@ -2886,22 +2856,20 @@ def type_graph(query: str, *, limit: int = 12) -> Dict[str, Any]:
     # 단계 3: 상속 기반 assignability 작성 + 베이스 타입도 그래프에 포함
     assignability = []
     for item in list(selected_types):
-        for base in item.get("bases") if isinstance(item.get("bases"), list) else []:
+        for base in _as_list(item, "bases"):
             assignability.append({"from": item["type_name"], "to": base})
             if base not in seen_type_names:
-                for record in type_records:
-                    if _to_text(record.get("type_name")) == base:
-                        append_type(record)
-                        break
+                rec = type_record_by_name.get(base)
+                if rec:
+                    append_type(rec)
 
     # 선언 검색에서 나온 연결 타입도 빠짐없이 그래프에 포함
     for type_name in connected_types:
         if type_name in seen_type_names:
             continue
-        for record in type_records:
-            if _to_text(record.get("type_name")) == type_name:
-                append_type(record)
-                break
+        rec = type_record_by_name.get(type_name)
+        if rec:
+            append_type(rec)
 
     # 단계 4-a: 지금까지 모은 타입을 멤버 선언에 사용하는 "소유 타입"을 점수순으로 추가
     # (예: NXLayer가 그래프에 있으면 NXLayer를 다루는 NXLayerManager 같은 타입을 발견)
@@ -2922,17 +2890,16 @@ def type_graph(query: str, *, limit: int = 12) -> Dict[str, Any]:
     for _, owner_type in sorted(owner_candidates)[: max(4, safe_limit // 2)]:
         if owner_type in seen_type_names:
             continue
-        for record in type_records:
-            if _to_text(record.get("type_name")) == owner_type:
-                append_type(record)
-                break
+        rec = type_record_by_name.get(owner_type)
+        if rec:
+            append_type(rec)
         if len(selected_types) >= safe_limit + 6:
             break
 
     # 단계 4-b: 그래프 내 타입을 상속하는 파생 타입 추가 (베이스당 최대 4개로 폭발 방지)
     derived_counts: Dict[str, int] = {}
     for record in type_records:
-        bases = record.get("bases") if isinstance(record.get("bases"), list) else []
+        bases = _as_list(record, "bases")
         matching_bases = [base for base in bases if base in seen_type_names and derived_counts.get(base, 0) < 4]
         if matching_bases:
             append_type(record)
@@ -2951,10 +2918,9 @@ def type_graph(query: str, *, limit: int = 12) -> Dict[str, Any]:
         owner_type = _to_text(member_record.get("type_name"))
         if not owner_type or owner_type in seen_type_names:
             continue
-        for record in type_records:
-            if _to_text(record.get("type_name")) == owner_type:
-                append_type(record)
-                break
+        rec = type_record_by_name.get(owner_type)
+        if rec:
+            append_type(rec)
         if len(selected_types) >= safe_limit + 8:
             break
     # 단계 4-d: returns/accepts/inherits 엣지를 따라 인접 타입을 최대 2라운드 확장

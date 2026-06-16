@@ -56,7 +56,7 @@ MAX_OBSERVATIONS_FOR_MODEL = 8
 # 한 스텝에서 모델이 요청한 tool_calls 중 실제로 실행할 최대 개수
 MAX_TOOL_CALLS_PER_STEP = 4
 # 모델에 넣는 관찰 JSON 직렬화 문자열의 최대 글자수 예산
-MODEL_OBSERVATION_CHARS = 12000
+MODEL_OBSERVATION_CHARS = config.MODEL_OBSERVATION_CHARS
 # source_facts에 포함할 API 시그니처(api_signatures)의 최대 개수
 MAX_API_SIGNATURES_FOR_MODEL = 64
 # source_facts에 포함할 이벤트 선언(event_declarations)의 최대 개수
@@ -1002,7 +1002,7 @@ def _chat_completion_response(
         "messages": messages,
         "temperature": 0,
         "max_tokens": max_tokens,
-        "top_k": 20,
+        "top_k": config.LLM_TOP_K,
         "chat_template_kwargs": {"enable_thinking": bool(enable_thinking)},
     }
     if tools:
@@ -1011,11 +1011,11 @@ def _chat_completion_response(
     request = urllib.request.Request(
         endpoint,
         data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-        headers={"Content-Type": "application/json", "Authorization": "Bearer EMPTY"},
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {config.LLM_API_KEY}"},
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=180) as response:
+        with urllib.request.urlopen(request, timeout=config.LLM_TIMEOUT_SECONDS) as response:
             return json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
@@ -1133,8 +1133,8 @@ def answer_source_question(
     model: Optional[str] = None,
     llm_base_url: Optional[str] = None,
     session_id: Optional[str] = None,
-    max_tokens: int = 4096,
-    max_llm_calls: int = 12,
+    max_tokens: int = config.DEFAULT_MAX_TOKENS,
+    max_llm_calls: int = config.DEFAULT_MAX_LLM_CALLS,
     enable_thinking: bool = False,
 ) -> Dict[str, Any]:
     """소스 질문에 답하는 에이전트의 메인 진입점 (POST /api/v1/source/answer).

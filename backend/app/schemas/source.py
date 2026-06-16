@@ -9,6 +9,8 @@ from typing import Optional
 
 from pydantic import BaseModel
 
+from .. import config
+
 
 class SourceListRequest(BaseModel):
     """POST /source/ls 요청: 디렉터리 목록 조회."""
@@ -96,8 +98,8 @@ class SourceAnswerRequest(BaseModel):
     # 클라이언트 측 대화 추적용 ID (응답에 그대로 반환됨)
     session_id: Optional[str] = None
     # 모델 응답 1회당 최대 생성 토큰 수
-    max_tokens: int = 4096
+    max_tokens: int = config.DEFAULT_MAX_TOKENS
     # 에이전트 루프의 최대 LLM 호출 횟수 (도구 호출 스텝 상한)
-    max_llm_calls: int = 12
+    max_llm_calls: int = config.DEFAULT_MAX_LLM_CALLS
     # Qwen 계열의 thinking(사고 과정) 모드 활성화 여부
     enable_thinking: bool = False
