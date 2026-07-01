@@ -3,3 +3,8 @@ dist/
 .vite/
 release/
 build-info.json
+
+# Bundled Python runtime for the qwen-agent sidecar (fetched by
+# scripts/prepare-python-runtime.mjs, packaged via electron-builder
+# extraResources — regenerable, not something to commit).
+vendor/

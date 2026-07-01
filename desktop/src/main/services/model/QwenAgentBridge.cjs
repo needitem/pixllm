@@ -35,9 +35,8 @@ function clipText(value = '', maxChars = 3500) {
   return `${text.slice(0, Math.max(0, limit - 15))}\n...[truncated]`;
 }
 
-function toolResultCharLimit(toolName = '') {
-  void toolName;
-  const parsed = Number(process.env.PIXLLM_QWEN_AGENT_TOOL_RESULT_CHARS || 8000);
+function clampToolResultChars(value) {
+  const parsed = Number(value);
   if (!Number.isFinite(parsed)) {
     return 8000;
   }
@@ -261,8 +260,43 @@ function installQwenAgentDependencies(candidate) {
   };
 }
 
+// 패키징된 앱은 scripts/prepare-python-runtime.mjs가 미리 준비해서
+// electron-builder extraResources로 넣어둔 자체완결형 Python을 쓴다 —
+// 사용자 PC의 Python 설치 상태에 의존하거나, 거기에 pip install을 하지
+// 않는다. 이 경로가 없으면(개발 중 준비 스크립트를 아직 안 돌렸을 때만)
+// 기존의 "PC에서 Python 찾기" 폴백으로 넘어간다.
+function bundledPythonPath() {
+  if (__dirname.includes('.asar')) {
+    return path.join(process.resourcesPath, 'python-windows-x64', 'python.exe');
+  }
+  return path.join(__dirname, '..', '..', '..', '..', 'vendor', 'python-windows-x64', 'python.exe');
+}
+
+function resolveBundledPythonCommand() {
+  const pythonPath = bundledPythonPath();
+  if (!fs.existsSync(pythonPath)) {
+    return null;
+  }
+  const candidate = { command: pythonPath, args: [], source: 'bundled' };
+  const probe = probePythonCandidate(candidate);
+  if (!probe.ok) {
+    return null;
+  }
+  return {
+    command: candidate.command,
+    args: candidate.args,
+    source: candidate.source,
+    executable: probe.executable,
+  };
+}
+
 function resolvePythonCommand() {
   if (cachedPythonCommand) {
+    return cachedPythonCommand;
+  }
+  const bundled = resolveBundledPythonCommand();
+  if (bundled) {
+    cachedPythonCommand = bundled;
     return cachedPythonCommand;
   }
   const failures = [];
@@ -381,7 +415,9 @@ function startToolBridgeServer({
   onToolBatchStart = async () => {},
   onToolBatchEnd = async () => {},
   onStatus = async () => {},
+  toolResultMaxChars = 8000,
 } = {}) {
+  const resultCharLimit = clampToolResultChars(toolResultMaxChars);
   let callCount = 0;
   let server = null;
   const activeNames = Array.isArray(activeToolNames)
@@ -426,7 +462,7 @@ function startToolBridgeServer({
       || JSON.stringify(execution?.observation || {});
     return {
       ok: execution?.observation?.ok !== false,
-      content: clipText(content, toolResultCharLimit(toolUse.name)),
+      content: clipText(content, resultCharLimit),
     };
   };
 
@@ -502,6 +538,7 @@ async function runQwenAgentBridge({
   maxTokens = 4096,
   maxLlmCalls = 20,
   enableThinking = false,
+  toolResultMaxChars = 8000,
   signal = null,
   onToolUse = async () => {},
   onToolResult = async () => {},
@@ -525,6 +562,7 @@ async function runQwenAgentBridge({
     onToolBatchStart,
     onToolBatchEnd,
     onStatus,
+    toolResultMaxChars,
   });
   const child = spawn(python.command, [...python.args, scriptPath], {
     cwd: resolveSidecarCwd(scriptPath),
@@ -539,7 +577,9 @@ async function runQwenAgentBridge({
     llm: {
       model: toStringValue(model),
       model_server: toStringValue(llmBaseUrl),
-      api_key: process.env.PIXLLM_QWEN_AGENT_API_KEY || 'EMPTY',
+      // 로컬 vLLM 서버는 인증이 없어서 항상 관례값 'EMPTY'를 보낸다. 인증이 필요한
+      // 서버를 붙이게 되면 그때 설정 값으로 다시 노출하면 된다.
+      api_key: 'EMPTY',
       max_tokens: Number(maxTokens || 4096),
       temperature: 0.2,
       top_k: 20,

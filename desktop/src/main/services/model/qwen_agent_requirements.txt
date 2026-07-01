@@ -1,2 +1,6 @@
 qwen-agent==0.0.34
 soundfile>=0.13.1
+# qwen_agent.tools.python_executor imports this directly but qwen-agent's own
+# package metadata doesn't declare it — pin it explicitly or the sidecar
+# fails at import time with ModuleNotFoundError.
+python-dateutil>=2.8.2

@@ -27,6 +27,10 @@ declare global {
         selectedFilePath?: string;
         sessionId?: string;
         historyMessages?: Array<{ role: string; content: string }>;
+        enableThinking?: boolean;
+        maxTokens?: number;
+        maxLlmCalls?: number;
+        toolResultMaxChars?: number;
       }) => Promise<{ requestId: string }>;
       agentChatStreamCancel: (requestId: string) => Promise<{ ok: boolean; requestId: string }>;
       onAgentStreamEvent: (
@@ -58,6 +62,10 @@ declare global {
     workspacePath: string;
     engineQuestionDefault: boolean;
     recentWorkspaces: string[];
+    enableThinking: boolean;
+    qwenAgentMaxTokens: number;
+    qwenAgentMaxLlmCalls: number;
+    qwenAgentToolResultChars: number;
   };
 
   type WorkspaceCommandResult = {

@@ -242,6 +242,10 @@ export async function streamLocalAgentChat(
     selectedFilePath?: string;
     sessionId?: string;
     historyMessages?: Array<{ role: string; content: string }>;
+    enableThinking?: boolean;
+    maxTokens?: number;
+    maxLlmCalls?: number;
+    toolResultMaxChars?: number;
   },
   handlers: {
     onToken?: (chunk: string) => void;

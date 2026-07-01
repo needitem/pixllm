@@ -1,6 +1,7 @@
 const { createLocalToolCollection } = require('./tools.cjs');
 const { ToolRuntime } = require('./services/tools/ToolRuntime.cjs');
 const { runQwenAgentBridge } = require('./services/model/QwenAgentBridge.cjs');
+const { resolvePrimaryModel } = require('./services/model/modelDiscovery.cjs');
 const { answerBackendSource } = require('./services/tools/BackendToolClient.cjs');
 const {
   createTextBlock,
@@ -24,17 +25,11 @@ const {
 const MAX_TRANSITIONS = 64;
 const MAX_HISTORY_MESSAGES_FOR_NEW_RUN = 4;
 const MAX_HISTORY_TEXT_CHARS = 1500;
-const DEFAULT_QWEN_AGENT_MAX_TOKENS = 4096;
+const DEFAULT_QWEN_AGENT_MAX_TOKENS = 2048;
+const DEFAULT_QWEN_AGENT_TOOL_RESULT_CHARS = 8000;
+const DEFAULT_QWEN_AGENT_ENABLE_THINKING = true;
 const DEFAULT_QWEN_AGENT_SOURCE_MAX_LLM_CALLS = 12;
 const DEFAULT_QWEN_AGENT_LOCAL_MAX_LLM_CALLS = 16;
-
-function shouldEnableQwenAgentThinking() {
-  const value = toStringValue(process.env.PIXLLM_QWEN_AGENT_ENABLE_THINKING).toLowerCase();
-  if (!value) {
-    return true;
-  }
-  return !['0', 'false', 'no', 'off'].includes(value);
-}
 
 function engineModeFromContext(requestContext = {}, workspacePath = '') {
   return toStringValue(requestContext?.mode || (workspacePath ? 'local' : 'source'));
@@ -44,10 +39,9 @@ function isBackendApiUrl(value = '') {
   return /(?:^|\/)api(?:\/v\d+)?$/i.test(toStringValue(value).replace(/\/$/, ''));
 }
 
-function qwenAgentMaxLlmCallsForMode(requestMode) {
-  const envValue = Number(process.env.PIXLLM_QWEN_AGENT_MAX_LLM_CALLS || 0);
-  if (Number.isFinite(envValue) && envValue > 0) {
-    return envValue;
+function qwenAgentMaxLlmCallsForMode(requestMode, override = 0) {
+  if (Number.isFinite(override) && override > 0) {
+    return override;
   }
   return requestMode === 'source'
     ? DEFAULT_QWEN_AGENT_SOURCE_MAX_LLM_CALLS
@@ -112,6 +106,10 @@ class QueryEngine {
     selectedFilePath = '',
     sessionId = '',
     historyMessages = [],
+    enableThinking = DEFAULT_QWEN_AGENT_ENABLE_THINKING,
+    maxTokens = DEFAULT_QWEN_AGENT_MAX_TOKENS,
+    maxLlmCalls = 0,
+    toolResultMaxChars = DEFAULT_QWEN_AGENT_TOOL_RESULT_CHARS,
   } = {}) {
     this.workspacePath = toStringValue(workspacePath);
     this.serverBaseUrl = toStringValue(serverBaseUrl || baseUrl);
@@ -121,6 +119,12 @@ class QueryEngine {
     this.model = toStringValue(model);
     this.selectedFilePath = toStringValue(selectedFilePath);
     this.sessionId = toStringValue(sessionId);
+    this.enableThinking = Boolean(enableThinking);
+    this.maxTokens = Number(maxTokens) > 0 ? Number(maxTokens) : DEFAULT_QWEN_AGENT_MAX_TOKENS;
+    this.toolResultMaxChars = Number(toolResultMaxChars) > 0
+      ? Number(toolResultMaxChars)
+      : DEFAULT_QWEN_AGENT_TOOL_RESULT_CHARS;
+    this.maxLlmCalls = Number(maxLlmCalls) > 0 ? Number(maxLlmCalls) : 0;
     this.state = this._restoreState(historyMessages);
     this.runtime = new ToolRuntime({
       workspacePath: this.workspacePath,
@@ -148,6 +152,10 @@ class QueryEngine {
     engineQuestionOverride = null,
     model = '',
     selectedFilePath = '',
+    enableThinking = null,
+    maxTokens = 0,
+    maxLlmCalls = 0,
+    toolResultMaxChars = 0,
   } = {}) {
     this.serverBaseUrl = toStringValue(serverBaseUrl) || this.serverBaseUrl || toStringValue(baseUrl) || this.baseUrl;
     this.llmBaseUrl = toStringValue(llmBaseUrl) || this.llmBaseUrl;
@@ -157,6 +165,10 @@ class QueryEngine {
     this.baseUrl = this.llmBaseUrl || toStringValue(baseUrl) || this.baseUrl || this.serverBaseUrl;
     this.model = toStringValue(model) || this.model;
     this.selectedFilePath = toStringValue(selectedFilePath) || this.selectedFilePath;
+    this.enableThinking = typeof enableThinking === 'boolean' ? enableThinking : this.enableThinking;
+    this.maxTokens = Number(maxTokens) > 0 ? Number(maxTokens) : this.maxTokens;
+    this.maxLlmCalls = Number(maxLlmCalls) > 0 ? Number(maxLlmCalls) : this.maxLlmCalls;
+    this.toolResultMaxChars = Number(toolResultMaxChars) > 0 ? Number(toolResultMaxChars) : this.toolResultMaxChars;
     this.toolDescriptionCache.clear();
     if (this.runtime) {
       this.runtime.selectedFilePath = this.selectedFilePath;
@@ -369,6 +381,18 @@ class QueryEngine {
     );
   }
 
+  // qwen-agent 파이썬 라이브러리는 빈 모델명을 'gpt-4o-mini'로 자체 기본값
+  // 처리해버려서(qwen_agent/llm/oai.py), 로컬 에이전트 경로엔 실제 모델명이
+  // 반드시 필요하다. 사용자가 입력한 값이 있으면 그걸 쓰고, 없으면 서버의
+  // GET /v1/models에서 자동으로 알아낸다.
+  async _resolveLocalAgentModel() {
+    const explicit = toStringValue(this.model);
+    if (explicit) {
+      return explicit;
+    }
+    return resolvePrimaryModel(this._qwenAgentModelServer());
+  }
+
   _messagesForAgent(extraMessages = []) {
     const stateMessages = (Array.isArray(this.state.messages) ? this.state.messages : [])
       .map((message) => ({
@@ -409,7 +433,7 @@ class QueryEngine {
     });
     this._recordTranscript({
       kind: 'backend_source_agent_request',
-      thinking: shouldEnableQwenAgentThinking(),
+      thinking: this.enableThinking,
     });
 
     const result = await answerBackendSource({
@@ -418,9 +442,9 @@ class QueryEngine {
       llmBaseUrl: this.llmBaseUrl,
       model: this.model,
       sessionId: this.sessionId,
-      maxTokens: Number(process.env.PIXLLM_QWEN_AGENT_MAX_TOKENS || DEFAULT_QWEN_AGENT_MAX_TOKENS),
-      maxLlmCalls: qwenAgentMaxLlmCallsForMode('source'),
-      enableThinking: shouldEnableQwenAgentThinking(),
+      maxTokens: this.maxTokens,
+      maxLlmCalls: qwenAgentMaxLlmCallsForMode('source', this.maxLlmCalls),
+      enableThinking: this.enableThinking,
     });
     if (signal?.aborted) {
       throw new Error('Cancelled');
@@ -650,21 +674,22 @@ class QueryEngine {
       this._recordTranscript({
         kind: 'qwen_agent_request',
         toolCount: activeToolNames.length,
-        thinking: shouldEnableQwenAgentThinking(),
+        thinking: this.enableThinking,
       });
       const agentMessages = this._messagesForAgent();
 
       const bridgeResult = await runQwenAgentBridge({
         llmBaseUrl: this._qwenAgentModelServer(),
-        model: this.model,
+        model: await this._resolveLocalAgentModel(),
         systemPrompt,
         messages: agentMessages,
         toolDefinitions,
         runtime: this.runtime,
         activeToolNames,
-        maxTokens: Number(process.env.PIXLLM_QWEN_AGENT_MAX_TOKENS || DEFAULT_QWEN_AGENT_MAX_TOKENS),
-        maxLlmCalls: qwenAgentMaxLlmCallsForMode(requestMode),
-        enableThinking: shouldEnableQwenAgentThinking(),
+        maxTokens: this.maxTokens,
+        maxLlmCalls: qwenAgentMaxLlmCallsForMode(requestMode, this.maxLlmCalls),
+        enableThinking: this.enableThinking,
+        toolResultMaxChars: this.toolResultMaxChars,
         signal,
         onToolUse,
         onToolResult,

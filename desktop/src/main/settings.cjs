@@ -2,8 +2,23 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { ensureDesktopDataRoot } = require('./storage_paths.cjs');
 
-const SETTINGS_KEYS = ['serverBaseUrl', 'llmBaseUrl', 'workspacePath', 'engineQuestionDefault', 'recentWorkspaces'];
+const SETTINGS_KEYS = [
+  'serverBaseUrl',
+  'llmBaseUrl',
+  'workspacePath',
+  'engineQuestionDefault',
+  'recentWorkspaces',
+  'enableThinking',
+  'qwenAgentMaxTokens',
+  'qwenAgentMaxLlmCalls',
+  'qwenAgentToolResultChars',
+];
 const DEFAULT_LLM_BASE_URL = 'http://192.168.2.212:8000/v1';
+const DEFAULT_ENABLE_THINKING = true;
+const DEFAULT_QWEN_AGENT_MAX_TOKENS = 2048;
+// 0 = "설정 안 함" — QueryEngine이 질문 종류(local/source)별 내부 기본값을 쓴다.
+const DEFAULT_QWEN_AGENT_MAX_LLM_CALLS = 0;
+const DEFAULT_QWEN_AGENT_TOOL_RESULT_CHARS = 8000;
 
 function settingsPath() {
   return path.join(ensureDesktopDataRoot(), 'settings.json');
@@ -15,8 +30,20 @@ function defaultSettings() {
     llmBaseUrl: process.env.PIXLLM_LLM_BASE_URL || DEFAULT_LLM_BASE_URL,
     workspacePath: '',
     engineQuestionDefault: true,
-    recentWorkspaces: []
+    recentWorkspaces: [],
+    enableThinking: DEFAULT_ENABLE_THINKING,
+    qwenAgentMaxTokens: DEFAULT_QWEN_AGENT_MAX_TOKENS,
+    qwenAgentMaxLlmCalls: DEFAULT_QWEN_AGENT_MAX_LLM_CALLS,
+    qwenAgentToolResultChars: DEFAULT_QWEN_AGENT_TOOL_RESULT_CHARS
   };
+}
+
+function clampToolResultChars(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return DEFAULT_QWEN_AGENT_TOOL_RESULT_CHARS;
+  }
+  return Math.max(1000, Math.min(16000, Math.floor(parsed)));
 }
 
 function normalizeWorkspaceList(list) {
@@ -46,23 +73,46 @@ function finalizeSettings(source) {
     workspacePath,
     ...(Array.isArray(source?.recentWorkspaces) ? source.recentWorkspaces : [])
   ]);
+  const qwenAgentMaxTokens = Number(source?.qwenAgentMaxTokens) > 0
+    ? Number(source.qwenAgentMaxTokens)
+    : DEFAULT_QWEN_AGENT_MAX_TOKENS;
+  const qwenAgentMaxLlmCalls = Number(source?.qwenAgentMaxLlmCalls) > 0
+    ? Number(source.qwenAgentMaxLlmCalls)
+    : DEFAULT_QWEN_AGENT_MAX_LLM_CALLS;
+  const qwenAgentToolResultChars = clampToolResultChars(source?.qwenAgentToolResultChars);
 
   return {
     ...source,
     llmBaseUrl,
     workspacePath,
-    recentWorkspaces
+    recentWorkspaces,
+    qwenAgentMaxTokens,
+    qwenAgentMaxLlmCalls,
+    qwenAgentToolResultChars
   };
 }
 
+// patch에 실제로 들어있는 키만 정규화해서 돌려준다. 예전엔 boolean/array 키를
+// source에 없어도 무조건 기본값으로 채워서 반환했는데, saveSettings의
+// { ...readStoredSettings(), ...normalizeSettings(patch) } 병합에서 그 기본값이
+// 저장된 값을 덮어써버렸다 (예: 워크스페이스만 바꿔도 engineQuestionDefault가
+// false로, recentWorkspaces가 빈 배열로 리셋되는 버그).
 function normalizeSettings(source) {
   const normalized = {};
+  const has = (key) => source && Object.prototype.hasOwnProperty.call(source, key);
   for (const key of SETTINGS_KEYS) {
+    if (!has(key)) continue;
     if (key === 'recentWorkspaces') {
-      normalized[key] = normalizeWorkspaceList(source?.[key]);
-    } else if (key === 'engineQuestionDefault') {
-      normalized[key] = Boolean(source?.engineQuestionDefault);
-    } else if (typeof source?.[key] === 'string') {
+      normalized[key] = normalizeWorkspaceList(source[key]);
+    } else if (key === 'engineQuestionDefault' || key === 'enableThinking') {
+      normalized[key] = Boolean(source[key]);
+    } else if (key === 'qwenAgentMaxTokens') {
+      normalized[key] = Number(source[key]) > 0 ? Number(source[key]) : DEFAULT_QWEN_AGENT_MAX_TOKENS;
+    } else if (key === 'qwenAgentMaxLlmCalls') {
+      normalized[key] = Number(source[key]) > 0 ? Number(source[key]) : DEFAULT_QWEN_AGENT_MAX_LLM_CALLS;
+    } else if (key === 'qwenAgentToolResultChars') {
+      normalized[key] = clampToolResultChars(source[key]);
+    } else if (typeof source[key] === 'string') {
       normalized[key] = source[key];
     }
   }

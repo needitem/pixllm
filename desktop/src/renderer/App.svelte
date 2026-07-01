@@ -84,7 +84,11 @@
     llmBaseUrl: 'http://192.168.2.212:8000/v1',
     workspacePath: '',
     engineQuestionDefault: true,
-    recentWorkspaces: []
+    recentWorkspaces: [],
+    enableThinking: true,
+    qwenAgentMaxTokens: 2048,
+    qwenAgentMaxLlmCalls: 0,
+    qwenAgentToolResultChars: 8000
   };
   let settings: DesktopSettings = { ...DEFAULT_SETTINGS };
   let settingsForm: DesktopSettings = { ...DEFAULT_SETTINGS };
@@ -631,7 +635,17 @@
       const next = await desktop.saveSettings({
         serverBaseUrl,
         llmBaseUrl,
-        engineQuestionDefault: Boolean(settingsForm.engineQuestionDefault)
+        engineQuestionDefault: Boolean(settingsForm.engineQuestionDefault),
+        enableThinking: Boolean(settingsForm.enableThinking),
+        qwenAgentMaxTokens: Number(settingsForm.qwenAgentMaxTokens) > 0
+          ? Number(settingsForm.qwenAgentMaxTokens)
+          : DEFAULT_SETTINGS.qwenAgentMaxTokens,
+        qwenAgentMaxLlmCalls: Number(settingsForm.qwenAgentMaxLlmCalls) > 0
+          ? Number(settingsForm.qwenAgentMaxLlmCalls)
+          : 0,
+        qwenAgentToolResultChars: Number(settingsForm.qwenAgentToolResultChars) > 0
+          ? Number(settingsForm.qwenAgentToolResultChars)
+          : DEFAULT_SETTINGS.qwenAgentToolResultChars
       });
       applyLoadedSettings(next);
       settingsSaveMessage = 'Settings saved.';
@@ -763,7 +777,11 @@
           llmBaseUrl: settings.llmBaseUrl,
           selectedFilePath,
           sessionId: selectedSessionId || '',
-          historyMessages
+          historyMessages,
+          enableThinking: settings.enableThinking,
+          maxTokens: settings.qwenAgentMaxTokens,
+          maxLlmCalls: settings.qwenAgentMaxLlmCalls,
+          toolResultMaxChars: settings.qwenAgentToolResultChars
         },
         {
           onToken: (chunk) => {
@@ -1214,6 +1232,22 @@
               <label class="field">
                 <span>LLM Base URL</span>
                 <input bind:value={settingsForm.llmBaseUrl} placeholder="http://192.168.2.212:8000/v1" />
+              </label>
+              <label class="field">
+                <span>Max tokens (model response)</span>
+                <input type="number" min="1" bind:value={settingsForm.qwenAgentMaxTokens} placeholder="2048" />
+              </label>
+              <label class="field">
+                <span>Max tool-call loops (0 = auto)</span>
+                <input type="number" min="0" bind:value={settingsForm.qwenAgentMaxLlmCalls} placeholder="0" />
+              </label>
+              <label class="field">
+                <span>Tool result chars (1000–16000)</span>
+                <input type="number" min="1000" max="16000" bind:value={settingsForm.qwenAgentToolResultChars} placeholder="8000" />
+              </label>
+              <label class="field composer-checkbox">
+                <input type="checkbox" bind:checked={settingsForm.enableThinking} />
+                <span>Enable model thinking (끄면 답변은 짧아지지만 도구 사용 품질이 떨어짐)</span>
               </label>
             </div>
             <div class="actions compact-actions">
