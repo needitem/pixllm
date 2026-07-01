@@ -19,7 +19,6 @@ declare global {
       getSession: (sessionId: string) => Promise<DesktopSessionRecord | null>;
       createSession: (workspacePath: string, title?: string) => Promise<DesktopSessionRecord>;
       saveSession: (session: DesktopSessionRecord) => Promise<DesktopSessionRecord>;
-      apiHealth: (baseUrl: string) => Promise<{ status?: string; components?: Record<string, unknown> }>;
       agentChatStreamStart: (payload: {
         workspacePath: string;
         prompt: string;

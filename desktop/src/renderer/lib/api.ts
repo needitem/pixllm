@@ -1,10 +1,5 @@
 import { invokeDesktop, subscribeDesktopEvent } from './bridge';
 
-export type HealthResponse = {
-  status?: string;
-  components?: Record<string, unknown>;
-};
-
 export type SourceSearchResult = {
   path: string;
   title?: string;
@@ -139,9 +134,6 @@ export type StreamTerminalPayload = {
   mentions?: string[];
   [key: string]: unknown;
 };
-
-export const fetchHealth = (baseUrl: string) =>
-  invokeDesktop<HealthResponse>('apiHealth', baseUrl);
 
 function toStringValue(value: unknown): string {
   return String(value || '').trim();

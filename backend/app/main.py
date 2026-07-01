@@ -3,7 +3,7 @@
 이 파일이 하는 일은 세 가지다:
 1. 앱 생성 + 수명주기(lifespan) 연결 — 시작/종료 시 deps.init_state/close_state 실행
 2. 예외 → 표준 응답 봉투 변환 — 어떤 예외가 나도 envelopes.err 형태의 JSON으로 통일
-3. 라우터 등록 — /api/v1 아래에 health, source 엔드포인트를 붙임
+3. 라우터 등록 — /api/v1 아래에 source 엔드포인트를 붙임
 
 실행 예: `uvicorn app.main:app`
 """
@@ -18,7 +18,7 @@ from . import config
 from .deps import close_state, init_state
 from .envelopes import ApiError, err
 from .logging_config import get_logger
-from .routers import health, source
+from .routers import source
 
 
 # 이 모듈(app 계열)에서 쓰는 'pixllm.app' 로거
@@ -117,6 +117,5 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     return _build_exception_response(exc)
 
 
-# 라우터 등록: 최종 경로는 /api/v1/health..., /api/v1/source/... 형태가 된다.
-app.include_router(health.router, prefix=config.API_PREFIX, tags=["health"])
+# 라우터 등록: 최종 경로는 /api/v1/source/... 형태가 된다.
 app.include_router(source.router, prefix=config.API_PREFIX, tags=["source"])

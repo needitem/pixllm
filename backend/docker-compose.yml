@@ -16,13 +16,3 @@ services:
       SOURCE_RUNTIME_DIR: ${SOURCE_RUNTIME_DIR:-.profiles/source}
     volumes:
       - ./.profiles:/app/.profiles
-    healthcheck:
-      test:
-        - CMD
-        - python
-        - -c
-        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/ready').read()"
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 10s

@@ -1,7 +1,6 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { app, BrowserWindow, ipcMain } = require('electron');
-const { apiHealth } = require('./server.cjs');
 const {
   startLocalAgentStream,
   cancelLocalAgentStream,
@@ -118,7 +117,6 @@ app.whenReady().then(() => {
   });
   ipcMain.handle('sessions:save', async (_, session) => saveSession(session));
 
-  ipcMain.handle('api:health', async (_, baseUrl) => apiHealth(baseUrl));
   ipcMain.handle(
     'agent:chat-stream-start',
     async (event, payload) => startLocalAgentStream(event.sender, agentStreamControllers, payload)

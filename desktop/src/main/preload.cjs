@@ -10,7 +10,6 @@ if (window.location.protocol === 'file:' || allowedHostnames.includes(window.loc
     getSession: (sessionId) => ipcRenderer.invoke('sessions:get', sessionId),
     createSession: (workspacePath, title) => ipcRenderer.invoke('sessions:create', workspacePath, title),
     saveSession: (session) => ipcRenderer.invoke('sessions:save', session),
-    apiHealth: (baseUrl) => ipcRenderer.invoke('api:health', baseUrl),
     agentChatStreamStart: (payload) => ipcRenderer.invoke('agent:chat-stream-start', payload),
     agentChatStreamCancel: (requestId) => ipcRenderer.invoke('agent:chat-stream-cancel', requestId),
     onAgentStreamEvent: (callback) => {

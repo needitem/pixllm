@@ -40,12 +40,6 @@ cp .env.compose.example .env
 docker compose up -d --build
 ```
 
-헬스 체크:
-
-```bash
-curl http://127.0.0.1:8000/api/v1/health
-```
-
 데스크톱 실행:
 
 ```bash

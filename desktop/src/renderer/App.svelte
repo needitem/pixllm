@@ -1,7 +1,6 @@
 <script lang="ts">
   import { onDestroy, onMount, tick } from 'svelte';
   import {
-    fetchHealth,
     fetchSourceOverview,
     readSourcePage,
     searchSource,
@@ -55,7 +54,6 @@
     getPathTail,
     getWorkspaceName,
     summarizeWorkspaceState,
-    toneClass,
     truncateText
   } from './lib/ui';
   import {
@@ -93,9 +91,6 @@
   let settingsForm: DesktopSettings = { ...DEFAULT_SETTINGS };
   let settingsSaveMessage = '';
   let settingsSaveError = '';
-
-  let healthStatus = 'unknown';
-  let healthMessage = '';
 
   let workspaceStatus = '';
   let workspaceDiff = '';
@@ -643,20 +638,8 @@
       });
       applyLoadedSettings(next);
       settingsSaveMessage = 'Settings saved.';
-      await refreshHealth();
     } catch (error) {
       settingsSaveError = error instanceof Error ? error.message : String(error);
-    }
-  }
-
-  async function refreshHealth() {
-    try {
-      const res = await fetchHealth(settings.serverBaseUrl);
-      healthStatus = res.status || 'unknown';
-      healthMessage = '';
-    } catch (error) {
-      healthStatus = 'error';
-      healthMessage = error instanceof Error ? error.message : String(error);
     }
   }
 
@@ -1074,10 +1057,9 @@
     }
     const loadedSettings = await desktop.loadSettings();
     applyLoadedSettings(loadedSettings);
-    await Promise.all([
-      refreshHealth(),
-      viewMode === 'main' ? refreshWorkspace() : Promise.resolve()
-    ]);
+    if (viewMode === 'main') {
+      await refreshWorkspace();
+    }
     if (viewMode === 'main' && loadedSettings.workspacePath) {
       await loadSessionsForWorkspace(loadedSettings.workspacePath);
     }
@@ -1201,7 +1183,6 @@
               <div class="eyebrow">Workspace Console</div>
               <div class="hero-title-row">
                 <h1>{workspaceName}</h1>
-                <div class={`pill ${toneClass(healthStatus)}`}>{healthStatus}</div>
               </div>
               <p class="hero-description">{workspaceStateLabel}</p>
             </div>
@@ -1227,7 +1208,6 @@
         {#if showConnectionEditor}
           <div class="connection-inline connection-panel">
             <div class="connection-summary">
-              <div class={`pill ${toneClass(healthStatus)}`}>API {healthStatus}</div>
               <div class="muted small">{settings.serverBaseUrl || 'No server URL configured'}</div>
               <div class="muted small">Model: {settings.selectedModel || 'Not set'}</div>
             </div>
@@ -1248,16 +1228,12 @@
             <div class="actions compact-actions">
               <button class="primary" on:click={saveConnectionSettings}>Save settings</button>
               <button class="secondary" on:click={resetSettingsForm}>Reset</button>
-              <button class="secondary" on:click={refreshHealth}>Refresh health</button>
             </div>
             {#if settingsSaveError}
               <div class="error-box">{settingsSaveError}</div>
             {/if}
             {#if settingsSaveMessage}
               <div class="status-copy">{settingsSaveMessage}</div>
-            {/if}
-            {#if healthMessage}
-              <div class="error-box">{healthMessage}</div>
             {/if}
           </div>
         {/if}
