@@ -196,7 +196,6 @@ function getLocalBaseTools(limits = {}) {
         path: stringSchema('Workspace-relative file path'),
         symbol: stringSchema('Symbol name to read'),
         line: integerSchema('Optional 1-based line number near the symbol', { minimum: 1 }),
-        maxChars: integerSchema('Maximum number of characters to return', { minimum: 1 }),
         pathFilter: stringSchema('Optional path substring to restrict symbol resolution'),
       }, ['path', 'symbol']),
       isReadOnly: () => true,
@@ -212,7 +211,7 @@ function getLocalBaseTools(limits = {}) {
           toStringValue(input.symbol || input.query),
           {
             line: toPositiveInt(input.line, 0),
-            maxChars: toPositiveInt(input.maxChars, resolved.maxSpanChars),
+            maxChars: resolved.maxSpanChars,
             pathFilter: toStringValue(input.pathFilter || input.path_filter),
           },
         );

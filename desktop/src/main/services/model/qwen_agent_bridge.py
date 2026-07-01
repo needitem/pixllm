@@ -126,8 +126,7 @@ def is_truthy(value):
 
 
 def apply_thinking_config(generate_cfg, llm):
-    if not is_truthy(llm.get("enable_thinking", False)):
-        return generate_cfg
+    enable_thinking = is_truthy(llm.get("enable_thinking", False))
     extra_body = generate_cfg.get("extra_body")
     if not isinstance(extra_body, dict):
         extra_body = {}
@@ -138,7 +137,7 @@ def apply_thinking_config(generate_cfg, llm):
         chat_template_kwargs = {}
     else:
         chat_template_kwargs = dict(chat_template_kwargs)
-    chat_template_kwargs["enable_thinking"] = True
+    chat_template_kwargs["enable_thinking"] = enable_thinking
     extra_body["chat_template_kwargs"] = chat_template_kwargs
     generate_cfg["extra_body"] = extra_body
     return generate_cfg
