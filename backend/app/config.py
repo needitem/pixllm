@@ -29,8 +29,6 @@ SOURCE_DATA_DIR = env("PIXLLM_SOURCE_DATA_DIR", ".profiles")
 SOURCE_RUNTIME_DIR = env("SOURCE_RUNTIME_DIR", str(Path(SOURCE_DATA_DIR) / "source"))
 # 소스 질의응답 에이전트가 호출할 LLM 서버 (vLLM, OpenAI 호환 API)의 기본 주소
 LLM_BASE_URL = env("PIXLLM_LLM_BASE_URL", "http://192.168.2.212:8000/v1")
-# 에이전트가 기본으로 사용할 모델 이름
-DEFAULT_MODEL = env("PIXLLM_DEFAULT_MODEL", "Qwen/Qwen3.6-27B")
 # 로깅 레벨/포맷 (환경변수로 override 가능). logging_config가 읽어 'pixllm' 로거에 적용한다.
 LOG_LEVEL = env("PIXLLM_LOG_LEVEL", "INFO")
 LOG_FORMAT = env("PIXLLM_LOG_FORMAT", "%(asctime)s %(levelname)s %(name)s %(message)s")

@@ -1153,7 +1153,8 @@ def answer_source_question(
 
     파라미터:
     - prompt: 사용자 질문 (필수; 비어 있으면 EMPTY_PROMPT 오류)
-    - model: 사용할 모델명 (없으면 config.DEFAULT_MODEL)
+    - model: 사용할 모델명 (없으면 빈 문자열로 전달 — vLLM은 서버에 모델이
+      하나만 떠 있으면 이름 없이도 그 모델로 응답한다)
     - llm_base_url: vLLM 서버 주소 (없으면 config.LLM_BASE_URL)
     - session_id: 응답에 그대로 되돌려줄 세션 식별자
     - max_tokens: 한 번의 LLM 응답 토큰 상한 (256~16384로 클램프)
@@ -1175,7 +1176,7 @@ def answer_source_question(
     trace = _TraceRecorder()
     completion_token_budget = _safe_int(max_tokens, 4096, 256, 16384)
     model_cfg = {
-        "model": _to_text(model) or config.DEFAULT_MODEL,
+        "model": _to_text(model),
         "model_server": _ensure_model_server(llm_base_url or ""),
     }
 
