@@ -235,7 +235,6 @@ export async function streamLocalAgentChat(
   payload: {
     workspacePath: string;
     prompt: string;
-    model: string;
     baseUrl: string;
     serverBaseUrl?: string;
     llmBaseUrl?: string;

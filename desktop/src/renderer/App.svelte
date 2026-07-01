@@ -83,7 +83,6 @@
     serverBaseUrl: 'http://192.168.2.238:8000/api',
     llmBaseUrl: 'http://192.168.2.212:8000/v1',
     workspacePath: '',
-    selectedModel: 'Qwen/Qwen3.6-27B',
     engineQuestionDefault: true,
     recentWorkspaces: []
   };
@@ -624,16 +623,14 @@
     try {
       const serverBaseUrl = settingsForm.serverBaseUrl.trim();
       const llmBaseUrl = settingsForm.llmBaseUrl.trim();
-      const selectedModel = settingsForm.selectedModel.trim();
-      if (!serverBaseUrl || !selectedModel) {
-        settingsSaveError = 'Server API URL and chat model are required.';
+      if (!serverBaseUrl) {
+        settingsSaveError = 'Server API URL is required.';
         return;
       }
 
       const next = await desktop.saveSettings({
         serverBaseUrl,
         llmBaseUrl,
-        selectedModel,
         engineQuestionDefault: Boolean(settingsForm.engineQuestionDefault)
       });
       applyLoadedSettings(next);
@@ -761,7 +758,6 @@
           workspacePath: settings.workspacePath || '',
           prompt,
           engineQuestionOverride: engineQuestionChecked,
-          model: settings.selectedModel || 'Qwen/Qwen3.6-27B',
           baseUrl: settings.llmBaseUrl || settings.serverBaseUrl,
           serverBaseUrl: settings.serverBaseUrl,
           llmBaseUrl: settings.llmBaseUrl,
@@ -1209,7 +1205,6 @@
           <div class="connection-inline connection-panel">
             <div class="connection-summary">
               <div class="muted small">{settings.serverBaseUrl || 'No server URL configured'}</div>
-              <div class="muted small">Model: {settings.selectedModel || 'Not set'}</div>
             </div>
             <div class="connection-grid">
               <label class="field">
@@ -1219,10 +1214,6 @@
               <label class="field">
                 <span>LLM Base URL</span>
                 <input bind:value={settingsForm.llmBaseUrl} placeholder="http://192.168.2.212:8000/v1" />
-              </label>
-              <label class="field">
-                <span>Chat Model</span>
-                <input bind:value={settingsForm.selectedModel} placeholder="Qwen/Qwen3.6-27B" />
               </label>
             </div>
             <div class="actions compact-actions">

@@ -2,8 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { ensureDesktopDataRoot } = require('./storage_paths.cjs');
 
-const SETTINGS_KEYS = ['serverBaseUrl', 'llmBaseUrl', 'workspacePath', 'selectedModel', 'engineQuestionDefault', 'recentWorkspaces'];
-const DEFAULT_MODEL = 'Qwen/Qwen3.6-27B';
+const SETTINGS_KEYS = ['serverBaseUrl', 'llmBaseUrl', 'workspacePath', 'engineQuestionDefault', 'recentWorkspaces'];
 const DEFAULT_LLM_BASE_URL = 'http://192.168.2.212:8000/v1';
 
 function settingsPath() {
@@ -15,7 +14,6 @@ function defaultSettings() {
     serverBaseUrl: 'http://192.168.2.238:8000/api',
     llmBaseUrl: process.env.PIXLLM_LLM_BASE_URL || DEFAULT_LLM_BASE_URL,
     workspacePath: '',
-    selectedModel: DEFAULT_MODEL,
     engineQuestionDefault: true,
     recentWorkspaces: []
   };
@@ -44,9 +42,6 @@ function finalizeSettings(source) {
   const llmBaseUrl = typeof source?.llmBaseUrl === 'string' && source.llmBaseUrl.trim()
     ? source.llmBaseUrl.trim()
     : (process.env.PIXLLM_LLM_BASE_URL || DEFAULT_LLM_BASE_URL);
-  const selectedModel = typeof source?.selectedModel === 'string'
-    ? source.selectedModel.trim() || DEFAULT_MODEL
-    : DEFAULT_MODEL;
   const recentWorkspaces = normalizeWorkspaceList([
     workspacePath,
     ...(Array.isArray(source?.recentWorkspaces) ? source.recentWorkspaces : [])
@@ -56,7 +51,6 @@ function finalizeSettings(source) {
     ...source,
     llmBaseUrl,
     workspacePath,
-    selectedModel,
     recentWorkspaces
   };
 }
@@ -68,8 +62,6 @@ function normalizeSettings(source) {
       normalized[key] = normalizeWorkspaceList(source?.[key]);
     } else if (key === 'engineQuestionDefault') {
       normalized[key] = Boolean(source?.engineQuestionDefault);
-    } else if (key === 'selectedModel') {
-      normalized[key] = typeof source?.[key] === 'string' ? source[key].trim() : '';
     } else if (typeof source?.[key] === 'string') {
       normalized[key] = source[key];
     }

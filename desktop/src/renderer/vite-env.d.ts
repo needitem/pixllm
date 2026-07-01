@@ -22,7 +22,6 @@ declare global {
       agentChatStreamStart: (payload: {
         workspacePath: string;
         prompt: string;
-        model: string;
         baseUrl: string;
         engineQuestionOverride?: boolean;
         selectedFilePath?: string;
@@ -57,7 +56,6 @@ declare global {
     serverBaseUrl: string;
     llmBaseUrl: string;
     workspacePath: string;
-    selectedModel: string;
     engineQuestionDefault: boolean;
     recentWorkspaces: string[];
   };
