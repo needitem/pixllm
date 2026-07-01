@@ -8,6 +8,7 @@ const {
 } = require('./queryEngineService.cjs');
 const { loadBuildInfo } = require('./build_info.cjs');
 const { loadSettings, saveSettings } = require('./settings.cjs');
+const { shutdownQwenAgentSidecar } = require('./services/model/QwenAgentBridge.cjs');
 const {
   listWorkspaceFiles,
   readWorkspaceFile,
@@ -149,4 +150,10 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit();
   }
+});
+
+// warm sidecar(재사용 중인 python 프로세스)는 부모가 죽어도 Windows에서
+// 자동으로 정리되지 않으므로, 앱 종료 시 명시적으로 내려준다.
+app.on('will-quit', () => {
+  shutdownQwenAgentSidecar();
 });

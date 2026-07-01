@@ -527,7 +527,124 @@ function startToolBridgeServer({
   return ready;
 }
 
-async function runQwenAgentBridge({
+// --- warm sidecar ---
+// python 프로세스 기동 + qwen_agent import에 수 초가 걸리는데, 질문마다 새로
+// 띄우면 그 비용이 매 질문 첫 응답 지연에 그대로 얹힌다. 프로세스를 하나
+// 띄워두고(stdin 한 줄 = 요청 하나) 재사용한다. 요청은 전역 큐로 직렬화한다
+// (python 쪽이 한 번에 한 요청만 처리하므로).
+let warmSidecar = null; // { child, python, scriptPath, onLine, stderrChunks }
+let sidecarQueue = Promise.resolve();
+
+function destroyWarmSidecar() {
+  const sidecar = warmSidecar;
+  warmSidecar = null;
+  if (sidecar?.child) {
+    try {
+      sidecar.child.kill('SIGTERM');
+    } catch {
+      // ignore
+    }
+  }
+}
+
+function shutdownQwenAgentSidecar() {
+  destroyWarmSidecar();
+}
+
+async function ensureWarmSidecar() {
+  if (warmSidecar && warmSidecar.child.exitCode === null && !warmSidecar.child.killed) {
+    return warmSidecar;
+  }
+  warmSidecar = null;
+
+  const scriptPath = resolveSidecarScriptPath();
+  const python = resolvePythonCommand();
+  const child = spawn(python.command, [...python.args, scriptPath], {
+    cwd: resolveSidecarCwd(scriptPath),
+    stdio: ['pipe', 'pipe', 'pipe'],
+    env: {
+      ...process.env,
+      PYTHONIOENCODING: 'utf-8',
+    },
+  });
+
+  const sidecar = {
+    child,
+    python,
+    scriptPath,
+    // 실행 중인 요청이 라인 핸들러를 갈아끼운다. 요청이 없을 때 도착한
+    // 라인(늦게 흘러나온 로그 등)은 버린다.
+    onLine: null,
+    stderrChunks: [],
+  };
+
+  let stdoutBuffer = '';
+  child.stdout.on('data', (chunk) => {
+    stdoutBuffer += chunk.toString('utf8');
+    let newlineIndex = stdoutBuffer.indexOf('\n');
+    while (newlineIndex >= 0) {
+      const line = stdoutBuffer.slice(0, newlineIndex).trim();
+      stdoutBuffer = stdoutBuffer.slice(newlineIndex + 1);
+      if (line && typeof sidecar.onLine === 'function') {
+        sidecar.onLine(line);
+      }
+      newlineIndex = stdoutBuffer.indexOf('\n');
+    }
+  });
+  child.stderr.on('data', (chunk) => {
+    sidecar.stderrChunks.push(chunk.toString('utf8'));
+    // 무한히 쌓이지 않게 최근 분량만 유지한다.
+    while (sidecar.stderrChunks.length > 200) {
+      sidecar.stderrChunks.shift();
+    }
+  });
+  child.on('exit', () => {
+    if (warmSidecar === sidecar) {
+      warmSidecar = null;
+    }
+  });
+
+  // import까지 끝났다는 "ready" 이벤트를 기다린다 (의존성 문제면 error가 온다).
+  await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      sidecar.onLine = null;
+      reject(new Error('qwen_agent_sidecar_ready_timeout'));
+    }, 60000);
+    sidecar.onLine = (line) => {
+      const event = safeJsonParse(line);
+      if (event?.event === 'ready') {
+        clearTimeout(timeout);
+        sidecar.onLine = null;
+        resolve();
+      } else if (event?.event === 'error') {
+        clearTimeout(timeout);
+        sidecar.onLine = null;
+        reject(new Error(toStringValue(event.message || event.detail || 'qwen_agent_sidecar_start_error')));
+      }
+    };
+    child.on('error', (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    child.on('exit', (code) => {
+      clearTimeout(timeout);
+      const stderrText = sidecar.stderrChunks.join('').trim();
+      reject(new Error(stderrText || `qwen_agent_sidecar_exit_${Number(code || 0)}`));
+    });
+  });
+
+  warmSidecar = sidecar;
+  return sidecar;
+}
+
+async function runQwenAgentBridge(options = {}) {
+  // python 쪽이 요청을 한 번에 하나만 처리하므로 전역 큐로 직렬화한다.
+  const run = sidecarQueue.then(() => runQwenAgentBridgeSerialized(options));
+  sidecarQueue = run.catch(() => {});
+  return run;
+}
+
+async function runQwenAgentBridgeSerialized({
   llmBaseUrl = '',
   model = '',
   systemPrompt = '',
@@ -551,8 +668,9 @@ async function runQwenAgentBridge({
   if (!runtime || typeof runtime.executeToolUse !== 'function') {
     throw new Error('qwen_agent_bridge_requires_tool_runtime');
   }
-  const scriptPath = resolveSidecarScriptPath();
-  const python = resolvePythonCommand();
+  if (signal?.aborted) {
+    throw new Error('Cancelled');
+  }
   const toolBridge = await startToolBridgeServer({
     runtime,
     activeToolNames,
@@ -564,14 +682,14 @@ async function runQwenAgentBridge({
     onStatus,
     toolResultMaxChars,
   });
-  const child = spawn(python.command, [...python.args, scriptPath], {
-    cwd: resolveSidecarCwd(scriptPath),
-    stdio: ['pipe', 'pipe', 'pipe'],
-    env: {
-      ...process.env,
-      PYTHONIOENCODING: 'utf-8',
-    },
-  });
+  let sidecar;
+  try {
+    sidecar = await ensureWarmSidecar();
+  } catch (error) {
+    await toolBridge.close();
+    throw error;
+  }
+  const { child, python, scriptPath } = sidecar;
 
   const requestPayload = {
     llm: {
@@ -597,12 +715,11 @@ async function runQwenAgentBridge({
     max_llm_calls: Math.max(1, Math.min(20, Number(maxLlmCalls || 20))),
   };
 
-  let stdoutBuffer = '';
-  let stderrBuffer = '';
   let assistantAggregate = '';
   let donePayload = null;
   let errorPayload = null;
   let lineQueue = Promise.resolve();
+  const stderrStartIndex = sidecar.stderrChunks.length;
 
   recordTranscript({
     kind: 'qwen_agent_python',
@@ -614,11 +731,9 @@ async function runQwenAgentBridge({
   });
 
   const abortHandler = () => {
-    try {
-      child.kill('SIGTERM');
-    } catch {
-      // ignore
-    }
+    // 취소는 python 안의 진행 중 요청을 중단할 방법이 없어서 warm 프로세스를
+    // 통째로 버린다 — 다음 요청 때 새로 뜬다 (콜드 스타트 한 번 감수).
+    destroyWarmSidecar();
   };
   if (signal) {
     signal.addEventListener('abort', abortHandler, { once: true });
@@ -663,51 +778,50 @@ async function runQwenAgentBridge({
     });
   };
 
-  const stdoutDone = new Promise((resolve) => {
-    child.stdout.on('data', (chunk) => {
-      stdoutBuffer += chunk.toString('utf8');
-      let newlineIndex = stdoutBuffer.indexOf('\n');
-      while (newlineIndex >= 0) {
-        const line = stdoutBuffer.slice(0, newlineIndex).trim();
-        stdoutBuffer = stdoutBuffer.slice(newlineIndex + 1);
-        if (line) {
-          lineQueue = lineQueue.then(() => handleLine(line));
-        }
-        newlineIndex = stdoutBuffer.indexOf('\n');
-      }
-    });
-    child.stdout.on('end', async () => {
-      const line = stdoutBuffer.trim();
-      if (line) {
-        lineQueue = lineQueue.then(() => handleLine(line));
-      }
-      await lineQueue;
-      resolve();
-    });
-  });
-
-  child.stderr.on('data', (chunk) => {
-    stderrBuffer += chunk.toString('utf8');
-  });
-
-  let exitCode = 0;
   try {
-    exitCode = await new Promise((resolve, reject) => {
-      child.on('error', reject);
-      child.on('exit', (code) => resolve(Number(code || 0)));
-      child.stdin.end(JSON.stringify(requestPayload));
+    await new Promise((resolve, reject) => {
+      const onExit = (code) => {
+        // 요청 처리 중 프로세스가 죽으면(취소 포함) 이 요청은 실패로 끝낸다.
+        const stderrText = sidecar.stderrChunks.slice(stderrStartIndex).join('').trim();
+        reject(new Error(
+          signal?.aborted
+            ? 'Cancelled'
+            : (stderrText || `qwen_agent_bridge_exit_${Number(code || 0)}`),
+        ));
+      };
+      child.once('exit', onExit);
+      sidecar.onLine = (line) => {
+        lineQueue = lineQueue.then(() => handleLine(line)).then(() => {
+          if (donePayload || errorPayload) {
+            child.removeListener('exit', onExit);
+            sidecar.onLine = null;
+            resolve();
+          }
+        });
+      };
+      child.stdin.write(`${JSON.stringify(requestPayload)}\n`, (error) => {
+        if (error) {
+          child.removeListener('exit', onExit);
+          sidecar.onLine = null;
+          reject(error);
+        }
+      });
     });
-    await stdoutDone;
   } finally {
+    if (sidecar.onLine) {
+      sidecar.onLine = null;
+    }
     await toolBridge.close();
     if (signal) {
       signal.removeEventListener('abort', abortHandler);
     }
   }
-  if (stderrBuffer.trim()) {
+
+  const stderrText = sidecar.stderrChunks.slice(stderrStartIndex).join('').trim();
+  if (stderrText) {
     recordTranscript({
       kind: 'qwen_agent_stderr',
-      preview: stderrBuffer.trim().slice(-4000),
+      preview: stderrText.slice(-4000),
     });
   }
   if (signal?.aborted) {
@@ -716,9 +830,6 @@ async function runQwenAgentBridge({
   if (errorPayload) {
     throw new Error(toStringValue(errorPayload.message || errorPayload.detail || 'qwen_agent_bridge_error'));
   }
-  if (exitCode !== 0) {
-    throw new Error(stderrBuffer.trim() || `qwen_agent_bridge_exit_${exitCode}`);
-  }
   if (!donePayload) {
     throw new Error('qwen_agent_bridge_missing_done_event');
   }
@@ -726,10 +837,11 @@ async function runQwenAgentBridge({
     answer: toStringValue(donePayload.answer || assistantAggregate),
     messages: Array.isArray(donePayload.messages) ? donePayload.messages : [],
     toolCallCount: toolBridge.getCallCount(),
-    stderr: stderrBuffer,
+    stderr: stderrText,
   };
 }
 
 module.exports = {
   runQwenAgentBridge,
+  shutdownQwenAgentSidecar,
 };

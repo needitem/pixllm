@@ -1,3 +1,4 @@
+import heapq
 import json
 import re
 import time
@@ -45,7 +46,10 @@ _NAMESPACE_DECL_RE = re.compile(r"^\s*namespace\s+([A-Za-z_][A-Za-z0-9_]*)\b")
 # --- 모듈 수준 캐시 (프로세스 생존 동안 유지) ---
 _INDEX_CACHE: Dict[str, Any] = {"mtime": 0.0, "records": []}
 
-_ENUM_CACHE: Dict[str, List[str]] = {}
+# enum 이름 → 리터럴 목록. 이름당 개별 캐시로 두면 "처음 보는 enum"마다 소스
+# 트리 전체를 다시 스캔하게 되므로, 첫 조회 때 한 번의 스캔으로 모든 enum을
+# 인덱싱해둔다 (_TYPE_CACHE와 같은 "루트 경로 불변" 전제).
+_ENUM_INDEX: Dict[str, Any] = {"root": "", "by_name": {}}
 
 _TYPE_CACHE: Dict[str, Any] = {"root": "", "records": []}
 
@@ -900,25 +904,31 @@ def _csharp_signature_shape(signature: Any) -> Dict[str, Any]:
     }
 
 
-def _enum_literals(enum_name: str) -> List[str]:
-    """`enum class <이름>` 선언을 소스에서 찾아 리터럴 목록을 추출하고 _ENUM_CACHE에 캐싱한다.
+_ENUM_DECL_RE = re.compile(r"\benum\s+class\s+([A-Za-z_][A-Za-z0-9_]*)\b")
+
+
+def _enum_literal_index() -> Dict[str, List[str]]:
+    """소스 트리를 한 번 훑어 모든 `enum class` 선언을 이름 → 리터럴 목록으로 인덱싱한다.
 
     선언 줄 다음부터 최대 80줄까지 본문을 훑으며 "식별자 (= 값)?," 패턴을 모은다.
-    enum 파라미터를 받는 API를 모델이 호출할 때 올바른 리터럴을 제시하기 위함이다.
-    찾지 못해도 빈 목록을 캐싱해 재탐색을 막는다.
+    같은 이름이 여러 곳에 선언돼 있으면 처음 만난 선언을 쓴다(기존 동작과 동일).
     """
-    name = _to_text(enum_name)
-    if not name:
-        return []
-    if name in _ENUM_CACHE:
-        return list(_ENUM_CACHE[name])
-    enum_re = re.compile(rf"\benum\s+class\s+{re.escape(name)}\b")
-    literals: List[str] = []
+    root = source_root()
+    cache_key = str(root.resolve()) if root.exists() else ""
+    if _ENUM_INDEX.get("root") == cache_key:
+        return _ENUM_INDEX["by_name"]
+
+    by_name: Dict[str, List[str]] = {}
     for path in _iter_source_files():
         lines = _read_lines(path)
         for idx, line in enumerate(lines):
-            if not enum_re.search(line):
+            decl = _ENUM_DECL_RE.search(line)
+            if not decl:
                 continue
+            name = decl.group(1)
+            if name in by_name:
+                continue
+            literals: List[str] = []
             # 선언 직후부터 최대 80줄 안에서 닫는 중괄호가 나올 때까지 리터럴을 수집
             for body_line in lines[idx + 1 : idx + 80]:
                 if "};" in body_line or body_line.strip() == "}":
@@ -928,10 +938,22 @@ def _enum_literals(enum_name: str) -> List[str]:
                     literal = match.group(1)
                     if literal not in literals:
                         literals.append(literal)
-            _ENUM_CACHE[name] = literals
-            return list(literals)
-    _ENUM_CACHE[name] = []
-    return []
+            by_name[name] = literals
+
+    _ENUM_INDEX["root"] = cache_key
+    _ENUM_INDEX["by_name"] = by_name
+    return by_name
+
+
+def _enum_literals(enum_name: str) -> List[str]:
+    """enum 이름으로 리터럴 목록을 조회한다. 모르는 이름이면 빈 목록.
+
+    enum 파라미터를 받는 API를 모델이 호출할 때 올바른 리터럴을 제시하기 위함이다.
+    """
+    name = _to_text(enum_name)
+    if not name:
+        return []
+    return list(_enum_literal_index().get(name, []))
 
 
 def _parse_base_types(value: str) -> List[str]:
@@ -1262,8 +1284,9 @@ def symbol_search(query: str, *, limit: int = 20) -> Dict[str, Any]:
         if normalized_query and order is None:
             continue
         matches.append((order or (0, _to_text(record.get("qualified_symbol"))), record))
-    matches.sort(key=lambda item: item[0])
-    results = [_method_payload(record) for _, record in matches[:safe_limit]]
+    # 상위 limit개만 필요하므로 전체 정렬(O(n log n)) 대신 힙 선택(O(n log k))을 쓴다.
+    top = heapq.nsmallest(safe_limit, matches, key=lambda item: item[0])
+    results = [_method_payload(record) for _, record in top]
     return {"ok": True, "query": normalized_query, "total": len(results), "results": results}
 
 
@@ -2285,9 +2308,10 @@ def declaration_search(query: str, *, limit: int = 12) -> Dict[str, Any]:
         if normalized_query and order is None:
             continue
         matches.append((order or (0, _to_text(record.get("qualified_symbol"))), record))
-    matches.sort(key=lambda item: item[0])
+    # 상위 limit개만 필요하므로 전체 정렬 대신 힙 선택(O(n log k))을 쓴다.
+    top = heapq.nsmallest(safe_limit, matches, key=lambda item: item[0])
     results: List[Dict[str, Any]] = []
-    for _, record in matches[:safe_limit]:
+    for _, record in top:
         payload = _method_payload(record, include_doc=True)
         payload["types"] = _declaration_type_tokens(payload.get("declaration"))
         # _enum_literals를 조건과 값에서 각각 한 번씩(=총 두 번) 부르던 걸 walrus로 한 번만 계산.
@@ -3032,6 +3056,15 @@ def type_graph(query: str, *, limit: int = 12) -> Dict[str, Any]:
         if _to_text(record.get("type_name"))
     }
 
+    # append_type이 타입마다 메서드 인덱스 전체를 재스캔하지 않도록,
+    # 타입 이름 → 멤버 목록을 한 번만 그룹핑해둔다 (O(types×methods) → O(methods)).
+    members_by_type: Dict[str, List[Dict[str, Any]]] = {}
+    for item in load_methods_index():
+        owner = _to_text(item.get("type_name"))
+        if not owner or _to_text(item.get("member_name")).startswith(("~", "!")):
+            continue
+        members_by_type.setdefault(owner, []).append(item)
+
     def append_type(record: Dict[str, Any]) -> None:
         """타입을 그래프에 추가한다(중복 제거). 멤버를 점수순 정렬해 최대 96개까지 부착한다."""
         type_name = _to_text(record.get("type_name"))
@@ -3039,12 +3072,7 @@ def type_graph(query: str, *, limit: int = 12) -> Dict[str, Any]:
             return
         seen_type_names.add(type_name)
         payload = _type_payload(record)
-        members = [
-            item
-            for item in load_methods_index()
-            if _to_text(item.get("type_name")) == type_name
-            and not _to_text(item.get("member_name")).startswith(("~", "!"))
-        ]
+        members = list(members_by_type.get(type_name, []))
         members.sort(key=lambda item: _member_order_for_graph(item, normalized_query, connected_types))
         payload["members"] = [_method_payload(item, include_doc=True) for item in members[:96]]
         selected_types.append(payload)

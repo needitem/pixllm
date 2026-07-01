@@ -10,13 +10,6 @@ def emit(event, **payload):
     sys.stdout.flush()
 
 
-def read_request():
-    raw = sys.stdin.read()
-    if not raw.strip():
-        raise ValueError("empty qwen-agent bridge request")
-    return json.loads(raw)
-
-
 def to_text(value):
     if value is None:
         return ""
@@ -193,80 +186,103 @@ def compact_messages(messages):
     return compacted
 
 
+def handle_request(request, assistant_cls, fncall_agent):
+    """요청 하나를 처리하고 start/assistant/done(또는 error) 이벤트를 내보낸다."""
+    max_llm_calls = int(request.get("max_llm_calls") or 20)
+    fncall_agent.MAX_LLM_CALL_PER_RUN = max(1, min(20, max_llm_calls))
+
+    llm = request.get("llm") if isinstance(request.get("llm"), dict) else {}
+    generate_cfg = {
+        "temperature": float(llm.get("temperature", 0.2)),
+        "max_tokens": int(llm.get("max_tokens", 4096)),
+        "top_k": int(llm.get("top_k", 20)),
+    }
+    generate_cfg = apply_thinking_config(generate_cfg, llm)
+    model_cfg = {
+        "model": to_text(llm.get("model")),
+        "model_server": ensure_model_server(llm.get("model_server")),
+        "api_key": to_text(llm.get("api_key")) or "EMPTY",
+        "generate_cfg": generate_cfg,
+    }
+
+    bridge_url = to_text(request.get("tool_bridge_url"))
+    tools = [
+        build_bridge_tool(spec, bridge_url)
+        for spec in request.get("tools", [])
+        if isinstance(spec, dict) and to_text(spec.get("name"))
+    ]
+    messages = [
+        normalize_message(message)
+        for message in request.get("messages", [])
+        if isinstance(message, dict) and to_text(message.get("content"))
+    ]
+    bot = assistant_cls(
+        llm=model_cfg,
+        system_message=to_text(request.get("system")),
+        function_list=tools,
+    )
+
+    emit("start", tool_count=len(tools), thinking=bool(llm.get("enable_thinking", False)))
+    last_messages = []
+    last_answer = ""
+    for responses in bot.run(messages=messages):
+        last_messages = responses or []
+        answer = extract_final_answer(last_messages)
+        if answer and answer != last_answer:
+            emit("assistant", aggregate=answer, delta=answer[len(last_answer):] if answer.startswith(last_answer) else answer)
+            last_answer = answer
+
+    final_answer = extract_final_answer(last_messages)
+    if not last_messages:
+        final_answer = last_answer
+    emit(
+        "done",
+        answer=final_answer,
+        messages=compact_messages(last_messages),
+    )
+
+
 def main():
+    """warm sidecar 요청 루프.
+
+    프로세스를 질문마다 새로 띄우면 python 기동 + qwen_agent import(수 초)가
+    매 질문의 첫 응답 지연에 그대로 얹힌다. 그래서 한 번 뜬 프로세스가
+    stdin에서 한 줄에 하나씩 JSON 요청을 계속 받아 처리한다.
+    - 기동 직후 (import 완료 후) "ready" 이벤트를 내보내 Node 쪽이 준비 시점을 알 수 있게 한다.
+    - 요청 하나의 끝은 "done" 또는 "error" 이벤트다. 요청 처리 중 예외가 나도
+      프로세스는 죽지 않고 다음 요청을 기다린다.
+    - stdin이 닫히면(부모 종료) 루프를 빠져나가며 종료한다.
+    """
     logging.basicConfig(stream=sys.stderr, level=logging.WARNING)
     try:
-        request = read_request()
-        try:
-            from qwen_agent.agents import Assistant
-            import qwen_agent.agents.fncall_agent as fncall_agent
-        except Exception as exc:
-            emit(
-                "error",
-                message=(
-                    "qwen-agent sidecar dependency is missing or incomplete. "
-                    "Install with: python -m pip install -r desktop/src/main/services/model/qwen_agent_requirements.txt"
-                ),
-                detail=str(exc),
-            )
-            return 2
-
-        max_llm_calls = int(request.get("max_llm_calls") or 20)
-        fncall_agent.MAX_LLM_CALL_PER_RUN = max(1, min(20, max_llm_calls))
-
-        llm = request.get("llm") if isinstance(request.get("llm"), dict) else {}
-        generate_cfg = {
-            "temperature": float(llm.get("temperature", 0.2)),
-            "max_tokens": int(llm.get("max_tokens", 4096)),
-            "top_k": int(llm.get("top_k", 20)),
-        }
-        generate_cfg = apply_thinking_config(generate_cfg, llm)
-        model_cfg = {
-            "model": to_text(llm.get("model")),
-            "model_server": ensure_model_server(llm.get("model_server")),
-            "api_key": to_text(llm.get("api_key")) or "EMPTY",
-            "generate_cfg": generate_cfg,
-        }
-
-        bridge_url = to_text(request.get("tool_bridge_url"))
-        tools = [
-            build_bridge_tool(spec, bridge_url)
-            for spec in request.get("tools", [])
-            if isinstance(spec, dict) and to_text(spec.get("name"))
-        ]
-        messages = [
-            normalize_message(message)
-            for message in request.get("messages", [])
-            if isinstance(message, dict) and to_text(message.get("content"))
-        ]
-        bot = Assistant(
-            llm=model_cfg,
-            system_message=to_text(request.get("system")),
-            function_list=tools,
-        )
-
-        emit("start", tool_count=len(tools), thinking=bool(llm.get("enable_thinking", False)))
-        last_messages = []
-        last_answer = ""
-        for responses in bot.run(messages=messages):
-            last_messages = responses or []
-            answer = extract_final_answer(last_messages)
-            if answer and answer != last_answer:
-                emit("assistant", aggregate=answer, delta=answer[len(last_answer):] if answer.startswith(last_answer) else answer)
-                last_answer = answer
-
-        final_answer = extract_final_answer(last_messages)
-        if not last_messages:
-            final_answer = last_answer
-        emit(
-            "done",
-            answer=final_answer,
-            messages=compact_messages(last_messages),
-        )
-        return 0
+        from qwen_agent.agents import Assistant
+        import qwen_agent.agents.fncall_agent as fncall_agent
     except Exception as exc:
-        emit("error", message=str(exc), traceback=traceback.format_exc())
-        return 1
+        emit(
+            "error",
+            message=(
+                "qwen-agent sidecar dependency is missing or incomplete. "
+                "Install with: python -m pip install -r desktop/src/main/services/model/qwen_agent_requirements.txt"
+            ),
+            detail=str(exc),
+        )
+        return 2
+
+    emit("ready")
+    for raw_line in sys.stdin:
+        line = raw_line.strip()
+        if not line:
+            continue
+        try:
+            request = json.loads(line)
+        except json.JSONDecodeError as exc:
+            emit("error", message=f"invalid request json: {exc}")
+            continue
+        try:
+            handle_request(request, Assistant, fncall_agent)
+        except Exception as exc:
+            emit("error", message=str(exc), traceback=traceback.format_exc())
+    return 0
 
 
 if __name__ == "__main__":
