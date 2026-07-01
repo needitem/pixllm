@@ -1,8 +1,5 @@
 const path = require('node:path');
-
-function toStringValue(value) {
-  return String(value || '').trim();
-}
+const { toStringValue } = require('./utils/toStringValue.cjs');
 
 function toStringList(values) {
   return Array.isArray(values)

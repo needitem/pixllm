@@ -1,6 +1,4 @@
-function toStringValue(value) {
-  return String(value || '').trim();
-}
+const { toStringValue } = require('../utils/toStringValue.cjs');
 
 function tryParseJsonCandidate(candidate = '') {
   try {
@@ -88,30 +86,6 @@ function createToolResultBlock({
   };
 }
 
-function normalizeAssistantBlocks(value) {
-  const items = Array.isArray(value) ? value : [];
-  const blocks = [];
-  for (const item of items) {
-    const type = toStringValue(item?.type).toLowerCase();
-    if (type === 'text') {
-      const text = toStringValue(item?.text);
-      if (text) blocks.push(createTextBlock(text));
-      continue;
-    }
-    if (type === 'tool_use') {
-      const name = toStringValue(item?.name);
-      const id = toStringValue(item?.id);
-      if (!name || !id) continue;
-      blocks.push(createToolUseBlock({
-        id,
-        name,
-        input: item?.input && typeof item.input === 'object' && !Array.isArray(item.input) ? item.input : {},
-      }));
-    }
-  }
-  return blocks;
-}
-
 function normalizeMessageBlocks(value) {
   const items = Array.isArray(value) ? value : [];
   const blocks = [];
@@ -173,28 +147,12 @@ function serializeBlocks(blocks) {
     .trim();
 }
 
-function extractTextFromBlocks(blocks) {
-  return (Array.isArray(blocks) ? blocks : [])
-    .filter((block) => block?.type === 'text')
-    .map((block) => toStringValue(block?.text))
-    .filter(Boolean)
-    .join('\n\n')
-    .trim();
-}
-
-function toolUseBlocks(blocks) {
-  return (Array.isArray(blocks) ? blocks : []).filter((block) => block?.type === 'tool_use');
-}
-
 module.exports = {
   toStringValue,
   safeJsonParse,
   createTextBlock,
   createToolUseBlock,
   createToolResultBlock,
-  normalizeAssistantBlocks,
   normalizeMessageBlocks,
   serializeBlocks,
-  extractTextFromBlocks,
-  toolUseBlocks,
 };

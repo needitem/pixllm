@@ -270,9 +270,18 @@ function createUnifiedDiff(relativePath, beforeText, afterText, options = {}) {
   const entries = toDiffEntries(beforeLines, afterLines, prefixLength, suffixLength, operations, contextLines);
   const hunks = buildHunks(entries, contextLines);
   const formatted = formatUnifiedDiff(relativePath, hunks);
+
+  // Single pass instead of two separate .filter().length calls over the same array.
+  let addedCount = 0;
+  let removedCount = 0;
+  for (const item of operations) {
+    if (item.type === 'add') addedCount += 1;
+    else if (item.type === 'remove') removedCount += 1;
+  }
+
   return {
-    added: operations.filter((item) => item.type === 'add').length,
-    removed: operations.filter((item) => item.type === 'remove').length,
+    added: addedCount,
+    removed: removedCount,
     diff: formatted.diff,
     truncated: formatted.truncated,
   };

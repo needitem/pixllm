@@ -1,4 +1,5 @@
 const path = require('node:path');
+const { toStringValue } = require('../toStringValue.cjs');
 
 const LOCAL_DISCOVERY_TOOLS = [
   'list_files',
@@ -20,10 +21,6 @@ const LOCAL_READ_TOOLS = [
 const LOCAL_EDIT_TOOLS = [
   'edit',
 ];
-
-function toStringValue(value) {
-  return String(value || '').trim();
-}
 
 function normalizePath(value) {
   return toStringValue(value).replace(/\\/g, '/').replace(/^\.\/+/, '');

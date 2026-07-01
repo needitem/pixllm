@@ -4,14 +4,11 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
 const { ensureDesktopDataRoot } = require('../../storage_paths.cjs');
+const { toStringValue } = require('../../utils/toStringValue.cjs');
 
 let cachedPythonCommand = null;
 let cachedSidecarScriptPath = '';
 let cachedRequirementsPath = '';
-
-function toStringValue(value) {
-  return String(value || '').trim();
-}
 
 function stripCommandQuotes(value) {
   return toStringValue(value).replace(/^["']|["']$/g, '');

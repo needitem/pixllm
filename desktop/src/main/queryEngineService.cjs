@@ -1,11 +1,8 @@
 const { randomUUID } = require('node:crypto');
 const { QueryEngine } = require('./QueryEngine.cjs');
+const { toStringValue } = require('./utils/toStringValue.cjs');
 
 const ENGINE_REGISTRY = new Map();
-
-function toStringValue(value) {
-  return String(value || '').trim();
-}
 
 function engineKey(sessionId, workspacePath) {
   const sid = toStringValue(sessionId);

@@ -2,10 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { createHash } = require('node:crypto');
 const { ensureDesktopDataRoot } = require('../storage_paths.cjs');
-
-function toStringValue(value) {
-  return String(value || '').trim();
-}
+const { toStringValue } = require('../utils/toStringValue.cjs');
 
 function stateRoot() {
   const root = path.join(ensureDesktopDataRoot(), 'agent-runtime');

@@ -49,6 +49,12 @@ _ENUM_CACHE: Dict[str, List[str]] = {}
 
 _TYPE_CACHE: Dict[str, Any] = {"root": "", "records": []}
 
+# glob/grep/enum 조회가 매 호출마다 source_root() 전체를 rglob("*") + sorted()로
+# 다시 훑는 걸 막기 위한 캐시. RAW_SOURCE_ROOT는 서버 구동 중 바뀌지 않는
+# 읽기 전용 참조 SDK 트리라서(config.py 주석 참고) 별도 무효화 없이 root 경로를
+# 캐시 키로만 써도 안전하다 — _TYPE_CACHE와 동일한 전제.
+_SOURCE_FILE_LIST_CACHE: Dict[str, Any] = {"root": "", "files": []}
+
 _LINE_CACHE: Dict[str, Tuple[float, List[str]]] = {}
 
 _NORMALIZED_LINE_CACHE: Dict[str, Tuple[float, List[str]]] = {}
@@ -152,11 +158,21 @@ def _is_source_file(path: Path) -> bool:
 
 
 def _iter_source_files() -> Iterable[Path]:
-    """소스 루트 아래의 모든 소스 파일을 경로 정렬 순서로 순회하는 제너레이터를 반환한다."""
+    """소스 루트 아래의 모든 소스 파일을 경로 정렬 순서로 순회하는 제너레이터를 반환한다.
+
+    glob/grep/enum 조회 등에서 요청마다 호출되므로, 정렬된 전체 파일 목록을
+    _SOURCE_FILE_LIST_CACHE에 캐싱해 디스크 재순회 + 재정렬을 피한다.
+    """
     root = source_root()
     if not root.exists() or not root.is_dir():
         return []
-    return (path for path in sorted(root.rglob("*")) if _is_source_file(path))
+    cache_key = str(root.resolve())
+    if _SOURCE_FILE_LIST_CACHE.get("root") != cache_key:
+        _SOURCE_FILE_LIST_CACHE["root"] = cache_key
+        _SOURCE_FILE_LIST_CACHE["files"] = [
+            path for path in sorted(root.rglob("*")) if _is_source_file(path)
+        ]
+    return iter(_SOURCE_FILE_LIST_CACHE["files"])
 
 
 def _source_path(path: Path) -> str:
@@ -1072,10 +1088,15 @@ def _method_payload(record: Dict[str, Any], *, include_doc: bool = False) -> Dic
     ]
     csharp_signature = _csharp_signature(record.get("declaration"))
     shape = _csharp_signature_shape(csharp_signature)
+    # walrus로 정규화된 이름/조회 결과를 한 번씩만 계산한다.
+    # (이전 코드는 _to_text 정규화 없이 한 번, 정규화해서 한 번 — 두 번 호출하면서
+    #  인자 형태도 서로 달랐다. _ENUM_CACHE가 있어 두 번째 호출은 사실상 캐시 히트라
+    #  체감 성능 영향은 적지만, 키 정규화 불일치는 실제 버그였다.)
     enum_literals = {
-        type_name: _enum_literals(type_name)
+        normalized_name: literals
         for type_name in [shape.get("return_type_name"), *shape.get("parameter_type_names", [])]
-        if _to_text(type_name).startswith("e") and _enum_literals(_to_text(type_name))
+        if (normalized_name := _to_text(type_name)).startswith("e")
+        and (literals := _enum_literals(normalized_name))
     }
     payload = {
         "symbol": _to_text(record.get("qualified_symbol")),
@@ -2269,10 +2290,11 @@ def declaration_search(query: str, *, limit: int = 12) -> Dict[str, Any]:
     for _, record in matches[:safe_limit]:
         payload = _method_payload(record, include_doc=True)
         payload["types"] = _declaration_type_tokens(payload.get("declaration"))
+        # _enum_literals를 조건과 값에서 각각 한 번씩(=총 두 번) 부르던 걸 walrus로 한 번만 계산.
         enum_literals = {
-            token: _enum_literals(token)
+            token: literals
             for token in payload["types"]
-            if token.startswith("e") and _enum_literals(token)
+            if token.startswith("e") and (literals := _enum_literals(token))
         }
         if enum_literals:
             payload["enum_literals"] = enum_literals

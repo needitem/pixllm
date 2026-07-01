@@ -1,6 +1,4 @@
-function toStringValue(value) {
-  return String(value || '').trim();
-}
+const { toStringValue } = require('../../utils/toStringValue.cjs');
 
 function buildHeaders() {
   return {

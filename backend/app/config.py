@@ -31,9 +31,6 @@ SOURCE_RUNTIME_DIR = env("SOURCE_RUNTIME_DIR", str(Path(SOURCE_DATA_DIR) / "sour
 LLM_BASE_URL = env("PIXLLM_LLM_BASE_URL", "http://192.168.2.212:8000/v1")
 # 에이전트가 기본으로 사용할 모델 이름
 DEFAULT_MODEL = env("PIXLLM_DEFAULT_MODEL", "Qwen/Qwen3.6-27B")
-# 워크플로 재작성(rewrite) 전용 LLM 서버 주소와 모델 (현재 별도 기능에서 사용)
-REWRITE_LLM_BASE_URL = env("PIXLLM_REWRITE_LLM_BASE_URL", "http://192.168.2.238:8002/v1")
-REWRITE_MODEL = env("PIXLLM_REWRITE_MODEL", "workflow-rewrite-qwen")
 # 로깅 레벨/포맷 (환경변수로 override 가능). logging_config가 읽어 'pixllm' 로거에 적용한다.
 LOG_LEVEL = env("PIXLLM_LOG_LEVEL", "INFO")
 LOG_FORMAT = env("PIXLLM_LOG_FORMAT", "%(asctime)s %(levelname)s %(name)s %(message)s")

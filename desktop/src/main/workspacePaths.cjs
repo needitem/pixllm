@@ -74,7 +74,6 @@ async function safeResolve(rootPath, relativePath) {
 
 module.exports = {
   ensureResolvedWithinWorkspace,
-  isPathInside,
   needsWorkspaceResolutionCheck,
   normalizeWorkspacePath,
   safeResolve,
