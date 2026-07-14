@@ -20,12 +20,15 @@ def strip_history_thinking():
     1·2콜 think 2개). Qwen 공식 권장사항도 멀티턴에서 이전 thinking을 넣지 말라는
     것이다.
 
-    OpenAI 호환 요청을 만드는 TextChatAtOAI.convert_messages_to_dicts는 모델로
-    나갈 dict 목록(원본 Message의 복사본)을 돌려준다. 이 시점의 목록에 들어 있는
-    <think>는 모두 '이전 턴'의 것이다(현재 턴 응답은 아직 생성 전). 마지막 항목은
-    continuation 모드 보호를 위해 건드리지 않고, 나머지 assistant 메시지에서만
-    <think>...</think>를 제거한다. 복사본을 수정하므로 에이전트 내부 히스토리와
-    최종 답변 추출에는 영향이 없다.
+    TextChatAtOAI.convert_messages_to_dicts가 요청 dict를 만들고, 그 안에서
+    'LLM Input' 트레이스도 찍는다. 그래서 입력 Message의 <think>를 이 함수를
+    부르기 '전에' 지워야, 실제 모델로 나가는 요청과 트레이스가 모두 stripped를
+    반영한다. 입력 Message는 에이전트의 실제 히스토리이므로 직접 고치지 않고
+    복사본을 만들어 넘긴다(원본·최종 답변 추출은 그대로).
+
+    이 목록의 <think>는 모두 '이전 턴'의 것이다(현재 턴 응답은 아직 생성 전).
+    마지막 항목은 continuation 모드 보호를 위해 건드리지 않고, 그 앞의 assistant
+    메시지에서만 <think>...</think>를 제거한다.
     """
     try:
         from qwen_agent.llm import oai as _oai
@@ -36,15 +39,29 @@ def strip_history_thinking():
         return
     original = cls.convert_messages_to_dicts
 
+    def _strip_message(message):
+        content = getattr(message, "content", None)
+        if not isinstance(content, str) or "<think>" not in content:
+            return message
+        stripped = _THINK_RE.sub("", content)
+        try:
+            return message.model_copy(update={"content": stripped})
+        except Exception:
+            try:
+                import copy as _copy
+                clone = _copy.copy(message)
+                clone.content = stripped
+                return clone
+            except Exception:
+                return message
+
     def convert_messages_to_dicts(self, messages):
-        dicts = original(self, messages)
-        for message in dicts[:-1]:
-            if not isinstance(message, dict) or message.get("role") != "assistant":
-                continue
-            content = message.get("content")
-            if isinstance(content, str) and "<think>" in content:
-                message["content"] = _THINK_RE.sub("", content)
-        return dicts
+        prepared, n = [], len(messages)
+        for i, message in enumerate(messages):
+            if i < n - 1 and getattr(message, "role", None) == "assistant":
+                message = _strip_message(message)
+            prepared.append(message)
+        return original(self, prepared)
 
     cls.convert_messages_to_dicts = convert_messages_to_dicts
     cls._pixllm_think_stripped = True
