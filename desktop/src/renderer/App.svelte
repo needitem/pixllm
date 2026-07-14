@@ -760,8 +760,11 @@
     await persistCurrentSession({ titleSeed: prompt });
 
     try {
+      // 현재 질문은 QueryEngine이 prompt로 다시 user 블록을 만들므로, 히스토리에
+      // 그대로 넣으면 같은 질문이 프롬프트에 두 번 실린다. 방금 추가한 사용자
+      // 메시지(userMessageId)와 스트리밍 중인 assistant 자리표시자를 함께 제외한다.
       const historyMessages = conversation
-        .filter((message) => message.id !== assistantMessageId)
+        .filter((message) => message.id !== assistantMessageId && message.id !== userMessageId)
         .map((message) => ({
           role: message.role,
           content: message.content
