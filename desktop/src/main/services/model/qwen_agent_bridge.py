@@ -1,9 +1,85 @@
 import json
 import logging
+import os
+import re
 import sys
 import traceback
 import urllib.error
 import urllib.request
+
+_THINK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL)
+
+
+def strip_history_thinking():
+    """이전 턴의 <think>...</think> 추론을 모델로 되돌려보내지 않는다.
+
+    qwen_agent의 ReAct 루프는 한 질문 안에서 LLM을 여러 번 부르는데, 매 호출마다
+    직전 assistant 응답(<think> 포함)을 그대로 이어붙여 다시 보낸다. 다음 호출에
+    필요한 것은 "무슨 도구를 불렀고(<tool_call>) 결과가 뭐였나(<tool_response>)"
+    뿐인데, 그 사이 사고과정까지 재투입되어 턴마다 토큰이 누적된다(3콜째 입력엔
+    1·2콜 think 2개). Qwen 공식 권장사항도 멀티턴에서 이전 thinking을 넣지 말라는
+    것이다.
+
+    OpenAI 호환 요청을 만드는 TextChatAtOAI.convert_messages_to_dicts는 모델로
+    나갈 dict 목록(원본 Message의 복사본)을 돌려준다. 이 시점의 목록에 들어 있는
+    <think>는 모두 '이전 턴'의 것이다(현재 턴 응답은 아직 생성 전). 마지막 항목은
+    continuation 모드 보호를 위해 건드리지 않고, 나머지 assistant 메시지에서만
+    <think>...</think>를 제거한다. 복사본을 수정하므로 에이전트 내부 히스토리와
+    최종 답변 추출에는 영향이 없다.
+    """
+    try:
+        from qwen_agent.llm import oai as _oai
+    except Exception:
+        return
+    cls = getattr(_oai, "TextChatAtOAI", None)
+    if cls is None or getattr(cls, "_pixllm_think_stripped", False):
+        return
+    original = cls.convert_messages_to_dicts
+
+    def convert_messages_to_dicts(self, messages):
+        dicts = original(self, messages)
+        for message in dicts[:-1]:
+            if not isinstance(message, dict) or message.get("role") != "assistant":
+                continue
+            content = message.get("content")
+            if isinstance(content, str) and "<think>" in content:
+                message["content"] = _THINK_RE.sub("", content)
+        return dicts
+
+    cls.convert_messages_to_dicts = convert_messages_to_dicts
+    cls._pixllm_think_stripped = True
+
+def setup_llm_trace():
+    """PIXLLM_LLM_TRACE가 켜져 있으면 qwen_agent가 실제로 모델 서버에 보내는
+    프롬프트/응답 원문(LLM Input / LLM Input generate_cfg / LLM Output)을
+    파일에 그대로 남긴다.
+
+    qwen_agent는 이 원문들을 자기 로거('qwen_agent_logger')의 DEBUG 레벨로만
+    찍는다. 기본은 INFO라서 아무것도 안 남는다. 여기서 하는 일:
+    - qwen_agent import 전에 QWEN_AGENT_DEBUG=1을 세팅한다
+      (라이브러리가 import 시점에 이 값으로 로그 레벨을 정하기 때문).
+    - 로거에 FileHandler를 달아 잘림 없이 파일로 떨군다.
+    기본 동작(트레이스 끔)에는 아무 영향이 없다.
+    """
+    flag = os.environ.get("PIXLLM_LLM_TRACE", "").strip().lower()
+    if flag not in ("1", "true", "yes", "on"):
+        return ""
+    # qwen_agent가 import 시점에 읽는다 — import보다 먼저 세팅해야 한다.
+    os.environ["QWEN_AGENT_DEBUG"] = "1"
+    trace_file = os.environ.get("PIXLLM_LLM_TRACE_FILE", "").strip()
+    if not trace_file:
+        home = os.environ.get("USERPROFILE") or os.path.expanduser("~")
+        trace_dir = os.path.join(home, ".pixllm", "desktop")
+        os.makedirs(trace_dir, exist_ok=True)
+        trace_file = os.path.join(trace_dir, "llm-trace.log")
+    handler = logging.FileHandler(trace_file, encoding="utf-8")
+    handler.setLevel(logging.DEBUG)
+    handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
+    qa_logger = logging.getLogger("qwen_agent_logger")
+    qa_logger.setLevel(logging.DEBUG)
+    qa_logger.addHandler(handler)
+    return trace_file
+
 
 def emit(event, **payload):
     sys.stdout.write(json.dumps({"event": event, **payload}, ensure_ascii=False) + "\n")
@@ -254,9 +330,11 @@ def main():
     - stdin이 닫히면(부모 종료) 루프를 빠져나가며 종료한다.
     """
     logging.basicConfig(stream=sys.stderr, level=logging.WARNING)
+    trace_file = setup_llm_trace()
     try:
         from qwen_agent.agents import Assistant
         import qwen_agent.agents.fncall_agent as fncall_agent
+        strip_history_thinking()
     except Exception as exc:
         emit(
             "error",
@@ -268,7 +346,7 @@ def main():
         )
         return 2
 
-    emit("ready")
+    emit("ready", llm_trace_file=trace_file)
     for raw_line in sys.stdin:
         line = raw_line.strip()
         if not line:
