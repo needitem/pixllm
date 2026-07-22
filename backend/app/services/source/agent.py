@@ -14,10 +14,9 @@
 - 컨텍스트 예산 관리: 상단 상수들(MAX_OBSERVATIONS_FOR_MODEL,
   MODEL_OBSERVATION_CHARS 등)로 모델에 넣을 관찰 데이터의 개수/글자수를
   제한하고, `_observations_for_model`이 다단계 축소 전략으로 예산을 맞춘다.
-- 환각(hallucination) 방지: 사용자가 특정 API 이름을 물었는데 도구 관찰
-  결과에 그 식별자가 전혀 없으면, LLM에게 답을 맡기지 않고
-  `_not_observed_api_answer`가 "관측되지 않았다"는 정해진 답변을
-  한국어/영어로 직접 반환한다. (LLM이 존재하지 않는 API를 지어내는 것을 차단)
+- 환각(hallucination) 방지: 최종 답변을 낸 뒤 `_validate_generated_code`가
+  코드 블록의 'SDK 타입 변수.메서드(' 호출을 관측된 시그니처와 대조해,
+  관측되지 않은 호출(존재하지 않는 API)을 경고로 표기한다. (LLM 재호출 없음)
 
 진입점: `answer_source_question()`
 """
@@ -357,40 +356,18 @@ def _source_facts_for_model(observations: List[Dict[str, Any]], *, final: bool =
     return facts
 
 
-def _api_request_tokens(prompt: str) -> List[str]:
-    """사용자 프롬프트에서 '특정 API를 묻는' 식별자 토큰을 추출한다.
-
-    환각 방지 가드의 1단계. 두 가지 패턴을 인식한다:
-    1. 백틱으로 감싼 식별자: `GetPixelValue` 같은 표기
-    2. "XXX API" 패턴: "GetPixelValue API 사용법" 같은 표기 (대소문자 무시)
-
-    반환값: 등장 순서를 유지한 중복 없는 토큰 리스트.
-    토큰이 하나도 없으면 가드는 작동하지 않는다(일반 질문으로 간주).
-    """
-    tokens: List[str] = []
-    # 패턴 1: 백틱 식별자 `Foo`
-    for token in re.findall(r"`([A-Za-z_][A-Za-z0-9_]*)`", prompt):
-        if token not in tokens:
-            tokens.append(token)
-    # 패턴 2: "Foo API" 형태 (API 단어 바로 앞의 식별자)
-    for token in re.findall(r"\b([A-Za-z_][A-Za-z0-9_]*)\s+API(?=$|[^A-Za-z0-9_])", prompt, flags=re.IGNORECASE):
-        if token not in tokens:
-            tokens.append(token)
-    return tokens
-
-
 def _observed_identifier_keys(observations: List[Dict[str, Any]]) -> set:
     """관찰 결과에서 '실제로 관측된' 식별자 키 집합을 만든다.
 
-    환각 방지 가드의 2단계. _source_facts_for_model(final=True)로 압축한
-    사실에서 다음을 수집해 _identifier_key로 정규화한다:
+    _source_facts_for_model(final=True)로 압축한 사실에서 다음을 수집해
+    _identifier_key로 정규화한다:
     - api_signatures의 symbol을 '.'으로 분리한 각 조각
       (예: "NXImage.GetPixel" → "nximage", "getpixel")
     - 시그니처 문자열에서 여는 괄호 앞의 메서드 이름
     - type_relations에 등장하는 타입 이름들
 
-    반환값: 정규화된 식별자 키의 set. _identifier_is_observed에서
-    사용자가 물어본 토큰과 대조하는 데 쓰인다.
+    반환값: 정규화된 식별자 키의 set. 사후 검증 가드(_unverified_sdk_calls)에서
+    생성 코드의 SDK 호출이 관측되었는지 대조하는 데 쓰인다.
     """
     facts = _source_facts_for_model(observations, final=True)
     keys = set()
@@ -417,53 +394,148 @@ def _observed_identifier_keys(observations: List[Dict[str, Any]]) -> set:
     return keys
 
 
-def _identifier_is_observed(token: str, observed_keys: set) -> bool:
-    """질문된 토큰이 관측된 식별자 키 집합에 존재하는지 판정한다.
+# ---------------------------------------------------------------------------
+# 환각 방지 가드 (post-hoc): 생성된 코드의 SDK 호출을 관측 시그니처와 대조
+#
+# 작업형 프롬프트("tif 로드해서 보여줘")는 지목된 API가 없어도 모델이 코드 본문에
+# 존재하지 않는 메서드(예: NXImageLayer.Load)를 지어낼 수 있다. 이 가드는 최종
+# 답변의 코드 블록에서 'SDK 타입 변수.메서드(' 호출을 뽑아 관측된 식별자와
+# 대조하고, 미관측 호출을 경고로 표기한다. LLM을 재호출하지 않는다.
+# ---------------------------------------------------------------------------
 
-    완전 일치뿐 아니라 한쪽이 다른 쪽의 접미사인 경우도 매치로 인정한다
-    (예: 사용자가 "GetPixel"만 쓰고 관측 키는 "nximagegetpixel"인 경우).
+# 이 가드를 끄고 싶을 때 False로.
+VALIDATE_GENERATED_CODE = True
+# System.Object 공통 메서드 — SDK 수신자에 붙어도 환각으로 보지 않음
+_UNIVERSAL_MEMBER_KEYS = {"tostring", "equals", "gethashcode", "gettype"}
+# 코드 펜스(``` ... ```) 블록 추출용
+_CODE_BLOCK_RE = re.compile(r"```[^\n`]*\n(.*?)```", re.DOTALL)
+# "Type varName =" / "Type varName;" 형태의 지역 변수 선언 (수신자 타입 추적용)
+_VAR_DECL_RE = re.compile(r"\b([A-Z][A-Za-z0-9_]*)\s+([a-z_][A-Za-z0-9_]*)\s*[=;)]")
+# "receiver.Member(" 형태의 메서드 호출
+_MEMBER_CALL_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\s*\(")
+# 주석 제거용 — 모델이 "쓰지 말라"고 주석 처리한 코드를 환각으로 오탐하지 않기 위함
+_BLOCK_COMMENT_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
+_LINE_COMMENT_RE = re.compile(r"//[^\n]*")
+
+
+def _strip_code_comments(code: str) -> str:
+    """C#/C 스타일 주석(// ..., /* ... */)을 제거한다.
+
+    모델이 미관측 API를 주석으로 남기며 "확인되지 않음"이라 밝히는 경우가 있는데,
+    그 주석 줄까지 호출로 오탐하지 않도록 검증 전에 주석을 걷어낸다.
     """
-    token_key = _identifier_key(token)
-    if not token_key:
-        return False
-    return any(key == token_key or key.endswith(token_key) or token_key.endswith(key) for key in observed_keys)
+    return _LINE_COMMENT_RE.sub("", _BLOCK_COMMENT_RE.sub(" ", code))
 
 
-def _not_observed_api_answer(prompt: str, observations: List[Dict[str, Any]]) -> str:
-    """환각 방지 가드의 최종 단계: '관측되지 않은 API' 정형 답변을 생성한다.
+def _looks_like_sdk_type(name: str, observed_keys: set) -> bool:
+    """이름이 Pixoneer SDK 타입인지 판별한다.
 
-    동작 흐름:
-    1. 프롬프트에서 API 토큰을 추출 (_api_request_tokens)
-       — 토큰이 없으면 일반 질문이므로 가드 미적용("" 반환)
-    2. 관찰 결과의 식별자 키와 대조 (_observed_identifier_keys)
-       — 하나라도 관측됐으면 정상 흐름이므로 가드 미적용("" 반환)
-    3. 질문된 API가 전부 미관측이면, LLM 호출 없이 "관측되지 않았다"는
-       고정 답변을 반환한다. 프롬프트에 한글이 있으면 한국어로,
-       아니면 영어로 답한다.
-
-    반환값: 빈 문자열("")이면 가드 미발동(정상 흐름 계속),
-    비어 있지 않으면 그 자체가 최종 답변이 되어 LLM의 답변 생성을 차단한다.
-    이 함수가 이 파일의 핵심 환각 방지 장치다.
+    - 관측된 식별자 집합에 있으면(=검색으로 실제 확인됨) SDK 타입으로 인정
+    - 아니면 명명 규칙(NX*/X* + 뒤에 대문자/숫자)으로 판별. 표준 .NET 타입
+      (Color, ArrayList, Console 등)은 이 규칙에 걸리지 않는다.
     """
-    tokens = _api_request_tokens(prompt)
-    # 특정 API를 묻는 질문이 아니면 가드를 적용하지 않음
-    if not tokens:
-        return ""
+    if _identifier_key(name) in observed_keys:
+        return True
+    return bool(re.match(r"^(NX|X)[A-Z0-9]", name))
+
+
+def _extract_code_blocks(answer: str) -> List[str]:
+    """답변 텍스트에서 코드 펜스 블록들의 본문만 뽑아 반환한다."""
+    return _CODE_BLOCK_RE.findall(_to_text(answer))
+
+
+def _sdk_variable_types(code: str, observed_keys: set) -> Dict[str, str]:
+    """코드에서 'SDK 타입 지역 변수'의 (변수명 → 타입명) 맵을 만든다.
+
+    'NXImageLayer imageLayer = ...' 같은 선언을 잡아, 타입이 SDK 타입일 때만
+    등록한다. 이후 그 변수에 붙은 메서드 호출을 SDK 호출로 간주해 검증한다.
+    """
+    mapping: Dict[str, str] = {}
+    for type_name, var_name in _VAR_DECL_RE.findall(code):
+        if _looks_like_sdk_type(type_name, observed_keys):
+            mapping[var_name] = type_name
+    return mapping
+
+
+def _unverified_sdk_calls(
+    answer: str, observations: List[Dict[str, Any]], *, strip_comments: bool = True
+) -> List[Dict[str, str]]:
+    """생성 답변의 코드에서 '관측되지 않은 SDK 메서드 호출'을 수집한다.
+
+    검사 대상:
+    - SDK 타입으로 선언된 변수에 대한 `변수.Member(` 호출
+    - `SdkType.Member(` 형태의 정적/타입 멤버 호출 (SdkType이 SDK 명명/관측)
+
+    각 호출의 Member가 관측된 식별자에 없으면 (type, member)로 수집한다.
+    타입 존재 자체는 검사하지 않는다(부분 검색으로 인한 오탐 방지).
+
+    strip_comments:
+    - True(기본): 주석을 걷어내고 검사 → 사용자에게 보일 '경고' 판정용
+      (모델이 정직하게 주석 처리한 호출은 경고하지 않음).
+    - False: 주석까지 포함해 검사 → '재탐색 트리거'용. 모델이 API를 못 찾아
+      주석으로 남긴 능력 갭도 포착해, 그 능력을 소스에서 다시 찾게 한다.
+
+    반환: [{"type": <타입명>, "member": <멤버명>, "call": "<타입>.<멤버>(...)"}] (중복 제거)
+    """
     observed_keys = _observed_identifier_keys(observations)
-    # 질문된 토큰 중 하나라도 관측됐으면 정상적으로 LLM이 답하게 함
-    if any(_identifier_is_observed(token, observed_keys) for token in tokens):
-        return ""
-    name = tokens[0]
-    # 프롬프트 언어(한글 포함 여부)에 맞춰 고정 답변을 선택
-    if re.search(r"[가-힣]", prompt):
-        return (
-            f"`{name}` API는 현재 소스에서 관측된 API 시그니처에 없습니다.\n\n"
-            "따라서 실제 소스 기준 사용법이나 ref/out 변환 예제 코드는 제공할 수 없습니다."
+    found: List[Dict[str, str]] = []
+    seen: set = set()
+    for raw_code in _extract_code_blocks(answer):
+        code = _strip_code_comments(raw_code) if strip_comments else raw_code
+        var_types = _sdk_variable_types(code, observed_keys)
+        for receiver, member in _MEMBER_CALL_RE.findall(code):
+            member_key = _identifier_key(member)
+            if not member_key or member_key in _UNIVERSAL_MEMBER_KEYS:
+                continue
+            # 수신자 타입 결정: SDK 변수이거나, 수신자 자체가 SDK 타입명(정적 호출)
+            type_name = var_types.get(receiver)
+            if type_name is None:
+                if receiver[:1].isupper() and _looks_like_sdk_type(receiver, observed_keys):
+                    type_name = receiver
+                else:
+                    continue
+            # 멤버가 관측되었으면 정상
+            if member_key in observed_keys:
+                continue
+            dedup_key = (_identifier_key(type_name), member_key)
+            if dedup_key in seen:
+                continue
+            seen.add(dedup_key)
+            found.append({"type": type_name, "member": member, "call": f"{type_name}.{member}(...)"})
+    return found
+
+
+def _validate_generated_code(
+    answer: str, observations: List[Dict[str, Any]], *, prompt: str = ""
+) -> Tuple[str, List[Dict[str, str]]]:
+    """최종 답변의 코드 SDK 호출을 검증하고, 미관측 호출이 있으면 경고를 덧붙인다.
+
+    반환: (경고가 추가된 답변, 미관측 호출 목록). 미관측이 없으면 원문 그대로.
+    """
+    if not VALIDATE_GENERATED_CODE:
+        return answer, []
+    unverified = _unverified_sdk_calls(answer, observations)
+    if not unverified:
+        return answer, []
+    lines = "\n".join(f"- `{item['call']}`" for item in unverified)
+    if re.search(r"[가-힣]", _to_text(prompt) or _to_text(answer)):
+        notice = (
+            "\n\n---\n"
+            "⚠️ **소스 검증 경고** — 아래 호출은 관측된 소스 API 시그니처에서 확인되지 "
+            "않았습니다(실제로 존재하지 않거나 이번 검색에서 관측되지 않음):\n"
+            f"{lines}\n"
+            "해당 멤버가 실제 소스에 있는지 확인한 뒤 사용하세요."
         )
-    return (
-        f"`{name}` was not found in the observed source API signatures.\n\n"
-        "I cannot provide source-grounded usage or ref/out conversion code for it."
-    )
+    else:
+        notice = (
+            "\n\n---\n"
+            "⚠️ **Source validation warning** — the following calls were not found in the "
+            "observed source API signatures (either they do not exist or were not observed "
+            "by this search):\n"
+            f"{lines}\n"
+            "Verify these members against the actual source before use."
+        )
+    return answer + notice, unverified
 
 
 def _build_system_prompt() -> str:
@@ -474,6 +546,8 @@ def _build_system_prompt() -> str:
     - 이름이 지목된 API 질문은 관측된 시그니처에서만 답하고,
       없으면 '관측되지 않음'이라고 말할 것 (다른 API로 대체 금지)
     - 코드 예제는 소스 바인딩 문법이 아닌 C# 문법으로 작성할 것
+    - UI 코드는 기본 WPF: 사용자가 다른 프레임워크를 명시하지 않으면 XAML 마크업과
+      code-behind(.xaml.cs)를 각각 별도 코드 블록으로 분리해 작성할 것 (WinForms 금지)
     - ref/out 파라미터는 관측된 C# 타입으로 지역 변수를 선언/초기화할 것
     - 사용자의 언어로 자연스럽게 답할 것
     """
@@ -481,10 +555,13 @@ def _build_system_prompt() -> str:
         [
             "You are the PIXLLM backend source agent.",
             "Use source_search for discovery and source_read for exact source spans or declarations when concrete code evidence is needed.",
+            "Tool routing: when the question names a specific class, method, or property (e.g. 'NXImageView', 'what members/signature does X have'), call source_search FIRST to obtain its declaration and C# signature, then source_read for exact spans. Use source_type_graph ONLY for relationships between types (inheritance, referenced/assignable types, call graph) — never as the primary way to list a named symbol's members. Do not answer a named-symbol question from a source_type_graph result alone; if you have not called source_search for that symbol, call it before answering.",
             "Treat source_facts.api_signatures as the observed API set.",
             "For named-API questions, answer from matching observed signatures only; if none match, say it was not observed and do not substitute unrelated APIs or code.",
             "For SDK/API calls in code, use observed Pixoneer/NXDL signatures; ordinary C# language/runtime syntax is allowed.",
+            "Never invent SDK members. Every method/property you call on a Pixoneer/NXDL (NX*/X*) type MUST appear verbatim in the observed api_signatures. If the operation the user asked for (e.g. loading a file into a layer) has no matching observed API, DO NOT fabricate a plausible-looking call such as `.Load(...)` or `.LoadImage(...)`; instead state that the API for that operation was not observed in the source, and show only the steps you can ground. If a needed member is missing, prefer calling source_search again with a different query before giving up.",
             "For C# answers, emit C# syntax instead of source binding syntax.",
+            "UI code default: unless the user explicitly asks for another framework (e.g. WinForms), write WPF. Emit TWO separate code blocks — a ```xaml block for the markup and a ```csharp block for the code-behind (.xaml.cs) — never merge them and never use WinForms 'this.Controls.Add'. The code-behind uses observed Pixoneer/NXDL signatures for SDK calls.",
             "For ref/out parameters, declare and initialize local variables with the observed C# parameter type before the call.",
             "If a derived object is passed to a ref base-type parameter, first assign it to a variable of that base type.",
             "Answer naturally in the user's language.",
@@ -658,9 +735,17 @@ COMPACT_TOOL_DESCRIPTIONS = {
     "source_overview": "Source root, counts, modules, index status.",
     "source_ls": "List Source/ paths.",
     "source_glob": "Find Source/ files by glob.",
-    "source_search": "Discover candidate symbols/files plus recommended source_read targets.",
+    "source_search": (
+        "PRIMARY lookup for a named class/method/property: returns its declaration, "
+        "C# signature, and source_read targets. Call this FIRST whenever the question "
+        "names a symbol or asks what members/signature/parameters it has."
+    ),
     "source_read": "Inspect exact Source/ spans or indexed symbol targets.",
-    "source_type_graph": "Return compact type/member graph and signatures.",
+    "source_type_graph": (
+        "Relationships BETWEEN types only: inheritance, referenced/assignable types, "
+        "call graph. NOT for listing a single named symbol's members/signature "
+        "(use source_search for that)."
+    ),
     "source_usages": "Find real source usages.",
 }
 # 도구 이름 → 원본(풀) 도구 정의 매핑
@@ -941,7 +1026,13 @@ def _observations_for_model(observations: List[Dict[str, Any]], *, final: bool =
     return text
 
 
-def _build_messages(prompt: str, observations: List[Dict[str, Any]], *, final: bool = False) -> List[Dict[str, str]]:
+def _build_messages(
+    prompt: str,
+    observations: List[Dict[str, Any]],
+    *,
+    final: bool = False,
+    correction: str = "",
+) -> List[Dict[str, str]]:
     """LLM에 보낼 chat 메시지 배열을 구성한다.
 
     기본 구조: [system 프롬프트, user 질문]. 관찰이 있으면 세 번째 user
@@ -950,6 +1041,8 @@ def _build_messages(prompt: str, observations: List[Dict[str, Any]], *, final: b
     파라미터:
     - final: True면 "이 사실들로 지금 답하라(추가 도구 사용 금지)"는 지시,
       False면 "필요하면 도구를 더 쓰고, 아니면 source_facts만으로 답하라"는 지시.
+    - correction: 비어 있지 않으면 교정 지시문을 마지막 user 메시지로 덧붙인다
+      (사후 검증에서 미관측 호출이 나왔을 때의 재생성 경로에서 사용).
     """
     messages = [
         {"role": "system", "content": _build_system_prompt()},
@@ -969,6 +1062,8 @@ def _build_messages(prompt: str, observations: List[Dict[str, Any]], *, final: b
                 "content": f"Source observations so far:\n{_observations_for_model(observations, final=final)}\n\n{task}",
             }
         )
+    if correction:
+        messages.append({"role": "user", "content": correction})
     return messages
 
 
@@ -1127,6 +1222,82 @@ def _final_answer(
     return _message_answer(_choice_message(response)), _response_usage(response)
 
 
+# ---------------------------------------------------------------------------
+# 능력 재탐색 루프 (structural): 사후 검증에서 미관측 SDK 호출이 나오면,
+# 그 능력(operation)을 소스 전체에서 다시 검색해 관찰을 보강하고, 모델에게
+# 교정 답변을 1회 재생성시킨다. 리트리벌을 '엔티티 중심'에서 '능력 중심'으로
+# 확장해, 지목된 클래스에 없는 기능(예: 로드가 파생/합성 레이어에 있는 경우)을
+# 찾아내게 한다.
+# ---------------------------------------------------------------------------
+
+# 이 재탐색 루프를 끄고 싶을 때 False로.
+RESEARCH_UNVERIFIED_CALLS = True
+# 재탐색에서 추가로 실행할 도구 호출(검색/타입그래프)의 상한
+MAX_RESEARCH_TOOL_CALLS = 6
+
+
+def _research_missing_capabilities(
+    unverified: List[Dict[str, str]],
+    observations: List[Dict[str, Any]],
+    trace: "_TraceRecorder",
+    *,
+    prompt: str,
+) -> int:
+    """미관측 호출이 가리키는 '능력'을 소스 전체에서 재탐색해 관찰을 보강한다.
+
+    각 미관측 (Type, Member)에 대해:
+    - source_search(Member): 그 연산이 실제로 존재하는 타입을 소스 전역에서 찾음
+    - source_type_graph(Type): 그 타입의 파생/관련 타입(능력을 실제로 구현할 수도
+      있는 서브클래스 등)을 발견
+    실행 결과는 observations/trace에 그대로 누적된다 (LLM 토큰 소모 없음).
+
+    반환값: 실제로 실행한 추가 도구 호출 수.
+    """
+    queries: List[Tuple[str, str]] = []  # (tool_name, query)
+    seen: set = set()
+
+    def add(tool_name: str, query: str) -> None:
+        query = _to_text(query)
+        key = (tool_name, query.lower())
+        if query and key not in seen:
+            seen.add(key)
+            queries.append((tool_name, query))
+
+    for item in unverified:
+        member = _to_text(item.get("member"))
+        type_name = _to_text(item.get("type"))
+        add("source_search", member)
+        add("source_search", f"{type_name} {member}")
+        add("source_type_graph", type_name)
+    # 사용자 질문 자체로도 한 번 더 검색해 연산 맥락(로드/열기 등)을 넓게 훑는다
+    add("source_search", prompt)
+
+    executed = 0
+    for tool_name, query in queries[:MAX_RESEARCH_TOOL_CALLS]:
+        observation = _execute_tool(tool_name, {"query": query}, trace, prompt=prompt)
+        observations.append({"tool": tool_name, "input": {"query": query}, "observation": observation})
+        executed += 1
+    return executed
+
+
+def _correction_directive(unverified: List[Dict[str, str]]) -> str:
+    """교정 재생성에 쓸 지시문을 만든다.
+
+    초안에서 미관측으로 표기된 호출 목록과, 새로 보강된 source_facts를 근거로
+    '관측된 API만' 다시 쓰라는 지시를 담는다.
+    """
+    calls = ", ".join(f"`{item['call']}`" for item in unverified)
+    return (
+        "Your previous draft used these calls that are NOT in the observed source API and may not exist: "
+        f"{calls}. Additional source facts were just added above from a targeted search. "
+        "Rewrite the answer using ONLY observed APIs from source_facts.api_signatures: "
+        "if a real API for that operation now appears (possibly on a related or derived type, "
+        "e.g. a concrete layer subclass), use it; if none exists in the observed facts, "
+        "explicitly state that the operation has no observed source API and omit the fabricated call. "
+        "Keep the same overall format (WPF: separate xaml and code-behind blocks unless the user asked otherwise)."
+    )
+
+
 def answer_source_question(
     *,
     prompt: str,
@@ -1144,12 +1315,14 @@ def answer_source_question(
        지금까지의 관찰(source_facts 압축본)을 함께 전달
     2. 응답에 tool_calls가 있으면 → _execute_tool로 실행해 관찰을 누적하고
        다음 스텝으로; tool_calls가 없으면 → 그 응답 텍스트가 최종 답
-    3. 매 스텝마다 환각 가드(_not_observed_api_answer)를 체크 —
-       질문된 API가 관측 결과에 없다고 판정되면 즉시 고정 답변으로 종료
+    3. 사후 검증(_unverified_sdk_calls)에서 미관측 SDK 호출이 나오면,
+       _research_missing_capabilities로 그 능력을 소스 전역에서 재탐색해 관찰을
+       보강하고 교정 답변을 1회 재생성한다(_correction_directive). 미관측 호출을
+       더 줄인 경우에만 교정본을 채택한다.
+    4. 남은 미관측 호출은 _validate_generated_code가 경고로 표기한다.
 
-    루프가 끝나도 답이 없으면: 환각 가드를 한 번 더 확인한 뒤,
-    _final_answer로 도구 없이 강제 1회 더 호출해 답을 받아낸다.
-    그래도 답이 비면 ApiError(LLM_EMPTY_ANSWER, 502)를 던진다.
+    루프가 끝나도 답이 없으면 _final_answer로 도구 없이 강제 1회 더 호출해
+    답을 받아낸다. 그래도 답이 비면 ApiError(LLM_EMPTY_ANSWER, 502)를 던진다.
 
     파라미터:
     - prompt: 사용자 질문 (필수; 비어 있으면 EMPTY_PROMPT 오류)
@@ -1211,41 +1384,71 @@ def answer_source_question(
         completion_calls += 1
         message = _choice_message(response)
         tool_calls = _extract_tool_calls(message)
-        # (2-a) 도구 호출이 없으면 모델이 답을 낸 것 — 단, 환각 가드가
-        #       발동하면 모델 답변 대신 "관측되지 않음" 고정 답변을 채택
+        # (2-a) 도구 호출이 없으면 모델이 최종 답을 낸 것
         if not tool_calls:
-            final_answer = _not_observed_api_answer(normalized_prompt, observations) or _message_answer(message)
+            final_answer = _message_answer(message)
             break
         # (2-b) 도구 호출이 있으면 순서대로 실행하여 관찰을 누적
         for tool_name, arguments in tool_calls:
             observation = _execute_tool(tool_name, arguments, trace, prompt=normalized_prompt)
             observations.append({"tool": tool_name, "input": arguments, "observation": observation})
-        # (3) 매 스텝 환각 가드 체크 — 질문된 API가 미관측으로 확정되면
-        #     더 탐색하지 않고 즉시 고정 답변으로 종료
-        final_answer = _not_observed_api_answer(normalized_prompt, observations)
-        if final_answer:
-            break
 
     # === 루프 종료 후 마무리 ===
     if not final_answer:
-        # 환각 가드를 마지막으로 한 번 더 확인
-        final_answer = _not_observed_api_answer(normalized_prompt, observations)
-        if not final_answer:
-            # 도구 없이 강제로 최종 답변을 1회 더 요청
-            final_answer, final_usage = _final_answer(
-                prompt=normalized_prompt,
-                observations=observations,
-                model_cfg=model_cfg,
-                max_tokens=completion_token_budget,
-                enable_thinking=enable_thinking,
-            )
-            for key, value in final_usage.items():
-                usage_totals[key] = int(usage_totals.get(key) or 0) + value
-            completion_calls += 1
+        # 도구 없이 강제로 최종 답변을 1회 더 요청
+        final_answer, final_usage = _final_answer(
+            prompt=normalized_prompt,
+            observations=observations,
+            model_cfg=model_cfg,
+            max_tokens=completion_token_budget,
+            enable_thinking=enable_thinking,
+        )
+        for key, value in final_usage.items():
+            usage_totals[key] = int(usage_totals.get(key) or 0) + value
+        completion_calls += 1
     # 그래도 답이 비어 있으면 서버 오류로 처리
     if not final_answer:
         logger.error("source answer produced no result after %d completion calls", completion_calls)
         raise ApiError("LLM_EMPTY_ANSWER", "backend source agent did not produce an answer", status_code=502)
+
+    # 능력 재탐색 피드백 루프: 재탐색 트리거는 '주석 포함'으로 능력 갭을 감지한다
+    # (모델이 API를 못 찾아 주석으로 남긴 경우까지 포함). 갭이 있으면 그 능력을
+    # 소스 전역에서 다시 검색해 관찰을 보강하고, 교정 답변을 1회 재생성한다.
+    gaps = _unverified_sdk_calls(final_answer, observations, strip_comments=False)
+    if gaps and RESEARCH_UNVERIFIED_CALLS:
+        logger.info(
+            "capability gap: %d unresolved call(s): %s — researching",
+            len(gaps),
+            ", ".join(item["call"] for item in gaps),
+        )
+        researched = _research_missing_capabilities(gaps, observations, trace, prompt=normalized_prompt)
+        if researched:
+            response = _chat_completion_response(
+                model_cfg=model_cfg,
+                messages=_build_messages(
+                    normalized_prompt,
+                    observations,
+                    final=True,
+                    correction=_correction_directive(gaps),
+                ),
+                max_tokens=completion_token_budget,
+                enable_thinking=enable_thinking,
+                tools=None,
+            )
+            _add_response_usage(usage_totals, response)
+            completion_calls += 1
+            corrected_answer = _message_answer(_choice_message(response))
+            if corrected_answer:
+                corrected_gaps = _unverified_sdk_calls(corrected_answer, observations, strip_comments=False)
+                # 교정본이 능력 갭(주석 포함)을 더 줄였을 때만 채택
+                if len(corrected_gaps) < len(gaps):
+                    logger.info("correction reduced capability gaps %d → %d", len(gaps), len(corrected_gaps))
+                    final_answer = corrected_answer
+
+    # 최종 사후 검증: 남은 '활성(비주석)' 미관측 호출만 경고로 표기한다 (LLM 재호출 없음).
+    final_answer, unverified_calls = _validate_generated_code(
+        final_answer, observations, prompt=normalized_prompt
+    )
 
     # 정상 완료: 도구 호출 수/모델 호출 수/총 토큰을 한 줄로 기록
     logger.info(
@@ -1261,6 +1464,7 @@ def answer_source_question(
         "llm_base_url": model_cfg["model_server"],
         "trace": trace.items,
         "summary": f"Completed by backend source agent with {len(trace.items)} source tool observations.",
+        "validation": {"unverified_calls": unverified_calls},
         "usage": {
             "tool_calls": len(trace.items),
             "completion_calls": completion_calls,
