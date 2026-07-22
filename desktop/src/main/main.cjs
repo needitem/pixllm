@@ -107,7 +107,16 @@ app.whenReady().then(() => {
     dataRoot: desktopDataRoot()
   }));
   ipcMain.handle('settings:load', async () => loadSettings());
-  ipcMain.handle('settings:save', async (_, patch) => saveSettings(patch));
+  ipcMain.handle('settings:save', async (_, patch) => {
+    const before = loadSettings();
+    const saved = saveSettings(patch);
+    // LLM 트레이스 플래그는 파이썬 사이드카가 기동 시점에만 읽는다. 값이 바뀌면
+    // warm 사이드카를 내려 다음 요청에서 새 env로 다시 뜨게 한다.
+    if (before.llmTraceEnabled !== saved.llmTraceEnabled) {
+      shutdownQwenAgentSidecar();
+    }
+    return saved;
+  });
   ipcMain.handle('sessions:list', async (_, workspacePath) => listSessions(workspacePath));
   ipcMain.handle('sessions:get', async (_, sessionId) => getSession(sessionId));
   ipcMain.handle('sessions:create', async (_, workspacePath, title) => {

@@ -66,6 +66,7 @@ declare global {
     qwenAgentMaxTokens: number;
     qwenAgentMaxLlmCalls: number;
     qwenAgentToolResultChars: number;
+    llmTraceEnabled: boolean;
   };
 
   type WorkspaceCommandResult = {

@@ -5,6 +5,7 @@ const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
 const { ensureDesktopDataRoot } = require('../../storage_paths.cjs');
 const { toStringValue } = require('../../utils/toStringValue.cjs');
+const { loadSettings } = require('../../settings.cjs');
 
 let cachedPythonCommand = null;
 let cachedSidecarScriptPath = '';
@@ -551,6 +552,24 @@ function shutdownQwenAgentSidecar() {
   destroyWarmSidecar();
 }
 
+// 사이드카에 넘길 환경변수를 만든다. LLM 트레이스(llm-trace.log)는 파이썬 쪽이
+// 기동 시점의 PIXLLM_LLM_TRACE만 읽으므로, 설정값을 여기서 env로 주입한다.
+// 설정이 꺼져 있어도 외부에서 직접 export한 PIXLLM_LLM_TRACE는 그대로 존중한다.
+function buildSidecarEnv() {
+  const env = {
+    ...process.env,
+    PYTHONIOENCODING: 'utf-8',
+  };
+  try {
+    if (loadSettings().llmTraceEnabled) {
+      env.PIXLLM_LLM_TRACE = '1';
+    }
+  } catch {
+    // 설정을 못 읽어도 사이드카 기동 자체는 막지 않는다.
+  }
+  return env;
+}
+
 async function ensureWarmSidecar() {
   if (warmSidecar && warmSidecar.child.exitCode === null && !warmSidecar.child.killed) {
     return warmSidecar;
@@ -562,10 +581,7 @@ async function ensureWarmSidecar() {
   const child = spawn(python.command, [...python.args, scriptPath], {
     cwd: resolveSidecarCwd(scriptPath),
     stdio: ['pipe', 'pipe', 'pipe'],
-    env: {
-      ...process.env,
-      PYTHONIOENCODING: 'utf-8',
-    },
+    env: buildSidecarEnv(),
   });
 
   const sidecar = {

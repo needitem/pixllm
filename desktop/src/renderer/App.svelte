@@ -88,7 +88,8 @@
     enableThinking: true,
     qwenAgentMaxTokens: 2048,
     qwenAgentMaxLlmCalls: 0,
-    qwenAgentToolResultChars: 8000
+    qwenAgentToolResultChars: 8000,
+    llmTraceEnabled: false
   };
   let settings: DesktopSettings = { ...DEFAULT_SETTINGS };
   let settingsForm: DesktopSettings = { ...DEFAULT_SETTINGS };
@@ -645,7 +646,8 @@
           : 0,
         qwenAgentToolResultChars: Number(settingsForm.qwenAgentToolResultChars) > 0
           ? Number(settingsForm.qwenAgentToolResultChars)
-          : DEFAULT_SETTINGS.qwenAgentToolResultChars
+          : DEFAULT_SETTINGS.qwenAgentToolResultChars,
+        llmTraceEnabled: Boolean(settingsForm.llmTraceEnabled)
       });
       applyLoadedSettings(next);
       settingsSaveMessage = 'Settings saved.';
@@ -1251,6 +1253,10 @@
               <label class="field composer-checkbox">
                 <input type="checkbox" bind:checked={settingsForm.enableThinking} />
                 <span>Enable model thinking (끄면 답변은 짧아지지만 도구 사용 품질이 떨어짐)</span>
+              </label>
+              <label class="field composer-checkbox">
+                <input type="checkbox" bind:checked={settingsForm.llmTraceEnabled} />
+                <span>LLM 트레이스 로그 기록 (모델에 오간 프롬프트·응답 원문을 llm-trace.log에 저장 · 저장 후 적용)</span>
               </label>
             </div>
             <div class="actions compact-actions">

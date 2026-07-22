@@ -12,6 +12,7 @@ const SETTINGS_KEYS = [
   'qwenAgentMaxTokens',
   'qwenAgentMaxLlmCalls',
   'qwenAgentToolResultChars',
+  'llmTraceEnabled',
 ];
 const DEFAULT_LLM_BASE_URL = 'http://192.168.2.212:8000/v1';
 const DEFAULT_ENABLE_THINKING = true;
@@ -19,6 +20,8 @@ const DEFAULT_QWEN_AGENT_MAX_TOKENS = 2048;
 // 0 = "설정 안 함" — QueryEngine이 질문 종류(local/source)별 내부 기본값을 쓴다.
 const DEFAULT_QWEN_AGENT_MAX_LLM_CALLS = 0;
 const DEFAULT_QWEN_AGENT_TOOL_RESULT_CHARS = 8000;
+// LLM 입출력 트레이스(llm-trace.log) 기록 여부. 기본 꺼짐.
+const DEFAULT_LLM_TRACE_ENABLED = false;
 
 function settingsPath() {
   return path.join(ensureDesktopDataRoot(), 'settings.json');
@@ -34,7 +37,8 @@ function defaultSettings() {
     enableThinking: DEFAULT_ENABLE_THINKING,
     qwenAgentMaxTokens: DEFAULT_QWEN_AGENT_MAX_TOKENS,
     qwenAgentMaxLlmCalls: DEFAULT_QWEN_AGENT_MAX_LLM_CALLS,
-    qwenAgentToolResultChars: DEFAULT_QWEN_AGENT_TOOL_RESULT_CHARS
+    qwenAgentToolResultChars: DEFAULT_QWEN_AGENT_TOOL_RESULT_CHARS,
+    llmTraceEnabled: DEFAULT_LLM_TRACE_ENABLED
   };
 }
 
@@ -80,6 +84,7 @@ function finalizeSettings(source) {
     ? Number(source.qwenAgentMaxLlmCalls)
     : DEFAULT_QWEN_AGENT_MAX_LLM_CALLS;
   const qwenAgentToolResultChars = clampToolResultChars(source?.qwenAgentToolResultChars);
+  const llmTraceEnabled = Boolean(source?.llmTraceEnabled);
 
   return {
     ...source,
@@ -88,7 +93,8 @@ function finalizeSettings(source) {
     recentWorkspaces,
     qwenAgentMaxTokens,
     qwenAgentMaxLlmCalls,
-    qwenAgentToolResultChars
+    qwenAgentToolResultChars,
+    llmTraceEnabled
   };
 }
 
@@ -104,7 +110,7 @@ function normalizeSettings(source) {
     if (!has(key)) continue;
     if (key === 'recentWorkspaces') {
       normalized[key] = normalizeWorkspaceList(source[key]);
-    } else if (key === 'engineQuestionDefault' || key === 'enableThinking') {
+    } else if (key === 'engineQuestionDefault' || key === 'enableThinking' || key === 'llmTraceEnabled') {
       normalized[key] = Boolean(source[key]);
     } else if (key === 'qwenAgentMaxTokens') {
       normalized[key] = Number(source[key]) > 0 ? Number(source[key]) : DEFAULT_QWEN_AGENT_MAX_TOKENS;
